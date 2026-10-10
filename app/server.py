@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""jshERP AI 录入壳 —— 统一 HTTP 服务（纯标准库 http.server，无第三方依赖）。
+"""Talk2Stock 对话式进销存智能体 —— 统一 HTTP 服务（纯标准库 http.server，无第三方依赖）。
 
 启动：
     python3 app/server.py            # 默认 0.0.0.0:8090

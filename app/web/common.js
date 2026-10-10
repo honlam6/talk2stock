@@ -1,4 +1,4 @@
-/* jshERP 易用壳子 · 公共 JS（无依赖，离线可用） */
+/* Talk2Stock 对话式进销存智能体 · 公共 JS（无依赖，离线可用） */
 
 const $ = (s, r) => (r || document).querySelector(s);
 const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));

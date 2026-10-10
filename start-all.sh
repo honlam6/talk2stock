@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键拉起 jshERP 全套服务：colima 容器运行时 + ERP 四容器 + AI 录入壳
+# 一键拉起 Talk2Stock 全套服务：colima 容器运行时 + ERP 四容器 + 智能体服务
 # 用法：bash start-all.sh
 set -euo pipefail
 export PATH=/opt/homebrew/bin:$PATH
@@ -19,8 +19,8 @@ cd "$ROOT/jshERP-latest/deploy"
 docker compose up -d
 docker compose ps
 
-# 3) AI 录入壳（纯标准库，8090）
-echo "[3/3] 启动 AI 录入壳 ..."
+# 3) Talk2Stock 智能体服务（纯标准库，8090）
+echo "[3/3] 启动 Talk2Stock 智能体服务 ..."
 cd "$ROOT"
 if curl -sf -m 3 -o /dev/null http://localhost:8090/ai 2>/dev/null; then
   echo "  已在运行"
@@ -46,5 +46,5 @@ fi
 echo
 echo "ERP 前端   http://localhost:8080/"
 echo "ERP 后端   http://localhost:9999/jshERP-boot/doc.html"
-echo "AI 录入壳  http://localhost:8090/ai"
+echo "Talk2Stock  http://localhost:8090/"
 echo "登录账号   jsh / 123456（admin 为超管，租户 0）"

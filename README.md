@@ -95,7 +95,7 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 
 ```
 .
-├── app/                     # ★ 自研：AI 录入壳（Python 3 纯标准库，零第三方依赖）
+├── app/                     # ★ 自研：Talk2Stock 智能体服务（Python 3 纯标准库，零第三方依赖）
 │   ├── server.py            #   HTTP 服务（默认 0.0.0.0:8090）
 │   ├── selfcheck.py         #   应用层自检：直连 core 模块验逻辑
 │   ├── core/
@@ -110,7 +110,7 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 ├── jshERP-latest/           # 上游 jshERP 源码副本（Apache-2.0，含 deploy/ 编排）
 │   └── deploy/              #   docker-compose.yml + Dockerfile + nginx.conf
 ├── docs/                    # 设计 / 部署验证 / 接口清单文档
-├── start-all.sh             # 一键拉起：容器 + ERP 四容器 + AI 壳
+├── start-all.sh             # 一键拉起：容器 + ERP 四容器 + Talk2Stock 服务
 ├── verify-local.sh          # 端到端验证：运行时 → 容器 → HTTP → 登录 → AI 链路
 └── LICENSE                  # MIT（仅覆盖自研部分）
 ```
@@ -122,7 +122,7 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 ### 前置条件
 
 - **Docker + Docker Compose**：macOS 可用 [colima](https://github.com/abiosoft/colima) 或 Docker Desktop；Linux / Windows(WSL) 用 Docker Engine 即可。
-- **Python 3.8+**：AI 壳只用标准库，不需要 `pip install` 任何东西。
+- **Python 3.8+**：Talk2Stock 只用标准库，不需要 `pip install` 任何东西。
 - 首次启动会本地构建 ERP 后端（Maven）与前端（Node），**约 5–15 分钟**；之后启动是秒级。
 
 ### 方式一：一键启动（推荐）
@@ -131,7 +131,7 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 bash start-all.sh
 ```
 
-脚本依次完成：① 确保容器运行时在线（若无 colima 但已有 Docker，会自动跳过）→ ② 起 ERP 四个容器（mysql / redis / backend / web）→ ③ 起 AI 壳（`:8090`）。
+脚本依次完成：① 确保容器运行时在线（若无 colima 但已有 Docker，会自动跳过）→ ② 起 ERP 四个容器（mysql / redis / backend / web）→ ③ 起 Talk2Stock 智能体服务（`:8090`）。
 
 ### 方式二：手动分步
 
@@ -141,7 +141,7 @@ cd jshERP-latest/deploy
 docker compose up -d
 docker compose ps          # 四个容器都应为 running，mysql/redis 为 healthy
 
-# 2) 准备 AI 壳配置并启动
+# 2) 准备 Talk2Stock 配置并启动
 cd ../..
 cp app/.env.example app/.env      # 首次执行
 python3 app/server.py             # 默认 0.0.0.0:8090，Ctrl-C 停止
@@ -151,7 +151,7 @@ python3 app/server.py             # 默认 0.0.0.0:8090，Ctrl-C 停止
 
 | 服务 | 地址 |
 |---|---|
-| AI 录入壳（本项目） | http://localhost:8090/ |
+| Talk2Stock 智能体（本项目） | http://localhost:8090/ |
 | ERP 前端 | http://localhost:8080/ |
 | ERP 后端接口文档 (Swagger) | http://localhost:9999/jshERP-boot/doc.html |
 
@@ -220,7 +220,7 @@ cp app/.env.example app/.env
 | `T2S_BASE_<档案名大写>` | 覆盖某档案的网关地址（公开仓库 config.json 只放占位，真实地址写这里） | 空 |
 | `T2S_REQUIRE_AUTH` | 设为 `1` 后所有 `/api` 接口需带访问口令 | `0`（关闭） |
 | `T2S_DEMO_PASS` | 访问口令 | `talk2stock` |
-| `PORT` / `HOST` | AI 壳监听端口 / 地址 | `8090` / `0.0.0.0` |
+| `PORT` / `HOST` | Talk2Stock 监听端口 / 地址 | `8090` / `0.0.0.0` |
 
 ---
 
@@ -232,7 +232,7 @@ bash verify-local.sh       # 部署层 + HTTP 端到端，共 12 项
 cd app && python3 selfcheck.py   # 应用层自检（直连 core 模块）
 ```
 
-`verify-local.sh` 会依次检查：容器运行时 → 四个 ERP 容器健康 → 三个 HTTP 入口 → ERP 登录（MD5）→ AI 壳读主数据 → 自然语言解析 → 只读预览（不写库）。最后一行给出「通过 / 告警 / 失败」汇总。
+`verify-local.sh` 会依次检查：容器运行时 → 四个 ERP 容器健康 → 三个 HTTP 入口 → ERP 登录（MD5）→ Talk2Stock 读主数据 → 自然语言解析 → 只读预览（不写库）。最后一行给出「通过 / 告警 / 失败」汇总。
 
 > 第 6 项依赖外部模型，失败记作**告警**而非失败——没配模型时属正常。
 
@@ -266,7 +266,7 @@ cd jshERP-latest/deploy && docker compose logs --tail=80 erp-backend
 `8080`、`9999` 在 `jshERP-latest/deploy/docker-compose.yml` 里改；`8090` 用 `PORT=8099 python3 app/server.py` 换端口。
 
 **Q：Windows 能用吗？**
-`start-all.sh` / `verify-local.sh` 是 bash 脚本，在 WSL 或 Git Bash 下运行即可；AI 壳本身是跨平台 Python。
+`start-all.sh` / `verify-local.sh` 是 bash 脚本，在 WSL 或 Git Bash 下运行即可；Talk2Stock 本身是跨平台 Python。
 
 ---
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本地部署端到端验证：运行时 → 容器 → HTTP 入口 → ERP 登录 → AI 壳 HTTP 链路
+# 本地部署端到端验证：运行时 → 容器 → HTTP 入口 → ERP 登录 → Talk2Stock HTTP 链路
 # 用法：bash verify-local.sh
 #
 # 与 app/selfcheck.py 互补：
@@ -46,7 +46,7 @@ check_url(){
 }
 check_url "ERP 前端(8080)"   "http://localhost:8080/"
 check_url "ERP 后端文档(9999)" "http://localhost:9999/jshERP-boot/doc.html"
-check_url "AI 录入壳(8090)"  "http://localhost:8090/ai"
+check_url "Talk2Stock(8090)"  "http://localhost:8090/"
 
 # ── 4) ERP 登录（密码 MD5） ─────────────────────────────
 echo; echo "[4/6] ERP 登录链路"
@@ -59,14 +59,14 @@ LOGIN=$(curl -s -m 8 -X POST http://localhost:9999/jshERP-boot/user/login \
 TOKEN=$(printf '%s' "$LOGIN" | py 'import sys,json;print((json.load(sys.stdin).get("data") or {}).get("token") or "")')
 if [ -n "$TOKEN" ]; then ok "jsh 登录" "token ${TOKEN:0:12}…"; else no "jsh 登录" "${LOGIN:0:90}"; fi
 
-# ── 5) AI 壳 → ERP 主数据 ───────────────────────────────
-echo; echo "[5/6] AI 壳 → ERP"
+# ── 5) Talk2Stock → ERP 主数据 ──────────────────────────
+echo; echo "[5/6] Talk2Stock → ERP"
 MASTER=$(curl -s -m 12 http://localhost:8090/api/master)
 CNT=$(printf '%s' "$MASTER" | py 'import sys,json;d=json.load(sys.stdin);print("供应商%d 客户%d 商品%d 仓库%d 账户%d"%tuple(len(d.get(k) or []) for k in ("suppliers","customers","materials","depots","accounts")))')
 if [ -n "$CNT" ]; then ok "/api/master" "$CNT"; else no "/api/master" "无响应"; fi
 
-# ── 6) AI 壳 → LLM 端到端（自然语言 → 草稿 → 只读预览）──
-echo; echo "[6/6] AI 壳 → LLM 端到端（依赖外部模型，失败记为告警）"
+# ── 6) Talk2Stock → LLM 端到端（自然语言 → 草稿 → 只读预览）─
+echo; echo "[6/6] Talk2Stock → LLM 端到端（依赖外部模型，失败记为告警）"
 TXT="向供应商1采购商品1 5个，单价10元，入原料仓"
 PARSED=$(curl -s -m 90 -X POST http://localhost:8090/api/parse \
   -H 'Content-Type: application/json' -d "{\"text\":\"$TXT\"}")
@@ -99,7 +99,7 @@ echo "========================================================"
 printf " 通过 %d · 告警 %d · 失败 %d\n" "$PASS" "$WARN" "$FAIL"
 echo "========================================================"
 if [ "$FAIL" -eq 0 ]; then
-  echo " 结论：本地部署可用 ✓  （入口：8080 前端 / 9999 后端 / 8090 AI 壳）"
+  echo " 结论：本地部署可用 ✓  （入口：8080 ERP 前端 / 9999 ERP 后端 / 8090 Talk2Stock）"
   exit 0
 else
   echo " 结论：存在失败项 ✗  请按上面 ✗ 行排查"

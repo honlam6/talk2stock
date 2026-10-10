@@ -25,7 +25,7 @@ def check(name, fn):
 
 def main():
     print("=" * 56)
-    print(" jshERP 易用壳子 · 自检")
+    print(" Talk2Stock · 应用层自检")
     print("=" * 56)
 
     from core import config
