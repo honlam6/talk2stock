@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI 智能录入 · jshERP</title>
+<title>对话录单 · Talk2Stock</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -80,7 +80,7 @@
 <script>
 let attachMgr = null;
 
-$('#nav').innerHTML = topbar('/ai', 'AI 智能录入', '用大白话说业务，自动建单');
+$('#nav').innerHTML = topbar('/ai', '对话录单 · 单据智能体', '一句话 → 草稿 → 确认 → 写入，每个字段标明来历');
 
 if (typeof AttachmentManager === 'function') {
   attachMgr = AttachmentManager($('#attachZone'), { biz: 'bill', max: 4 });
@@ -122,7 +122,7 @@ async function doParse() {
     const probs = (r.meta && r.meta.problems) || [];
     if (probs.length) toast('注意：' + probs.join('；'), 'warn');
     const att = (attachMgr && !attachMgr.isEmpty()) ? attachMgr.getPaths().map(p => ({ path: p, name: p.split('/').pop() })) : [];
-    showPreview(r.preview, r.draft, onCommitted, att);
+    showPreview(r.preview, r.draft, onCommitted, att, { source: 'ai', rawText: text });
   } catch (e) {
     toast(e.message, 'bad');
   } finally {

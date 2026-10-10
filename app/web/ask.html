@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>问一问 · Talk2Stock</title>
+<link rel="stylesheet" href="/style.css">
+<style>
+  .chat-wrap { display:flex; flex-direction:column; min-height: calc(100vh - 190px); }
+  .chat-log { flex:1; display:flex; flex-direction:column; gap:14px; padding:6px 2px 18px; }
+  .msg { max-width:82%; padding:12px 16px; border-radius:14px; font-size:16.5px; line-height:1.7; white-space:pre-wrap; word-break:break-word; }
+  .msg.user { align-self:flex-end; background:linear-gradient(135deg,var(--brand-1),#0e56d6); color:#fff; border-bottom-right-radius:4px; }
+  .msg.bot  { align-self:flex-start; background:#fff; border:1px solid var(--bd-light); box-shadow:0 1px 2px rgba(16,42,100,.05); border-bottom-left-radius:4px; }
+  .msg.bot .src { display:block; margin-top:8px; font-size:12.5px; color:var(--text-3); }
+  .msg.bot.err { background:var(--red-bg); border-color:var(--red-bd); }
+  .chat-input { display:flex; gap:10px; position:sticky; bottom:0; background:var(--bg); padding:12px 0 4px; }
+  .chat-input textarea { flex:1; font-size:17px; padding:12px 14px; border:2px solid var(--bd); border-radius:12px; font-family:inherit; resize:none; height:52px; line-height:1.5; }
+  .chat-input textarea:focus { outline:none; border-color:var(--brand-1); box-shadow:0 0 0 3px rgba(26,111,232,.14); }
+</style>
+</head>
+<body>
+<div id="nav"></div>
+
+<div class="wrap">
+  <div class="chat-wrap">
+    <div class="chat-log" id="log"></div>
+    <div class="hint" style="margin:4px 0 8px">试试：
+      <span class="tag tag-blue" style="cursor:pointer" data-q="可乐还有多少库存？">可乐还有多少库存？</span>
+      <span class="tag tag-blue" style="cursor:pointer" data-q="今天卖了多少？">今天卖了多少？</span>
+      <span class="tag tag-blue" style="cursor:pointer" data-q="谁欠我钱？">谁欠我钱？</span>
+      <span class="tag tag-blue" style="cursor:pointer" data-q="什么货快没了？">什么货快没了？</span>
+    </div>
+    <div class="chat-input">
+      <textarea id="q" placeholder="问一句经营数据，例如「矿泉水还有货吗」"></textarea>
+      <button class="btn btn-primary" id="send">提问</button>
+    </div>
+    <div class="hint" style="margin-top:6px">只读问答：只会查询数据，不会改动任何单据。回答里的数字全部来自 ERP 实时接口。</div>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+$('#nav').innerHTML = topbar('/ask', '问一问 · 只读问答', '库存 / 采销 / 欠款，随口问，答案带数据来源');
+
+const log = $('#log');
+function add(cls, text, src) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls;
+  d.textContent = text;
+  if (src) {
+    const s = document.createElement('span');
+    s.className = 'src';
+    s.textContent = '数据来源：' + src;
+    d.appendChild(s);
+  }
+  log.appendChild(d);
+  d.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  return d;
+}
+
+const TOOL_LABEL = {
+  stock_query: '库存查询（实时）', low_stock: '库存预警（实时）',
+  today_stats: '今日经营（官方统计接口）', month_stats: '本月经营（官方统计接口）',
+  debts: '应收应付（单据 debt 字段）', recent_bills: '最近单据', stock_value: '库存货值（官方统计接口）',
+};
+
+async function doAsk(q) {
+  if (!q.trim()) return;
+  add('user', q);
+  $('#q').value = '';
+  const pending = add('bot', '查询中…');
+  try {
+    const r = await api('/api/ask', { method: 'POST', body: { text: q } });
+    pending.remove();
+    if (!r.ok) { add('bot err', r.message || '查询失败'); return; }
+    add('bot', r.answer || '（无回答）', r.tool && r.tool !== 'none' ? (TOOL_LABEL[r.tool] || r.tool) : '');
+  } catch (e) {
+    pending.remove();
+    add('bot err', e.message);
+  }
+}
+
+$('#send').onclick = () => doAsk($('#q').value);
+$('#q').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doAsk($('#q').value); }
+});
+document.querySelectorAll('[data-q]').forEach(el =>
+  el.onclick = () => doAsk(el.dataset.q));
+
+$('#q').focus();
+</script>
+</body>
+</html>

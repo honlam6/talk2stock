@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>表单快速录入 · jshERP</title>
+<title>表单录单 · Talk2Stock</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -112,7 +112,7 @@ let biz = 'purchase_in';
 // ---------- 顶栏 ----------
 let attachMgr = null;
 
-$('#nav').innerHTML = topbar('/form', '表单快速录入', '像填表一样录单据 · 不用 AI');
+$('#nav').innerHTML = topbar('/form', '表单录单', '精确控制每个字段 · 不依赖 AI · 同样过确认闸门');
 
 if (typeof AttachmentManager === 'function') {
   attachMgr = AttachmentManager($('#attachZone'), { biz: 'bill', max: 4 });
@@ -276,10 +276,10 @@ $('#previewBtn').onclick = async () => {
   const btn = $('#previewBtn');
   btn.disabled = true; btn.textContent = '检查中…';
   try {
-    const r = await api('/api/resolve', { method: 'POST', body: { draft: d } });
+    const r = await api('/api/resolve', { method: 'POST', body: { draft: d, source: 'form' } });
     if (!r.ok) { toast(r.message || '预览失败', 'bad'); return; }
     const att = (attachMgr && !attachMgr.isEmpty()) ? attachMgr.getPaths().map(p => ({ path: p, name: p.split('/').pop() })) : [];
-    showPreview(r.preview, d, onCommitted, att);
+    showPreview(r.preview, d, onCommitted, att, { source: 'form', rawText: '' });
   } catch (e) {
     toast(e.message, 'bad');
   } finally {

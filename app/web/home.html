@@ -3,44 +3,51 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>jshERP 易用壳子</title>
+<title>Talk2Stock · 对话式进销存智能体</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <div id="nav"></div>
 
 <div class="wrap">
-  <div class="card" style="text-align:center;padding:30px 20px">
-    <h2 style="justify-content:center;font-size:22px;margin-bottom:6px">选一个顺手的方式录单据</h2>
-    <div class="muted">不用在原系统里点来点去。缺供应商、缺商品都不用先去建档，写入时自动补齐。</div>
+  <div class="card" style="text-align:center;padding:34px 20px">
+    <h2 class="home-hero-title" style="justify-content:center;font-size:26px;margin-bottom:8px;font-weight:800">把一句话，变成一张 ERP 单据</h2>
+    <div class="muted">对话式进销存智能体：解析口语 → 生成草稿 → 标出来历 → 人工确认 → 写入真实 ERP，全程留痕可审计。</div>
   </div>
 
   <div class="home-grid">
     <a class="home-card" href="/form">
       <div class="ico">📋</div>
-      <h3>表单快速录入</h3>
-      <p>像填 Excel 一样，选业务类型 → 填单位和明细 → 预览确认。带自动补全，键盘连续录入。</p>
-      <span class="badge">不需要 AI · 随时可用</span>
+      <h3>表单录单</h3>
+      <p>精确控制每个字段：选业务类型 → 填往来单位和明细 → 预览确认。自动补全 + 键盘连续录入。</p>
+      <span class="badge">不依赖 AI · 随时可用</span>
     </a>
 
     <a class="home-card" href="/ai">
       <div class="ico">💬</div>
-      <h3>AI 智能录入</h3>
-      <p>直接打一句话「从美宜佳买了3瓶可乐单价3块5」，AI 自动拆成单据，确认后写入。</p>
+      <h3>对话录单（Agent）</h3>
+      <p>直接说「从美宜佳买了3瓶可乐单价3块5」，智能体拆解成单据草稿，缺什么会提醒你补，确认后才写入。</p>
       <span class="badge" id="aiBadge">需配置模型</span>
+    </a>
+
+    <a class="home-card" href="/ask">
+      <div class="ico">🔎</div>
+      <h3>问一问（只读）</h3>
+      <p>「可乐还有多少」「今天卖了多少」「谁欠我钱」——随口问，答案全部来自 ERP 实时数据，绝不改数据。</p>
+      <span class="badge">只读 · 不改数据</span>
     </a>
 
     <a class="home-card" href="/dashboard">
       <div class="ico">📊</div>
       <h3>经营看板</h3>
-      <p>老板视角：本月采购销售、毛利、欠款、库存预警、最近单据流水，一眼看完。</p>
+      <p>老板视角：本月采购销售、差额、欠款、库存预警、最近单据流水，一眼看完。</p>
       <span class="badge">只读 · 不改数据</span>
     </a>
 
     <a class="home-card" href="http://localhost:8080" target="_blank">
       <div class="ico">🗄</div>
       <h3>打开原版 ERP</h3>
-      <p>需要用到高级功能（报表、权限、盘点、财务）时，回到 jshERP 原系统。</p>
+      <p>报表、权限、盘点、财务等高级功能仍回 jshERP 原系统；本系统只做加法，不改原版。</p>
       <span class="badge">localhost:8080</span>
     </a>
   </div>
@@ -53,7 +60,7 @@
 
 <script src="/common.js"></script>
 <script>
-$('#nav').innerHTML = topbar('/', 'jshERP 易用壳子', '给现有系统套一层简单界面');
+$('#nav').innerHTML = topbar('/', 'Talk2Stock · 对话式进销存智能体', '一句话 → 草稿 → 确认 → 写入真实 ERP，全程留痕');
 
 (async () => {
   // 模型状态

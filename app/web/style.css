@@ -372,3 +372,105 @@ hr.sep { border: none; border-top: 1px solid var(--bd-light); margin: 18px 0; }
   .topbar{flex-wrap:wrap}.navtabs{width:100%;overflow-x:auto}
   .xtable{font-size:15px}.kpi .val{font-size:26px}
 }
+
+/* 单价为 0（原话可能没说价格）——确认卡上高亮 */
+
+/* ==========================================================
+   Talk2Stock 视觉升级（覆盖层：同名类后者生效，无外部依赖）
+   ========================================================== */
+:root {
+  --brand-1: #1a6fe8;
+  --brand-2: #0a3ab0;
+  --ink: #0f1c3f;
+}
+
+/* 顶栏：更深的海军蓝渐变 + 玻璃质感 */
+.topbar {
+  background: linear-gradient(120deg, var(--brand-1) 0%, #114fc4 55%, var(--brand-2) 100%);
+  padding: 14px 22px;
+}
+.topbar .logo {
+  width: 42px; height: 42px; flex-basis: 42px;
+  background: linear-gradient(145deg, rgba(255,255,255,.32), rgba(255,255,255,.12));
+  border: 1px solid rgba(255,255,255,.35);
+  border-radius: 12px; font-size: 15px; letter-spacing: .5px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.18);
+}
+.topbar h1 { font-size: 21px; letter-spacing: .3px; }
+.brand-mark {
+  display: flex; flex-direction: column; align-items: flex-end; line-height: 1.15;
+  font-weight: 700; font-size: 14px; letter-spacing: .4px; opacity: .95;
+  margin-right: 14px; white-space: nowrap;
+}
+.brand-mark span { font-weight: 400; font-size: 11px; opacity: .8; letter-spacing: 1.5px; }
+@media (max-width: 720px) { .brand-mark { display: none; } }
+
+/* 卡片：更轻的边框 + 柔和阴影 */
+.card { border: 1px solid rgba(15, 28, 63, .06); box-shadow: 0 1px 2px rgba(16,42,100,.04), 0 8px 24px -12px rgba(16,42,100,.12); }
+
+/* 主按钮：品牌渐变 + 悬停抬升 */
+.btn-primary {
+  background: linear-gradient(135deg, var(--brand-1), #0e56d6);
+  border: none;
+  box-shadow: 0 4px 14px -4px rgba(26,111,232,.55);
+}
+.btn-primary:hover:not(:disabled) { background: linear-gradient(135deg, #2b7cf0, #114fc4); transform: translateY(-1px); box-shadow: 0 7px 18px -6px rgba(26,111,232,.6); }
+.btn:active:not(:disabled) { transform: translateY(0); }
+
+/* 弹层：背景轻微虚化，突出确认卡 */
+.mask.show { backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); background: rgba(13, 27, 62, .45); }
+.modal { border-radius: 14px; }
+
+/* 单价为 0（原话可能没说价格）——确认卡上高亮 */
+.price-zero { color: var(--orange); font-weight: 700; }
+
+/* ---------- 第二轮美化 ---------- */
+/* 首页 hero：品牌渐变标题 */
+.card h2 { letter-spacing: .2px; }
+.home-hero-title {
+  background: linear-gradient(120deg, var(--brand-1), var(--brand-2));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+/* 首页卡片：悬停抬升 + 顶部品牌描边 */
+.home-card { position: relative; overflow: hidden; transition: transform .18s, box-shadow .18s; }
+.home-card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, var(--brand-1), var(--brand-2));
+  opacity: 0; transition: opacity .18s;
+}
+.home-card:hover { transform: translateY(-3px); box-shadow: 0 14px 32px -14px rgba(16,42,100,.25); }
+.home-card:hover::before { opacity: 1; }
+
+/* 表格：隔行底色 + 悬停 */
+.xtable tbody tr:nth-child(even) { background: #fafbfe; }
+.xtable tbody tr:hover { background: #f0f6ff; }
+
+/* 确认卡弹层：更克制的动效 */
+.modal { animation: modal-in .18s ease-out; }
+@keyframes modal-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+
+/* 状态徽标 */
+.badge { transition: all .15s; }
+.home-card:hover .badge { border-color: var(--brand-1); color: var(--brand-1); }
+
+/* 导航：手机端可横向滑动，不挤压标题 */
+.navtabs { display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.navtabs a { white-space: nowrap; }
+@media (max-width: 720px) {
+  .topbar { flex-wrap: wrap; gap: 8px; }
+  .topbar h1 { font-size: 18px; }
+  .topbar .sub { font-size: 12px; }
+  .navtabs { order: 3; width: 100%; }
+  .wrap { padding: 14px 12px 70px; }
+  .msg { max-width: 92%; }
+}
+
+/* 加载中的按钮微动效 */
+.btn.loading { position: relative; color: transparent !important; }
+.btn.loading::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 16px; height: 16px;
+  margin: -8px 0 0 -8px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

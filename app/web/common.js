@@ -256,23 +256,35 @@ function AttachmentManager(zoneEl, opts) {
 }
 
 // ---------- 预览确认弹层（三个页面共用） ----------
-function showPreview(preview, draft, onConfirm, attachPaths) {
+/** preview 须含 confirm_token（由 /api/parse 或 /api/resolve 签发）；
+ *  extra = {source: 'ai'|'form', rawText: 用户原话（AI 入口传，审计用）} */
+function showPreview(preview, draft, onConfirm, attachPaths, extra) {
   const old = $('#__mask');
   if (old) old.remove();
+  extra = extra || {};
 
   const p = preview || {};
   const toCreate = p.to_create || [];
   const warns = p.warnings || [];
   const errs = p.errors || [];
+  const ai = p.ai || {};
+  const aiFlag = (ai.confidence && ai.confidence !== 'high') || (ai.note || '').trim()
+    || (ai.problems || []).length;
 
-  const rows = (p.items || []).map(it => `
+  const candChips = (cands, pick) => (cands || []).length
+    ? `<div style="margin-top:6px"><span class="hint">是指：</span>${cands.map(c =>
+        `<span class="tag tag-blue" style="cursor:pointer" data-pick="${esc(pick)}" data-cand="${esc(c)}">${esc(c)}</span>`).join(' ')}</div>`
+    : '';
+
+  const rows = (p.items || []).map((it, i) => `
     <tr>
       <td>${esc(it.name)} ${it.will_create
         ? '<span class="tag tag-new">将新建</span>'
-        : (it.match_kind === 'fuzzy' ? `<span class="tag tag-fuzzy">匹配→${esc(it.matched_name)}</span>` : '<span class="tag tag-ok">已有</span>')}</td>
+        : (it.match_kind === 'fuzzy' ? `<span class="tag tag-fuzzy">匹配→${esc(it.matched_name)}</span>` : '<span class="tag tag-ok">已有</span>')}
+        ${candChips(it.candidates, 'item:' + i)}</td>
       <td class="num">${num(it.qty)}</td>
       <td>${esc(it.unit)}</td>
-      <td class="num">${money(it.price)}</td>
+      <td class="num${it.price_missing ? ' price-zero' : ''}">${money(it.price)}${it.price_missing ? ' <span class="tag tag-new" title="原话里可能没有说价格">单价?</span>' : ''}</td>
       <td class="num"><b>${money(it.amount)}</b></td>
     </tr>`).join('');
 
@@ -282,6 +294,12 @@ function showPreview(preview, draft, onConfirm, attachPaths) {
       <h2><span class="bar"></span>确认单据　<span class="tag tag-blue">${esc(p.biz_label || '')}</span></h2>
 
       ${errs.length ? `<div class="alert alert-error"><b>无法提交：</b><br>${errs.map(esc).join('<br>')}</div>` : ''}
+
+      ${aiFlag ? `
+      <div class="alert ${ai.confidence === 'low' ? 'alert-warn' : 'alert-info'}">
+        <b>AI 提示（置信度：${esc(ai.confidence || '—')}）：</b>${esc(ai.note || '')}
+        ${(ai.problems || []).length ? '<br>解析问题：' + ai.problems.map(esc).join('；') : ''}
+      </div>` : ''}
 
       ${toCreate.length ? `
       <div class="alert alert-warn">
@@ -296,6 +314,7 @@ function showPreview(preview, draft, onConfirm, attachPaths) {
         <div><b>${esc((p.party && p.party.type) || '往来单位')}：</b>${esc((p.party && p.party.name) || '—')}
           ${p.party && p.party.will_create ? '<span class="tag tag-new">将新建</span>'
             : (p.party && p.party.match_kind === 'fuzzy' ? `<span class="tag tag-fuzzy">匹配→${esc(p.party.matched_name)}</span>` : '<span class="tag tag-ok">已有</span>')}
+          ${p.party && !p.party.matched ? candChips(p.party.candidates, 'party') : ''}
         </div>
         <div style="margin-top:6px"><b>仓库：</b>${esc((p.depot && p.depot.name) || '—')}
           ${p.depot && p.depot.will_create ? '<span class="tag tag-new">将新建</span>' : '<span class="tag tag-ok">已有</span>'}
@@ -334,6 +353,26 @@ function showPreview(preview, draft, onConfirm, attachPaths) {
   $('#__cancel').onclick = close;
   mask.onclick = e => { if (e.target === mask) close(); };
 
+  // 候选点选：改草稿 → 重新只读预览（旧令牌作废，新预览带新令牌）
+  mask.querySelectorAll('[data-pick]').forEach(chip => {
+    chip.onclick = async () => {
+      const cand = chip.dataset.cand;
+      const d2 = JSON.parse(JSON.stringify(draft));
+      if (chip.dataset.pick === 'party') d2.party = cand;
+      else {
+        const i = parseInt(chip.dataset.pick.split(':')[1], 10);
+        if (d2.items && d2.items[i]) d2.items[i].name = cand;
+      }
+      chip.textContent = '…';
+      try {
+        const r = await api('/api/resolve', { method: 'POST', body: { draft: d2, source: extra.source || 'form' } });
+        if (!r.ok) { toast(r.message || '重新预览失败', 'bad'); return; }
+        close();
+        showPreview(r.preview, r.draft, onConfirm, attachPaths, extra);
+      } catch (e) { toast(e.message, 'bad'); }
+    };
+  });
+
   $('#__ok').onclick = async () => {
     const btn = $('#__ok');
     btn.disabled = true;
@@ -344,7 +383,12 @@ function showPreview(preview, draft, onConfirm, attachPaths) {
       if (attachPaths && attachPaths.length) {
         d.file_name = attachPaths.map(x => x.path).join(',');
       }
-      const res = await api('/api/commit', { method: 'POST', body: { draft: d } });
+      const res = await api('/api/commit', { method: 'POST', body: {
+        draft: d,
+        confirm_token: p.confirm_token || '',
+        source: extra.source || '',
+        raw_text: extra.rawText || '',
+      } });
       close();
       if (onConfirm) onConfirm(res);
     } catch (e) {
@@ -357,15 +401,16 @@ function showPreview(preview, draft, onConfirm, attachPaths) {
 
 // ---------- 顶栏导航 ----------
 function topbar(active, title, sub) {
-  const tabs = [['/', '首页'], ['/ai', 'AI 录入'], ['/form', '表单录入'], ['/dashboard', '经营看板']];
+  const tabs = [['/', '首页'], ['/ai', '对话录单'], ['/form', '表单录单'], ['/ask', '问一问'], ['/dashboard', '经营看板']];
   return `
   <div class="topbar">
-    <div class="logo">易</div>
+    <div class="logo">T2S</div>
     <div>
       <h1>${esc(title)}</h1>
       <div class="sub">${esc(sub || '')}</div>
     </div>
     <div class="spacer"></div>
+    <div class="brand-mark">Talk2Stock<span>ERP Agent</span></div>
     <div class="navtabs">
       ${tabs.map(([h, t]) => `<a href="${h}" class="${h === active ? 'on' : ''}">${t}</a>`).join('')}
     </div>
