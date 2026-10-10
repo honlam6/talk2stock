@@ -217,6 +217,7 @@ cp app/.env.example app/.env
 | `T2S_ERP_USER` | ERP 登录账号 | `jsh` |
 | `T2S_ERP_PASS` | ERP 登录密码（明文，服务端会做 MD5） | 空（需填） |
 | `T2S_KEY_<档案名大写>` | 某个模型档案的 API Key，如 `T2S_KEY_DEEPSEEK` | 空 |
+| `T2S_BASE_<档案名大写>` | 覆盖某档案的网关地址（公开仓库 config.json 只放占位，真实地址写这里） | 空 |
 | `T2S_REQUIRE_AUTH` | 设为 `1` 后所有 `/api` 接口需带访问口令 | `0`（关闭） |
 | `T2S_DEMO_PASS` | 访问口令 | `talk2stock` |
 | `PORT` / `HOST` | AI 壳监听端口 / 地址 | `8090` / `0.0.0.0` |

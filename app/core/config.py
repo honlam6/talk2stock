@@ -163,7 +163,11 @@ def _deep_merge(base, override):
 
 
 def _apply_env(cfg):
-    """把环境变量里的密钥覆盖进配置（不落盘）。"""
+    """把环境变量里的密钥覆盖进配置（不落盘）。
+
+    档案的 base_url 也可用环境变量覆盖（T2S_BASE_<档案名大写>），
+    这样公开仓库里的 config.json 只放占位地址，真实网关地址留在 .env。
+    """
     erp = cfg.setdefault("erp", {})
     erp["base"] = env("T2S_ERP_BASE", erp.get("base") or DEFAULTS["erp"]["base"])
     erp["user"] = env("T2S_ERP_USER", erp.get("user") or DEFAULTS["erp"]["user"])
@@ -174,6 +178,9 @@ def _apply_env(cfg):
         k = env("T2S_KEY_" + key.upper().replace("-", "_"), "")
         if k:
             prof["api_key"] = k
+        b = env("T2S_BASE_" + key.upper().replace("-", "_"), "")
+        if b:
+            prof["base_url"] = b.rstrip("/")
     return cfg
 
 
