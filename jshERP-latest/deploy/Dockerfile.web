@@ -1,0 +1,12 @@
+# ---- build stage ----
+FROM node:20 AS build
+WORKDIR /web
+ENV NODE_OPTIONS=--openssl-legacy-provider
+COPY jshERP-web /web
+RUN npm install --legacy-peer-deps && npm run build
+
+# ---- serve stage ----
+FROM nginx:stable-alpine
+COPY --from=build /web/dist /usr/share/nginx/html
+COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80

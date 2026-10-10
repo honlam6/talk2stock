@@ -1,0 +1,77 @@
+services:
+  erp-mysql:
+    image: mysql:8.0
+    container_name: erp-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: jsh_erp
+      TZ: Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../jshERP-boot/docs/jsh_erp.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - erp-net
+
+  erp-redis:
+    image: redis:7
+    container_name: erp-redis
+    restart: always
+    command: redis-server --requirepass 1234abcd
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "1234abcd", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - erp-net
+
+  erp-backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    container_name: erp-backend
+    restart: always
+    environment:
+      TZ: Asia/Shanghai
+    depends_on:
+      erp-mysql:
+        condition: service_healthy
+      erp-redis:
+        condition: service_healthy
+    ports:
+      - "9999:9999"
+    volumes:
+      - erp-upload:/opt/jshERP/upload
+    networks:
+      - erp-net
+
+  erp-web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    container_name: erp-web
+    restart: always
+    depends_on:
+      - erp-backend
+    ports:
+      - "8080:80"
+    networks:
+      - erp-net
+
+networks:
+  erp-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
+  erp-upload:

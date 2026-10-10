@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>经营看板 · jshERP</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="nav"></div>
+
+<div class="wrap">
+
+  <div class="card">
+    <h2><span class="bar"></span><span id="mTitle">本月经营</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-sm btn-ghost" id="refresh" style="margin-left:auto">↻ 刷新</button>
+    </h2>
+    <div class="kpi-grid" id="kpiMonth"><div class="muted">加载中…</div></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="bar"></span>今日</h2>
+    <div class="kpi-grid" id="kpiToday"></div>
+  </div>
+
+  <div class="card">
+    <h2><span class="bar"></span>近 6 个月走势</h2>
+    <div id="trend"></div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <h2><span class="bar"></span>库存预警</h2>
+      <div id="stockSum" class="muted"></div>
+      <div class="tbl-wrap" style="margin-top:10px;max-height:340px;overflow-y:auto">
+        <table class="dtable" id="stockTbl">
+          <thead><tr><th>商品</th><th class="num">库存</th><th>单位</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="bar"></span>往来欠款</h2>
+      <div id="debtBox"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="bar"></span>最近单据</h2>
+    <div class="tbl-wrap">
+      <table class="dtable" id="recentTbl">
+        <thead><tr>
+          <th>日期</th><th>类型</th><th>单号</th><th>往来单位</th><th>商品</th>
+          <th class="num">金额</th><th>状态</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="bar"></span>基础资料</h2>
+    <div id="masterBox" class="muted"></div>
+  </div>
+
+</div>
+
+<script src="/common.js"></script>
+<script>
+$('#nav').innerHTML = topbar('/dashboard', '经营看板', '只读视图 · 不会改动任何数据');
+
+function kpi(cls, label, val, sub) {
+  return `<div class="kpi ${cls}">
+    <div class="lbl">${esc(label)}</div>
+    <div class="val">${val}</div>
+    <div class="sub">${esc(sub || '')}</div>
+  </div>`;
+}
+
+function renderTrend(tr) {
+  const box = $('#trend');
+  if (!tr || !tr.buy || !tr.buy.length) { box.innerHTML = '<div class="muted">暂无趋势数据</div>'; return; }
+  const buy = tr.buy, sell = tr.sell || [];
+  const max = Math.max(1, ...buy.map(p => +p.y || 0), ...sell.map(p => +p.y || 0));
+  box.innerHTML = `
+    <div style="display:flex;gap:18px;font-size:14px;margin-bottom:12px">
+      <span><i style="display:inline-block;width:12px;height:12px;background:#1890ff;border-radius:2px"></i> 采购</span>
+      <span><i style="display:inline-block;width:12px;height:12px;background:#52c41a;border-radius:2px"></i> 销售</span>
+    </div>
+    <div style="display:flex;align-items:flex-end;gap:14px;height:180px;padding:0 4px">
+      ${buy.map((p, i) => {
+        const b = +p.y || 0, s = +((sell[i] || {}).y) || 0;
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;height:100%">
+          <div style="flex:1;display:flex;align-items:flex-end;gap:4px;width:100%;justify-content:center">
+            <div title="采购 ￥${money(b)}" style="width:38%;background:#1890ff;border-radius:4px 4px 0 0;height:${(b / max * 100).toFixed(1)}%;min-height:${b ? 3 : 0}px"></div>
+            <div title="销售 ￥${money(s)}" style="width:38%;background:#52c41a;border-radius:4px 4px 0 0;height:${(s / max * 100).toFixed(1)}%;min-height:${s ? 3 : 0}px"></div>
+          </div>
+          <div style="font-size:12px;color:#8c8c8c;margin-top:6px;white-space:nowrap">${esc(p.x)}</div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function load() {
+  const btn = $('#refresh');
+  btn.disabled = true; btn.textContent = '刷新中…';
+  try {
+    const d = await api('/api/dashboard');
+    if (!d.ok) { toast(d.message || '加载失败', 'bad'); return; }
+    const O = d.official || {};
+
+    $('#mTitle').textContent = d.month + ' 经营概况';
+
+    // 优先用官方「本月」；跨月或为空时回退到 summary 的「本月(月)」→「全年(all)」
+    const m = O['月'] || d['月'] || d.all;
+    const scopeLabel = O['月'] ? '本月' : (d['月'] && d['月'].buy ? '本月' : '近半月累计');
+    $('#mTitle').textContent = (d['月'] && d['月'].buy ? d.month + ' 经营概况' : '经营概况（累计）');
+    $('#kpiMonth').innerHTML =
+      kpi('', '采购金额', '￥' + money(m.buy), scopeLabel + '进货') +
+      kpi('g', '销售金额', '￥' + money(m.sell), scopeLabel + '出货') +
+      kpi(m.profit >= 0 ? 'g' : 'r', '毛利（销售 − 采购）', '￥' + money(m.profit),
+          m.profit >= 0 ? '净流入为正' : '进货多于出货（备货中）') +
+      kpi('o', '库存货值', '￥' + money((O.stock_money || {}).total_value),
+          '共 ' + ((O.stock_money || {}).total_stock || 0) + ' 件');
+
+    const t = O.today || d.today;
+    $('#kpiToday').innerHTML =
+      kpi('', '今日采购', '￥' + money(t.buy), (t.buy_n || 0) + ' 条') +
+      kpi('g', '今日销售', '￥' + money(t.sell), (t.sell_n || 0) + ' 条') +
+      kpi('o', '账户总余额', '￥' + money((O.account || {}).current), '本月发生 ￥' + money((O.account || {}).month)) +
+      kpi('r', '待处理单据', (O.wait_bills != null ? O.wait_bills : '—'),
+          '待收款 ' + (O.need_recv || 0) + ' · 待付款 ' + (O.need_pay || 0));
+
+    // 月趋势
+    renderTrend(O.trend);
+
+    // 库存
+    const s = d.stock || {};
+    $('#stockSum').innerHTML =
+      `共 <b>${s.kinds || 0}</b> 种商品　` +
+      `<span class="tag" style="background:var(--red-bg);color:#cf1322">负库存 ${s.negative || 0}</span>　` +
+      `<span class="tag tag-new">低于 ${s.threshold || 10} 的 ${s.low || 0}</span>`;
+    const sb = $('#stockTbl tbody');
+    sb.innerHTML = (s.warn_list || []).length
+      ? s.warn_list.map(r => `<tr>
+          <td>${esc(r.name)}</td>
+          <td class="num" style="color:${r.stock < 0 ? '#ff4d4f' : (r.stock === 0 ? '#fa8c16' : 'inherit')};font-weight:600">${r.stock}</td>
+          <td>${esc(r.unit)}</td></tr>`).join('')
+      : '<tr><td colspan="3" class="muted center">库存都很充足</td></tr>';
+
+    // 欠款
+    const box = $('#debtBox');
+    const sec = (title, list, total, cls) => `
+      <div style="margin-bottom:14px">
+        <b>${title}</b>　<span class="amount" style="color:${cls}">￥${money(total)}</span>
+        ${list.length ? `<table class="dtable" style="margin-top:6px">
+          ${list.map(x => `<tr><td>${esc(x.name)}</td><td class="num">￥${money(x.amount)}</td></tr>`).join('')}
+        </table>` : '<div class="muted" style="margin-top:4px">没有未结清的款项</div>'}
+      </div>`;
+    box.innerHTML =
+      sec('客户欠我（应收）', d.debt_recv || [], d.debt_recv_total, '#fa8c16') +
+      sec('我欠供应商（应付）', d.debt_pay || [], d.debt_pay_total, '#ff4d4f');
+
+    // 最近单据
+    $('#recentTbl tbody').innerHTML = (d.recent || []).length
+      ? d.recent.map(r => `<tr>
+          <td>${esc(r.time)}</td>
+          <td><span class="tag ${r.type.indexOf('入库') === 0 ? 'tag-blue' : 'tag-ok'}">${esc(r.type)}</span></td>
+          <td>${esc(r.number)}</td>
+          <td>${esc(r.party)}</td>
+          <td class="muted">${esc(r.goods)}</td>
+          <td class="num"><b>￥${money(r.total)}</b>${r.debt > 0 ? `<br><span class="hint" style="color:#fa8c16">欠 ${money(r.debt)}</span>` : ''}</td>
+          <td>${r.status === '已审核' ? '<span class="tag tag-ok">已审核</span>' : '<span class="tag">草稿</span>'}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="7" class="muted center">还没有单据</td></tr>';
+
+    const ms = d.master || {};
+    $('#masterBox').innerHTML =
+      `供应商 <b>${ms.suppliers || 0}</b>　客户 <b>${ms.customers || 0}</b>　` +
+      `商品 <b>${ms.materials || 0}</b>　仓库 <b>${ms.depots || 0}</b>`;
+
+  } catch (e) {
+    toast(e.message, 'bad');
+  } finally {
+    btn.disabled = false; btn.textContent = '↻ 刷新';
+  }
+}
+
+$('#refresh').onclick = load;
+load();
+</script>
+</body>
+</html>

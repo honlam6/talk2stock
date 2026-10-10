@@ -1,0 +1,38 @@
+{
+  "erp": {
+    "base": "http://localhost:9999/jshERP-boot",
+    "user": "jsh",
+    "pass": ""
+  },
+  "llm": {
+    "active": "",
+    "profiles": {
+      "deepseek": {
+        "name": "DeepSeek",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "",
+        "model": "deepseek-chat",
+        "temperature": 0.2
+      },
+      "openai": {
+        "name": "OpenAI",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "",
+        "model": "gpt-4o-mini",
+        "temperature": 0.2
+      },
+      "qwen": {
+        "name": "通义千问（阿里云百炼）",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "api_key": "",
+        "model": "qwen-plus",
+        "temperature": 0.2
+      }
+    }
+  },
+  "ui": {
+    "default_depot_in": "原料仓",
+    "default_depot_out": "成品仓",
+    "default_account_id": 25
+  }
+}

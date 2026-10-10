@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""统一草稿层：任何入口（AI 解析 / 表单填写）都产出同一种 Draft，
+经 resolve() 生成预览（标注哪些主数据将被新建），人工确认后 commit() 写库。
+
+Draft 结构（前后端统一契约）：
+{
+  "biz": "purchase_in",            # 业务类型
+  "party": "美宜佳",                # 往来单位名
+  "depot": "原料仓",                # 仓库（可空，按业务取默认）
+  "oper_time": "2026-08-01 10:00:00",
+  "pay_type": "现付",
+  "account_id": 25,
+  "remark": "",
+  "file_name": "",            # 附件：逗号分隔的相对路径串，如 "bill/a.jpg,bill/b.pdf"
+  "items": [{"name":"可乐","qty":3,"unit":"瓶","price":3.5}]
+}
+"""
+import time
+
+from .erp import BILL_TYPES, get_client
+
+BIZ_LABEL = {
+    "purchase_in": "采购入库",
+    "sale_out": "销售出库",
+    "purchase_return": "采购退货",
+    "sale_return": "销售退货",
+    "other_in": "其他入库",
+    "other_out": "其他出库",
+}
+
+
+def new_draft(biz="purchase_in"):
+    return {
+        "biz": biz, "party": "", "depot": "", "items": [],
+        "oper_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "pay_type": "现付", "account_id": None, "remark": "",
+    }
+
+
+def _num(v, default=0.0):
+    try:
+        if v in (None, ""):
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def validate(draft):
+    """返回错误列表（阻断提交）。"""
+    errs = []
+    biz = draft.get("biz")
+    if biz not in BILL_TYPES:
+        errs.append(f"未知业务类型：{biz}")
+        return errs
+    if not (draft.get("party") or "").strip():
+        errs.append(f"缺少{'供应商' if BILL_TYPES[biz][2] == '供应商' else '客户'}名称")
+    items = draft.get("items") or []
+    if not items:
+        errs.append("至少需要一项商品明细")
+    for i, it in enumerate(items, 1):
+        if not (it.get("name") or "").strip():
+            errs.append(f"第{i}行缺商品名称")
+        if _num(it.get("qty")) <= 0:
+            errs.append(f"第{i}行数量必须大于 0")
+        if _num(it.get("price")) < 0:
+            errs.append(f"第{i}行单价不能为负")
+    return errs
+
+
+def resolve(draft, erp=None):
+    """只读匹配，不写任何数据。返回预览结构，标出 will_create 的主数据。"""
+    erp = erp or get_client()
+    biz = draft.get("biz", "purchase_in")
+    if biz not in BILL_TYPES:
+        return {"ok": False, "errors": [f"未知业务类型：{biz}"], "draft": draft}
+
+    btype, sub_type, party_type, direction = BILL_TYPES[biz]
+    errors = validate(draft)
+    warnings = []
+    to_create = []
+
+    # 往来单位
+    party_name = (draft.get("party") or "").strip()
+    prow, pkind = erp.find_party(party_name, party_type) if party_name else (None, "none")
+    party_info = {
+        "name": party_name, "type": party_type,
+        "id": prow.get("id") if prow else None,
+        "matched": bool(prow), "match_kind": pkind,
+        "matched_name": prow.get("supplier") if prow else None,
+        "will_create": bool(party_name) and not prow,
+    }
+    if party_info["will_create"]:
+        to_create.append(f"新建{party_type}：{party_name}")
+    if pkind == "fuzzy":
+        warnings.append(f"{party_type}「{party_name}」模糊匹配到「{prow.get('supplier')}」，请确认")
+
+    # 仓库
+    from . import config as cfgmod
+    ui = cfgmod.load()["ui"]
+    depot_name = (draft.get("depot") or "").strip() or (
+        ui["default_depot_in"] if direction == "in" else ui["default_depot_out"])
+    drow, dkind = erp.find_depot(depot_name)
+    depot_info = {
+        "name": depot_name, "id": drow.get("id") if drow else None,
+        "matched": bool(drow), "match_kind": dkind,
+        "matched_name": drow.get("name") if drow else None,
+        "will_create": not drow,
+    }
+    if depot_info["will_create"]:
+        to_create.append(f"新建仓库：{depot_name}")
+
+    # 商品明细
+    items = []
+    total = 0.0
+    for it in (draft.get("items") or []):
+        name = (it.get("name") or "").strip()
+        unit = (it.get("unit") or "个").strip()
+        qty = _num(it.get("qty"))
+        price = _num(it.get("price"))
+        amount = round(qty * price, 2)
+        total += amount
+        mrow, mkind = erp.find_material(name) if name else (None, "none")
+        will_create = bool(name) and not mrow
+        if will_create:
+            to_create.append(f"新建商品：{name}（{unit}）")
+        if mkind == "fuzzy":
+            warnings.append(f"商品「{name}」模糊匹配到「{mrow.get('name')}」，请确认")
+        row = {
+            "name": name, "qty": qty, "unit": unit, "price": price, "amount": amount,
+            "material_id": mrow.get("id") if mrow else None,
+            "matched": bool(mrow), "match_kind": mkind,
+            "matched_name": mrow.get("name") if mrow else None,
+            "will_create": will_create,
+            "stock": None,
+        }
+        # 出库业务：查库存给出负库存提醒
+        if direction == "out" and mrow and drow:
+            st = erp.stock(mrow["id"], drow["id"])
+            row["stock"] = st
+            if st is not None and _num(st) < qty:
+                warnings.append(f"「{name}」当前库存 {st}，本次出 {qty}，将产生负库存")
+        items.append(row)
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "biz": biz,
+        "biz_label": BIZ_LABEL.get(biz, biz),
+        "bill_type": btype,
+        "sub_type": sub_type,
+        "party": party_info,
+        "depot": depot_info,
+        "items": items,
+        "total": round(total, 2),
+        "to_create": to_create,
+        "oper_time": draft.get("oper_time") or time.strftime("%Y-%m-%d %H:%M:%S"),
+        "pay_type": draft.get("pay_type") or ("现付" if direction == "in" else "现收"),
+        "remark": draft.get("remark") or "",
+        "draft": draft,
+    }
+
+
+def commit(draft, erp=None, auto_create=True):
+    """人工确认后执行：先补主数据，再建单。返回结果 + 实际创建了什么。"""
+    erp = erp or get_client()
+    biz = draft.get("biz", "purchase_in")
+    errs = validate(draft)
+    if errs:
+        return {"ok": False, "message": "；".join(errs), "errors": errs}
+
+    btype, sub_type, party_type, direction = BILL_TYPES[biz]
+    created = []
+
+    try:
+        # 1. 往来单位
+        party_name = draft["party"].strip()
+        prow, was_new = erp.ensure_party(party_name, party_type)
+        if was_new:
+            created.append(f"{party_type}「{party_name}」")
+
+        # 2. 仓库
+        from . import config as cfgmod
+        ui = cfgmod.load()["ui"]
+        depot_name = (draft.get("depot") or "").strip() or (
+            ui["default_depot_in"] if direction == "in" else ui["default_depot_out"])
+        drow, was_new = erp.ensure_depot(depot_name)
+        if was_new:
+            created.append(f"仓库「{depot_name}」")
+
+        # 3. 商品 + 条码
+        rows = []
+        for it in draft["items"]:
+            name = it["name"].strip()
+            unit = (it.get("unit") or "个").strip()
+            qty = _num(it.get("qty"))
+            price = _num(it.get("price"))
+            mrow, was_new = erp.ensure_material(name, unit)
+            if was_new:
+                created.append(f"商品「{name}」")
+            rows.append({
+                "materialId": mrow["id"],
+                "barCode": mrow["barCode"],
+                "name": mrow.get("name") or name,
+                "operNumber": qty,
+                "unit": mrow.get("unit") or unit,
+                "unitPrice": price,
+                "allPrice": round(qty * price, 2),
+                "depotId": drow["id"],
+                "remark": it.get("remark") or "",
+            })
+
+        # 4. 建单
+        acc = draft.get("account_id") or ui.get("default_account_id") or 25
+        # 附件：file_name 为逗号分隔的相对路径串（来自前端上传，已由服务端代理 ERP 拿到）
+        file_name = (draft.get("file_name") or "").strip()
+        # 本次实付：填了则按实付建单，欠款由 ERP 后端自动算
+        pay_amount = draft.get("pay_amount")
+        if pay_amount in (None, ""):
+            pay_amount = None
+        else:
+            try:
+                pay_amount = float(pay_amount)
+            except Exception:
+                pay_amount = None
+        res = erp.create_bill(
+            biz, prow["id"], rows,
+            oper_time=draft.get("oper_time"),
+            account_id=acc,
+            pay_type=draft.get("pay_type") or ("现付" if direction == "in" else "现收"),
+            remark=draft.get("remark") or "",
+            file_name=file_name,
+            pay_amount=pay_amount,
+        )
+        res["created"] = created
+        res["biz_label"] = BIZ_LABEL.get(biz, biz)
+        if res["ok"]:
+            res["message"] = f"{res['biz_label']} {res['number']} 已写入，合计 {res['total']}"
+        return res
+    except Exception as e:
+        return {"ok": False, "message": str(e), "created": created}

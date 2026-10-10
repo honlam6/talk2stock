@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>jshERP 易用壳子</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="nav"></div>
+
+<div class="wrap">
+  <div class="card" style="text-align:center;padding:30px 20px">
+    <h2 style="justify-content:center;font-size:22px;margin-bottom:6px">选一个顺手的方式录单据</h2>
+    <div class="muted">不用在原系统里点来点去。缺供应商、缺商品都不用先去建档，写入时自动补齐。</div>
+  </div>
+
+  <div class="home-grid">
+    <a class="home-card" href="/form">
+      <div class="ico">📋</div>
+      <h3>表单快速录入</h3>
+      <p>像填 Excel 一样，选业务类型 → 填单位和明细 → 预览确认。带自动补全，键盘连续录入。</p>
+      <span class="badge">不需要 AI · 随时可用</span>
+    </a>
+
+    <a class="home-card" href="/ai">
+      <div class="ico">💬</div>
+      <h3>AI 智能录入</h3>
+      <p>直接打一句话「从美宜佳买了3瓶可乐单价3块5」，AI 自动拆成单据，确认后写入。</p>
+      <span class="badge" id="aiBadge">需配置模型</span>
+    </a>
+
+    <a class="home-card" href="/dashboard">
+      <div class="ico">📊</div>
+      <h3>经营看板</h3>
+      <p>老板视角：本月采购销售、毛利、欠款、库存预警、最近单据流水，一眼看完。</p>
+      <span class="badge">只读 · 不改数据</span>
+    </a>
+
+    <a class="home-card" href="http://localhost:8080" target="_blank">
+      <div class="ico">🗄</div>
+      <h3>打开原版 ERP</h3>
+      <p>需要用到高级功能（报表、权限、盘点、财务）时，回到 jshERP 原系统。</p>
+      <span class="badge">localhost:8080</span>
+    </a>
+  </div>
+
+  <div class="card" style="margin-top:18px">
+    <h2><span class="bar"></span>系统状态</h2>
+    <div id="stat" class="muted">检查中…</div>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+$('#nav').innerHTML = topbar('/', 'jshERP 易用壳子', '给现有系统套一层简单界面');
+
+(async () => {
+  // 模型状态
+  try {
+    const r = await api('/api/config');
+    const cfg = r.config || r;
+    const llm = cfg.llm || {};
+    const act = llm.profiles && llm.profiles[llm.active];
+    if (act) {
+      const b = $('#aiBadge');
+      b.textContent = '已配置：' + (act.name || act.model);
+      b.style.background = 'var(--green-bg)';
+      b.style.color = '#389e0d';
+    }
+  } catch (e) {}
+
+  // ERP 状态
+  try {
+    const m = await loadMaster();
+    const c = m.counts || {};
+    $('#stat').innerHTML =
+      `<span class="tag tag-ok">ERP 已连接</span>　` +
+      `供应商 <b>${c.suppliers || 0}</b>　客户 <b>${c.customers || 0}</b>　` +
+      `商品 <b>${c.materials || 0}</b>　仓库 <b>${c.depots || 0}</b>　账户 <b>${c.accounts || 0}</b>`;
+  } catch (e) {
+    $('#stat').innerHTML = `<span class="tag" style="background:var(--red-bg);color:#cf1322">ERP 连不上</span>　${esc(e.message)}
+      <div class="hint">启动命令：cd ~/Desktop/jshERP-suite/jshERP-latest/deploy && docker compose up -d --no-build</div>`;
+  }
+})();
+</script>
+</body>
+</html>

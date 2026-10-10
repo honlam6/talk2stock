@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 智能录入 · jshERP</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="nav"></div>
+
+<div class="wrap">
+
+  <div class="card">
+    <h2><span class="bar"></span>说一句话，自动建单
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn btn-sm btn-ghost" id="cfgBtn" style="margin-left:auto">⚙ 模型设置</button>
+    </h2>
+
+    <div id="noModel" class="alert alert-warn" style="display:none">
+      还没配置 AI 模型。点右上角「⚙ 模型设置」填入任意 OpenAI 兼容接口即可；
+      或者直接用 <a href="/form">表单录入</a>（不需要 AI）。
+    </div>
+
+    <textarea id="text" rows="3" style="width:100%;font-size:18px;padding:14px;border:1px solid var(--bd);border-radius:10px;font-family:inherit;resize:vertical"
+      placeholder="例如：从美宜佳买了3瓶可乐，单价3块5"></textarea>
+
+    <div class="field" style="margin-top:10px">
+      <label>附件（可选 · 原发票 / 单据扫描件 / 合同）</label>
+      <div id="attachZone" class="attach-zone"></div>
+    </div>
+
+    <div class="hint" style="margin-top:12px">示例（点一下填入输入框；库里没有的供应商 / 客户 / 商品，会自动新建档案后再写入单据）</div>
+    <div class="examples" id="examples"></div>
+
+    <div class="row-btns" style="margin-top:14px">
+      <button class="btn btn-primary btn-lg" id="parseBtn">解析并预览 →</button>
+      <span class="hint" id="modelTip"></span>
+    </div>
+  </div>
+
+  <div class="card" id="histCard" style="display:none">
+    <h2><span class="bar"></span>本次已录入</h2>
+    <div id="hist"></div>
+  </div>
+
+</div>
+
+<!-- 模型设置弹窗 -->
+<div class="mask" id="cfgMask" style="display:none">
+  <div class="modal">
+    <h2><span class="bar"></span>AI 模型设置</h2>
+    <div class="hint">支持任何 OpenAI 兼容接口（OpenAI / DeepSeek / 通义 / Moonshot / 本地 Ollama 等）。密钥只存在本机服务端。</div>
+
+    <div id="profList" style="margin:14px 0"></div>
+
+    <details class="fold" id="addFold">
+      <summary>＋ 添加 / 编辑模型</summary>
+      <div class="fold-body">
+        <div class="field"><label>显示名</label><input id="p_name" placeholder="例如 DeepSeek"></div>
+        <div class="field"><label>Base URL</label><input id="p_base" placeholder="https://api.deepseek.com/v1"></div>
+        <div class="field"><label>API Key</label><input id="p_key" type="password" placeholder="sk-…（编辑时留空表示不修改）"></div>
+        <div class="field"><label>模型名</label><input id="p_model" placeholder="deepseek-chat"></div>
+        <div class="field"><label>temperature</label><input id="p_temp" type="number" step="0.1" value="0"></div>
+        <div class="row-btns">
+          <button class="btn btn-ghost" id="p_test">测试连接</button>
+          <button class="btn btn-primary" id="p_save">保存</button>
+        </div>
+        <div id="p_msg" class="hint"></div>
+      </div>
+    </details>
+
+    <div class="row-btns" style="margin-top:16px">
+      <button class="btn btn-ghost" id="cfgClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+let attachMgr = null;
+
+$('#nav').innerHTML = topbar('/ai', 'AI 智能录入', '用大白话说业务，自动建单');
+
+if (typeof AttachmentManager === 'function') {
+  attachMgr = AttachmentManager($('#attachZone'), { biz: 'bill', max: 4 });
+}
+
+const EXAMPLES = [
+  ['采购入库', '向美宜佳采购可乐 30瓶，单价3块5，入原料仓'],
+  ['销售出库', '卖给永辉超市 纸箱 200个，单价5块，从成品仓出'],
+  ['采购入库', '从农夫山泉进矿泉水 100瓶，单价2元，入原料仓'],
+  ['销售出库', '卖给张记便利店 方便面 50箱，单价45元，从成品仓出'],
+  ['采购退货', '把美宜佳那批可乐退5瓶，单价3块5，从原料仓出'],
+  ['复用+新建', '向供应商1采购牛皮纸 10卷，单价80元，入仓库1'],
+];
+$('#examples').innerHTML = EXAMPLES.map(([tag, t]) =>
+  `<span class="tag tag-blue" style="cursor:pointer" data-t="${esc(t)}">${esc(tag)}｜${esc(t)}</span>`).join(' ');
+$('#examples').onclick = e => {
+  const el = e.target.closest('[data-t]');
+  if (el) { $('#text').value = el.dataset.t; $('#text').focus(); }
+};
+
+// ---------- 解析 ----------
+$('#parseBtn').onclick = doParse;
+$('#text').addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') doParse();
+});
+
+async function doParse() {
+  const text = $('#text').value.trim();
+  if (!text) { toast('请先说一句业务', 'warn'); $('#text').focus(); return; }
+  const btn = $('#parseBtn');
+  btn.disabled = true; btn.textContent = 'AI 解析中…';
+  try {
+    const r = await api('/api/parse', { method: 'POST', body: { text } });
+    if (!r.ok) {
+      toast(r.message || '解析失败', 'bad');
+      if (r.need_config) openCfg();
+      return;
+    }
+    const probs = (r.meta && r.meta.problems) || [];
+    if (probs.length) toast('注意：' + probs.join('；'), 'warn');
+    const att = (attachMgr && !attachMgr.isEmpty()) ? attachMgr.getPaths().map(p => ({ path: p, name: p.split('/').pop() })) : [];
+    showPreview(r.preview, r.draft, onCommitted, att);
+  } catch (e) {
+    toast(e.message, 'bad');
+  } finally {
+    btn.disabled = false; btn.textContent = '解析并预览 →';
+  }
+}
+
+const hist = [];
+function onCommitted(res) {
+  if (!res.ok) { toast(res.message || '写入失败', 'bad'); return; }
+  toast('✓ ' + (res.message || '写入成功'));
+  hist.unshift(res);
+  $('#histCard').style.display = '';
+  $('#hist').innerHTML = hist.map(r => `
+    <div class="history-item">
+      <b>${esc(r.biz_label || '')} ${esc(r.number || '')}</b>　合计 ￥${money(r.total)}
+      ${(r.created && r.created.length) ? `<div class="hint">自动新建：${r.created.map(esc).join('、')}</div>` : ''}
+    </div>`).join('');
+  $('#text').value = '';
+  $('#text').focus();
+}
+
+// ---------- 模型设置 ----------
+let CFG = null, editKey = null;
+
+function openCfg() { $('#cfgMask').style.display = 'flex'; renderProfs(); }
+$('#cfgBtn').onclick = openCfg;
+$('#cfgClose').onclick = () => { $('#cfgMask').style.display = 'none'; };
+$('#cfgMask').onclick = e => { if (e.target === $('#cfgMask')) $('#cfgMask').style.display = 'none'; };
+
+async function loadCfg() {
+  const r = await api('/api/config');
+  CFG = r.config || r;              // server 把配置包在 config 里
+  const llm = (CFG && CFG.llm) || {};
+  const act = llm.profiles && llm.profiles[llm.active];
+  $('#noModel').style.display = act ? 'none' : '';
+  $('#modelTip').textContent = act ? ('当前模型：' + (act.name || llm.active) + ' / ' + act.model) : '';
+  return CFG;
+}
+
+function renderProfs() {
+  const llm = (CFG && CFG.llm) || { profiles: {} };
+  const ps = llm.profiles || {};
+  const keys = Object.keys(ps);
+  $('#profList').innerHTML = keys.length ? keys.map(k => {
+    const p = ps[k], on = llm.active === k;
+    return `<div class="prof-item">
+      <div>
+        <b>${esc(p.name || k)}</b> ${on ? '<span class="tag tag-ok">使用中</span>' : ''}
+        <div class="hint">${esc(p.model || '')} · ${esc(p.base_url || '')} · Key ${esc(p.api_key || '未设置')}</div>
+      </div>
+      <div class="row-btns">
+        ${on ? '' : `<button class="btn btn-sm" data-use="${esc(k)}">启用</button>`}
+        <button class="btn btn-sm btn-ghost" data-edit="${esc(k)}">编辑</button>
+        <button class="btn btn-sm btn-danger" data-del="${esc(k)}">删除</button>
+      </div>
+    </div>`;
+  }).join('') : '<div class="muted">还没有模型，展开下面「添加」新建一个。</div>';
+}
+
+$('#profList').onclick = async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  try {
+    if (b.dataset.use) {
+      const r = await api('/api/config/llm', { method: 'POST', body: { action: 'activate', key: b.dataset.use } });
+      if (!r.ok) { toast(r.message || '切换失败', 'bad'); return; }
+      await loadCfg(); renderProfs(); toast('已切换');
+    } else if (b.dataset.del) {
+      if (!confirm('确定删除这个模型？')) return;
+      const r = await api('/api/config/llm?key=' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
+      if (!r.ok) { toast(r.message || '删除失败', 'bad'); return; }
+      await loadCfg(); renderProfs(); toast('已删除');
+    } else if (b.dataset.edit) {
+      const p = (CFG.llm.profiles || {})[b.dataset.edit] || {};
+      editKey = b.dataset.edit;
+      $('#p_name').value = p.name || ''; $('#p_base').value = p.base_url || '';
+      $('#p_model').value = p.model || ''; $('#p_temp').value = p.temperature || 0;
+      $('#p_key').value = '';
+      $('#addFold').open = true;
+      $('#p_msg').textContent = '正在编辑：' + (p.name || editKey) + '（Key 留空表示不修改）';
+    }
+  } catch (err) { toast(err.message, 'bad'); }
+};
+
+function formProf() {
+  return {
+    name: $('#p_name').value.trim(),
+    base_url: $('#p_base').value.trim(),
+    api_key: $('#p_key').value.trim(),
+    model: $('#p_model').value.trim(),
+    temperature: num($('#p_temp').value),
+  };
+}
+
+$('#p_test').onclick = async () => {
+  const p = formProf();
+  if (!p.base_url || !p.model) { toast('请填 Base URL 和模型名', 'warn'); return; }
+  $('#p_msg').textContent = '测试中…';
+  try {
+    const r = await api('/api/config/llm/test', { method: 'POST', body: Object.assign({ key: editKey }, p) });
+    $('#p_msg').innerHTML = r.ok
+      ? '<span style="color:#52c41a">✓ ' + esc(r.message || '连接成功') + '</span>'
+      : '<span style="color:#ff4d4f">✗ ' + esc(r.message || '连接失败') + '</span>';
+  } catch (e) { $('#p_msg').textContent = e.message; }
+};
+
+$('#p_save').onclick = async () => {
+  const p = formProf();
+  if (!p.base_url || !p.model) { toast('请填 Base URL 和模型名', 'warn'); return; }
+  const key = editKey || (p.name || p.model).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24) || 'model';
+  try {
+    await api('/api/config/llm', { method: 'POST', body: { key, profile: p } });
+    editKey = null;
+    ['p_name', 'p_base', 'p_key', 'p_model'].forEach(i => { $('#' + i).value = ''; });
+    $('#p_temp').value = 0;
+    $('#p_msg').textContent = '';
+    $('#addFold').open = false;
+    await loadCfg(); renderProfs();
+    toast('已保存');
+  } catch (e) { toast(e.message, 'bad'); }
+};
+
+// ---------- 初始化 ----------
+(async () => {
+  try { await loadCfg(); } catch (e) { toast(e.message, 'bad'); }
+  try { await loadMaster(); } catch (e) {}
+  $('#text').focus();
+})();
+</script>
+</body>
+</html>

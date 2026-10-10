@@ -1,0 +1,15 @@
+# ---- build stage ----
+FROM maven:3.9-eclipse-temurin-8 AS build
+WORKDIR /build
+COPY deploy/settings.xml /root/.m2/settings.xml
+COPY jshERP-boot /build/jshERP-boot
+RUN cd jshERP-boot && mvn -B -q package -DskipTests
+
+# ---- runtime stage ----
+FROM eclipse-temurin:8-jre
+WORKDIR /app
+RUN mkdir -p /tmp/tomcat /opt/jshERP/upload /opt/jshERP/export /opt/jshERP/plugins
+COPY --from=build /build/jshERP-boot/target/jshERP.jar /app/jshERP.jar
+COPY deploy/application.yml /app/application.yml
+EXPOSE 9999
+CMD ["java", "-jar", "/app/jshERP.jar", "--spring.config.location=file:/app/application.yml"]

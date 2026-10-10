@@ -1,0 +1,46 @@
+# ============================================================
+#  Talk2Stock · 提交忽略规则
+#  原则：密钥、运行期数据、构建产物、编辑器/系统垃圾 一律不进仓库
+# ============================================================
+
+# ---- 密钥 / 本地配置（最重要，绝不提交）----
+app/.env
+app/config.json.tmp
+*.local.env
+.env.local
+
+# ---- 运行期数据 ----
+app/data/
+logs/
+*.log
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- 上游前端依赖与构建产物 ----
+node_modules/
+jshERP-latest/jshERP-web/node_modules/
+jshERP-latest/jshERP-web/dist/
+jshERP-latest/jshERP-web/yarn.lock
+
+# ---- 上游后端构建产物 ----
+jshERP-latest/jshERP-boot/target/
+jshERP-boot/target/
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+.idea/
+*.iml
+.vscode/
+
+# ---- 非运行必需的本地资料（保留在本机，不入公开仓库）----
+archive/
+jshERP-deploy/
+.workbuddy-ai/
+.workbuddy/
