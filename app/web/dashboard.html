@@ -11,44 +11,67 @@
 
 <div class="wrap">
 
-  <div class="card">
-    <h2><span class="bar"></span><span id="mTitle">本月经营</span>
-      <span style="flex:1"></span>
-      <button class="btn btn-sm btn-ghost" id="refresh" style="margin-left:auto">↻ 刷新</button>
-    </h2>
-    <div class="kpi-grid" id="kpiMonth"><div class="muted">加载中…</div></div>
+  <div class="db-head">
+    <div>
+      <div class="db-title" id="mTitle">经营概况</div>
+      <div class="db-subtitle">老板视角 · 只读 · 数据更新于 <span id="updAt">—</span></div>
+    </div>
+    <button class="btn btn-sm" id="refresh">↻ 刷新</button>
   </div>
 
-  <div class="card">
-    <h2><span class="bar"></span>今日</h2>
-    <div class="kpi-grid" id="kpiToday"></div>
-  </div>
+  <div class="kpi-grid" id="kpiRow"><div class="muted">加载中…</div></div>
 
-  <div class="card">
-    <h2><span class="bar"></span>近 6 个月走势</h2>
-    <div id="trend"></div>
-  </div>
-
-  <div class="two-col">
+  <div class="db-grid">
     <div class="card">
-      <h2><span class="bar"></span>库存预警</h2>
-      <div id="stockSum" class="muted"></div>
-      <div class="tbl-wrap" style="margin-top:10px;max-height:340px;overflow-y:auto">
-        <table class="dtable" id="stockTbl">
-          <thead><tr><th>商品</th><th class="num">库存</th><th>单位</th></tr></thead>
-          <tbody></tbody>
-        </table>
+      <h2><span class="bar"></span>经营趋势
+        <span style="flex:1"></span>
+        <span class="db-toggle" id="trendToggle">
+          <button data-m="month" class="on">近 6 个月</button>
+          <button data-m="daily">本月每日</button>
+        </span>
+      </h2>
+      <div class="db-chart" id="trendChart">
+        <div class="db-legend" style="margin-bottom:8px">
+          <span><i style="background:var(--brand-1)"></i>采购</span>
+          <span><i style="background:var(--green)"></i>销售</span>
+        </div>
+        <div id="trendBox" class="muted center" style="padding:40px 0">加载中…</div>
       </div>
     </div>
 
     <div class="card">
+      <h2><span class="bar"></span>资金与待办</h2>
+      <div id="fundBox"><div class="muted">加载中…</div></div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <h2><span class="bar"></span>商品进销榜 <span class="muted" style="font-size:13px;font-weight:400">累计 · 官方进销存统计</span></h2>
+      <div id="goodsBox"><div class="muted">加载中…</div></div>
+    </div>
+
+    <div class="card">
+      <h2><span class="bar"></span>库存预警</h2>
+      <div id="stockSum" class="muted" style="margin-bottom:8px"></div>
+      <div id="stockBox"></div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <h2><span class="bar"></span>往来排行 <span class="muted" style="font-size:13px;font-weight:400">累计发生额 TOP5</span></h2>
+      <div id="partyBox"><div class="muted">加载中…</div></div>
+    </div>
+
+    <div class="card">
       <h2><span class="bar"></span>往来欠款</h2>
-      <div id="debtBox"></div>
+      <div id="debtBox"><div class="muted">加载中…</div></div>
     </div>
   </div>
 
   <div class="card">
-    <h2><span class="bar"></span>最近单据</h2>
+    <h2><span class="bar"></span>最近单据 <span class="muted" id="recentCnt" style="font-size:13px;font-weight:400"></span></h2>
     <div class="tbl-wrap">
       <table class="dtable" id="recentTbl">
         <thead><tr>
@@ -60,10 +83,7 @@
     </div>
   </div>
 
-  <div class="card">
-    <h2><span class="bar"></span>基础资料</h2>
-    <div id="masterBox" class="muted"></div>
-  </div>
+  <div class="db-foot" id="footBox"></div>
 
 </div>
 
@@ -71,36 +91,378 @@
 <script>
 $('#nav').innerHTML = topbar('/dashboard', '经营看板', '老板视角 · 只读 · 不改任何数据');
 
-function kpi(cls, label, val, sub) {
+let D = null;          // 最新一次 /api/dashboard 数据
+let trendMode = 'month';
+let renderTmr = null;
+
+/* ---------- 小工具 ---------- */
+const shortMoney = v => {
+  v = +v || 0;
+  const a = Math.abs(v);
+  if (a >= 1e8) return (v / 1e8).toFixed(a >= 1e9 ? 0 : 1) + '亿';
+  if (a >= 1e4) return (v / 1e4).toFixed(a >= 1e5 ? 0 : 1) + '万';
+  return a >= 1000 ? Math.round(v).toLocaleString('zh-CN') : (Math.round(v * 10) / 10).toString();
+};
+const niceCeil = v => {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
+  return v * 10;
+};
+const pct = (cur, prev) => (prev > 0 && cur >= 0) ? Math.round((cur - prev) / prev * 100) : null;
+
+function deltaChip(cur, prev, dir) {
+  // dir: 'up-good' 销售/毛利涨为好；'neutral' 采购涨跌中性
+  const p = pct(cur, prev);
+  if (p === null) return '<span class="db-delta flat">上月无数据</span>';
+  if (p === 0) return '<span class="db-delta flat">与上月持平</span>';
+  const up = p > 0;
+  const cls = up ? 'up' : 'down';
+  const arrow = up ? '↑' : '↓';
+  return `<span class="db-delta ${cls}">${arrow} ${Math.abs(p)}%</span> <span class="muted" style="font-size:12px">较上月</span>`;
+}
+
+/* ---------- 折线 + 面积图（月趋势） ---------- */
+function trendSVG(buy, sell) {
+  const box = $('#trendBox');
+  if (!buy || !buy.length) { box.innerHTML = '<div class="muted center" style="padding:40px 0">暂无趋势数据</div>'; return; }
+  const compact = $('#trendChart').clientWidth < 560;
+  const W = compact ? 420 : 760, H = compact ? 250 : 300;
+  const L = compact ? 44 : 58, R = 14, T = 18, B = compact ? 30 : 38;
+  const iw = W - L - R, ih = H - T - B;
+  const step = niceCeil(Math.max(1, ...buy.map(p => +p.y || 0), ...sell.map(p => +p.y || 0)) * 1.06 / 4);
+  const top = step * 4;
+  const X = i => L + (buy.length === 1 ? iw / 2 : i * iw / (buy.length - 1));
+  const Y = v => T + ih - (v / top) * ih;
+  const lp = pts => pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const ap = (pts, base) => lp(pts) + ` L ${pts[pts.length - 1][0].toFixed(1)} ${base} L ${pts[0][0].toFixed(1)} ${base} Z`;
+  const mk = arr => arr.map((p, i) => [X(i), Y(+p.y || 0)]);
+
+  const pb = mk(buy), ps = mk(sell);
+  const allZero = buy.every(p => !+p.y) && sell.every(p => !+p.y);
+  let grid = '', xl = '';
+  for (let g = 0; g <= 4; g++) {
+    const v = top * g / 4, y = Y(v);
+    grid += `<line x1="${L}" y1="${y}" x2="${W - R}" y2="${y}" stroke="#eef1f6" stroke-width="1"/>
+             <text x="${L - 7}" y="${y + 4}" text-anchor="end" font-size="${compact ? 10 : 11.5}" fill="#8c8c8c">${shortMoney(v)}</text>`;
+  }
+  const xstep = buy.length > 8 ? 2 : 1;
+  buy.forEach((p, i) => {
+    if (i % xstep) return;
+    xl += `<text x="${X(i)}" y="${H - 10}" text-anchor="middle" font-size="${compact ? 10 : 11.5}" fill="#8c8c8c">${esc(String(p.x).slice(5))}月</text>`;
+  });
+
+  box.innerHTML = `
+  <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+    <defs>
+      <linearGradient id="gb" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#1a6fe8" stop-opacity=".22"/><stop offset="1" stop-color="#1a6fe8" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="gs" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#52c41a" stop-opacity=".18"/><stop offset="1" stop-color="#52c41a" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    ${grid}${xl}
+    ${ap(pb, T + ih)}<path d="${lp(pb)}" fill="none" stroke="#1a6fe8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    ${ap(ps, T + ih)}<path d="${lp(ps)}" fill="none" stroke="#52c41a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    ${pb.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3.2" fill="#fff" stroke="#1a6fe8" stroke-width="2"/>`).join('')}
+    ${ps.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3.2" fill="#fff" stroke="#52c41a" stroke-width="2"/>`).join('')}
+    <g id="tHov" style="display:none">
+      <line id="tHovLine" y1="${T}" y2="${T + ih}" stroke="#b9c6e0" stroke-dasharray="3 3"/>
+      <circle id="tHovB" r="4.5" fill="#1a6fe8" stroke="#fff" stroke-width="2"/>
+      <circle id="tHovS" r="4.5" fill="#52c41a" stroke="#fff" stroke-width="2"/>
+    </g>
+    <rect x="${L}" y="${T}" width="${iw}" height="${ih}" fill="transparent" id="tHit"/>
+  </svg>
+  ${allZero ? '<div class="muted center" style="margin-top:6px">近 6 个月暂无发生额，录单后会自动出现在这里</div>' : ''}`;
+
+  // 悬停十字线 + 提示（先清掉上次渲染残留的提示层）
+  $$('.db-tip', $('#trendChart')).forEach(t => t.remove());
+  const svg = box.querySelector('svg'), hit = $('#tHit', svg), hov = $('#tHov', svg);
+  const tip = document.createElement('div');
+  tip.className = 'db-tip';
+  $('#trendChart').appendChild(tip);
+  const move = e => {
+    const r = svg.getBoundingClientRect(), sc = W / r.width;
+    const mx = (e.clientX - r.left) * sc;
+    let i = Math.round((mx - L) / (iw / Math.max(1, buy.length - 1)));
+    i = Math.max(0, Math.min(buy.length - 1, i));
+    const b = +buy[i].y || 0, s = +(sell[i] || {}).y || 0;
+    hov.style.display = '';
+    $('#tHovLine', svg).setAttribute('x1', X(i)); $('#tHovLine', svg).setAttribute('x2', X(i));
+    $('#tHovB', svg).setAttribute('cx', X(i)); $('#tHovB', svg).setAttribute('cy', Y(b));
+    $('#tHovS', svg).setAttribute('cx', X(i)); $('#tHovS', svg).setAttribute('cy', Y(s));
+    tip.style.opacity = 1;
+    tip.innerHTML = `<b>${esc(String(buy[i].x).slice(0, 7))}</b><br>采购 ￥${money(b)}<br>销售 ￥${money(s)}`;
+    const box2 = $('#trendChart').getBoundingClientRect();
+    tip.style.left = Math.max(4, Math.min(box2.width - tip.offsetWidth - 4, X(i) / sc - tip.offsetWidth / 2)) + 'px';
+    tip.style.top = '8px';
+  };
+  const leave = () => { hov.style.display = 'none'; tip.style.opacity = 0; };
+  hit.addEventListener('mousemove', move);
+  hit.addEventListener('mouseleave', leave);
+}
+
+/* ---------- 每日柱状图 ---------- */
+function dailySVG(daily, month) {
+  const box = $('#trendBox');
+  if (!daily || !daily.length) { box.innerHTML = '<div class="muted center" style="padding:40px 0">暂无每日数据</div>'; return; }
+  const compact = $('#trendChart').clientWidth < 560;
+  const W = compact ? 420 : 760, H = compact ? 250 : 300;
+  const L = compact ? 44 : 58, R = 14, T = 18, B = compact ? 30 : 38;
+  const iw = W - L - R, ih = H - T - B;
+  const step = niceCeil(Math.max(1, ...daily.map(p => Math.max(p.buy, p.sell))) * 1.06 / 4);
+  const top = step * 4;
+  const n = daily.length;
+  const gw = iw / n;
+  const bw = Math.max(3, Math.min(14, gw / 2 - 2));
+  const Y = v => T + ih - (v / top) * ih;
+  let grid = '', bars = '', xl = '';
+  for (let g = 0; g <= 4; g++) {
+    const v = top * g / 4, y = Y(v);
+    grid += `<line x1="${L}" y1="${y}" x2="${W - R}" y2="${y}" stroke="#eef1f6"/>
+             <text x="${L - 7}" y="${y + 4}" text-anchor="end" font-size="${compact ? 10 : 11.5}" fill="#8c8c8c">${shortMoney(v)}</text>`;
+  }
+  daily.forEach((p, i) => {
+    const cx = L + gw * i + gw / 2;
+    const bh = b => b > 0 ? (T + ih - Y(b)) : 0;
+    bars += `<g class="db-bar" data-i="${i}">
+      <rect x="${(cx - bw - 1).toFixed(1)}" y="${(T + ih - bh(p.buy)).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh(p.buy).toFixed(1)}" rx="2" fill="#1a6fe8"><title>${month}-${p.x} 采购 ￥${money(p.buy)}</title></rect>
+      <rect x="${(cx + 1).toFixed(1)}" y="${(T + ih - bh(p.sell)).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh(p.sell).toFixed(1)}" rx="2" fill="#52c41a"><title>${month}-${p.x} 销售 ￥${money(p.sell)}</title></rect>
+    </g>`;
+    if (n <= 16 || i % Math.ceil(n / 12) === 0 || i === n - 1)
+      xl += `<text x="${cx}" y="${H - 10}" text-anchor="middle" font-size="${compact ? 9.5 : 11}" fill="#8c8c8c">${p.x}</text>`;
+  });
+
+  box.innerHTML = `
+  <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
+    ${grid}${bars}${xl}
+  </svg>
+  <div class="muted center" style="margin-top:6px">含未审核草稿单；退货按负向冲减</div>`;
+}
+
+/* ---------- KPI ---------- */
+function renderKPI() {
+  const O = D.official || {};
+  const m = O.month || D.month_stat || D.all || {};
+  const t = O.today || D.today || {};
+  const tb = (O.trend || {}).buy || [], ts = (O.trend || {}).sell || [];
+  const prevKey = (() => {
+    const [y, mo] = D.month.split('-').map(Number);
+    return mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, '0')}`;
+  })();
+  const prevBuy = +(tb.find(p => p.x === prevKey) || {}).y || 0;
+  const prevSell = +(ts.find(p => p.x === prevKey) || {}).y || 0;
+  const prevProfit = prevSell - prevBuy;
+  const sm = O.stock_money || {};
+
+  $('#mTitle').textContent = D.month + ' 经营概况';
+  $('#kpiRow').innerHTML =
+    kpi('', '本月采购', '￥' + money(m.buy),
+        `${t.buy_n || 0} 张单 · 今日 ￥${money(t.buy)}`) +
+    kpi('g', '本月销售', '￥' + money(m.sell),
+        `${t.sell_n || 0} 张单 · 今日 ￥${money(t.sell)}`) +
+    kpi(m.profit >= 0 ? 'b' : 'r', '本月毛利（销售 − 采购）', '￥' + money(m.profit), '') +
+    kpi('o', '库存货值（成本价）', '￥' + money(sm.total_value),
+        `${sm.total_stock || 0} 件 · ${D.stock.kinds || 0} 种商品`);
+
+  // 环比 chip 塞进 KPI（销售/毛利着色，采购中性）
+  const cards = $('#kpiRow').children;
+  const sub = (el, html) => { const s = el.querySelector('.sub'); s.innerHTML = html; };
+  sub(cards[0], `${cards[0].querySelector('.sub').textContent}　${deltaChip(m.buy, prevBuy, 'neutral')}`);
+  sub(cards[1], `${cards[1].querySelector('.sub').textContent}　${deltaChip(m.sell, prevSell, 'up-good')}`);
+  sub(cards[2], deltaChip(m.profit, prevProfit, 'up-good'));
+  if ((D.stock.negative || 0) > 0)
+    sub(cards[3], `${cards[3].querySelector('.sub').textContent} · <span style="color:#cf1322;font-weight:600">负库存 ${D.stock.negative} 种</span>`);
+}
+
+function kpi(cls, label, val, subTxt) {
   return `<div class="kpi ${cls}">
     <div class="lbl">${esc(label)}</div>
     <div class="val">${val}</div>
-    <div class="sub">${esc(sub || '')}</div>
+    <div class="sub">${esc(subTxt || '')}</div>
   </div>`;
 }
 
-function renderTrend(tr) {
-  const box = $('#trend');
-  if (!tr || !tr.buy || !tr.buy.length) { box.innerHTML = '<div class="muted">暂无趋势数据</div>'; return; }
-  const buy = tr.buy, sell = tr.sell || [];
-  const max = Math.max(1, ...buy.map(p => +p.y || 0), ...sell.map(p => +p.y || 0));
+/* ---------- 资金与待办 ---------- */
+function renderFund() {
+  const O = D.official || {};
+  const accs = D.accounts || [];
+  const total = accs.reduce((a, x) => a + x.amount, 0);
+  const max = Math.max(1, ...accs.map(x => x.amount));
+  const box = $('#fundBox');
+  const chips = [
+    ['待审核单据', O.wait_bills != null ? O.wait_bills : '—', 'blue'],
+    ['待收款单据', O.need_recv != null ? O.need_recv : '—', 'orange'],
+    ['待付款单据', O.need_pay != null ? O.need_pay : '—', 'red'],
+  ];
   box.innerHTML = `
-    <div style="display:flex;gap:18px;font-size:14px;margin-bottom:12px">
-      <span><i style="display:inline-block;width:12px;height:12px;background:#1890ff;border-radius:2px"></i> 采购</span>
-      <span><i style="display:inline-block;width:12px;height:12px;background:#52c41a;border-radius:2px"></i> 销售</span>
-    </div>
-    <div style="display:flex;align-items:flex-end;gap:14px;height:180px;padding:0 4px">
-      ${buy.map((p, i) => {
-        const b = +p.y || 0, s = +((sell[i] || {}).y) || 0;
-        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;height:100%">
-          <div style="flex:1;display:flex;align-items:flex-end;gap:4px;width:100%;justify-content:center">
-            <div title="采购 ￥${money(b)}" style="width:38%;background:#1890ff;border-radius:4px 4px 0 0;height:${(b / max * 100).toFixed(1)}%;min-height:${b ? 3 : 0}px"></div>
-            <div title="销售 ￥${money(s)}" style="width:38%;background:#52c41a;border-radius:4px 4px 0 0;height:${(s / max * 100).toFixed(1)}%;min-height:${s ? 3 : 0}px"></div>
-          </div>
-          <div style="font-size:12px;color:#8c8c8c;margin-top:6px;white-space:nowrap">${esc(p.x)}</div>
-        </div>`;
-      }).join('')}
+    <div class="db-big">￥<b>${money(total)}</b><span class="db-big-lbl">账户总余额${O.account && O.account.month ? ` · 本月发生 ￥${money(O.account.month)}` : ''}</span></div>
+    ${accs.length ? accs.map(x => `
+      <div class="hbar-row">
+        <span class="nm" title="${esc(x.name)}">${esc(x.name)}</span>
+        <span class="track"><span class="fill" style="width:${(x.amount / max * 100).toFixed(1)}%"></span></span>
+        <span class="amt">￥${money(x.amount)}</span>
+      </div>`).join('')
+      : '<div class="muted" style="padding:8px 0">还没有资金账户</div>'}
+    <div class="db-chips">
+      ${chips.map(([l, v, c]) => `<div class="db-chip db-c-${c}"><b>${v}</b><span>${l}</span></div>`).join('')}
     </div>`;
+}
+
+/* ---------- 商品进销榜 ---------- */
+function renderGoods() {
+  const g = D.goods || {};
+  const rows = g.rows || [];
+  const box = $('#goodsBox');
+  if (!rows.length) { box.innerHTML = '<div class="muted center" style="padding:26px 0">还没有商品出入库记录</div>'; return; }
+  const maxV = Math.max(1, ...rows.map(r => r.value));
+  box.innerHTML = `
+    <div class="db-chips" style="margin-bottom:10px">
+      <div class="db-chip db-c-blue"><b>${g.total_in || 0}</b><span>累计进货量</span></div>
+      <div class="db-chip db-c-green"><b>${g.total_out || 0}</b><span>累计出货量</span></div>
+      <div class="db-chip db-c-orange"><b>￥${money(g.total_value)}</b><span>库存货值</span></div>
+    </div>
+    <div class="tbl-wrap"><table class="dtable" style="min-width:520px">
+      <thead><tr><th>商品</th><th class="num">累计进货</th><th class="num">累计出货</th><th class="num">现存</th><th style="width:34%">库存货值</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td title="${esc(r.name)}">${esc(r.name)}${r.unit ? `<span class="muted" style="font-size:12px"> / ${esc(r.unit)}</span>` : ''}</td>
+          <td class="num">${r.in_qty || '—'}</td>
+          <td class="num">${r.out_qty || '—'}</td>
+          <td class="num" style="color:${r.stock <= 0 ? '#fa8c16' : 'inherit'};font-weight:600">${r.stock}</td>
+          <td><div class="hbar-row" style="padding:0">
+            <span class="track" style="height:10px"><span class="fill" style="width:${(r.value / maxV * 100).toFixed(1)}%;background:linear-gradient(90deg,#ffd591,#fa8c16)"></span></span>
+            <span class="amt" style="width:auto">${r.value > 0 ? '￥' + money(r.value) : '—'}</span>
+          </div></td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+}
+
+/* ---------- 库存预警 ---------- */
+function renderStock() {
+  const s = D.stock || {};
+  const list = s.warn_list || [];
+  $('#stockSum').innerHTML =
+    `共 <b>${s.kinds || 0}</b> 种商品　` +
+    `<span class="tag tag-new">低库存 ${s.low || 0}</span>` +
+    ((s.negative || 0) > 0 ? `　<span class="tag" style="background:var(--red-bg);color:#cf1322">负库存 ${s.negative}</span>` : '');
+  const box = $('#stockBox');
+  if (!list.length) { box.innerHTML = '<div class="muted center" style="padding:26px 0">库存都很充足 👍</div>'; return; }
+  box.innerHTML = list.slice(0, 9).map(r => {
+    const ratio = Math.max(0, Math.min(100, r.stock / Math.max(r.threshold, 1) * 100));
+    const color = r.stock < 0 ? '#ff4d4f' : (r.stock === 0 ? '#fa8c16' : '#ffc53d');
+    return `
+    <div class="hbar-row">
+      <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
+      <span class="track" style="height:12px"><span class="fill" style="width:${ratio.toFixed(1)}%;background:${color}"></span></span>
+      <span class="amt" style="color:${r.stock < 0 ? '#ff4d4f' : 'inherit'};font-weight:600">${r.stock}<span class="muted" style="font-weight:400;font-size:12px"> ${esc(r.unit || '')}</span></span>
+    </div>`;
+  }).join('') +
+  (list.length > 9 ? `<div class="muted center" style="font-size:13px;padding-top:6px">还有 ${list.length - 9} 种未列出…</div>` : '');
+}
+
+/* ---------- 往来排行 ---------- */
+function renderParties() {
+  const p = D.parties || {};
+  const box = $('#partyBox');
+  const sec = (title, list, cls) => `
+    <div style="margin-bottom:14px">
+      <div style="font-size:14px;color:var(--text-2);margin-bottom:4px"><b>${title}</b></div>
+      ${list.length ? list.map(x => `
+        <div class="hbar-row">
+          <span class="nm" title="${esc(x.name)}">${esc(x.name)}</span>
+          <span class="track"><span class="fill" style="width:${(x.amount / Math.max(1, ...list.map(y => y.amount)) * 100).toFixed(1)}%;background:${cls}"></span></span>
+          <span class="amt">￥${money(x.amount)}</span>
+        </div>`).join('')
+        : '<div class="muted" style="font-size:13.5px;padding:2px 0 4px">暂无记录</div>'}
+    </div>`;
+  box.innerHTML = sec('供应商 · 累计采购', p.suppliers || [], 'linear-gradient(90deg,#69b4ff,#1a6fe8)') +
+                  sec('客户 · 累计销售', p.customers || [], 'linear-gradient(90deg,#8fdd70,#52c41a)');
+}
+
+/* ---------- 往来欠款 + 账龄 ---------- */
+function renderDebt() {
+  const box = $('#debtBox');
+  const AGING_COLORS = [' #ffd666', '#ff9c6e', '#ff4d4f'];
+  const AGING_COLORS2 = ['#91caff', '#69b1ff', '#1677ff'];
+  const sec = (title, list, total, topList, colors, emptyTip) => {
+    const maxA = Math.max(1, ...list.map(x => x.amount));
+    const sum = list.reduce((a, x) => a + x.amount, 0) || 1;
+    let stacked = '', offset = 0;
+    if (sum > 1) {
+      const segs = list.map((x, i) => {
+        const w = x.amount / sum * 100;
+        const s = `<span style="display:inline-block;width:${w.toFixed(2)}%;height:100%;background:${colors[i % colors.length]}${offset === 0 ? ';border-radius:6px 0 0 6px' : ''}" title="${esc(x.name)} ￥${money(x.amount)}"></span>`;
+        offset += w;
+        return s;
+      }).join('');
+      stacked = `<div style="display:flex;height:10px;border-radius:6px;overflow:hidden;background:#f0f2f5;margin:6px 0 8px">${segs}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--text-2);margin-bottom:8px">
+          ${list.map((x, i) => `<span><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${colors[i % colors.length]};margin-right:4px"></i>${esc(x.name)} ￥${money(x.amount)}</span>`).join('')}
+        </div>`;
+    }
+    return `
+    <div style="margin-bottom:16px">
+      <div style="display:flex;align-items:baseline;gap:8px">
+        <b>${title}</b>
+        <span class="amount" style="font-size:19px">${total > 0 ? '￥' + money(total) : '—'}</span>
+      </div>
+      ${stacked}
+      ${topList.length ? `<table class="dtable" style="font-size:14px">
+        ${topList.map(x => `<tr><td>${esc(x.name)}</td><td class="num" style="font-weight:600">￥${money(x.amount)}</td></tr>`).join('')}
+      </table>` : `<div class="muted" style="font-size:13.5px">${emptyTip}</div>`}
+    </div>`;
+  };
+  box.innerHTML =
+    sec('客户欠我（应收）', D.aging.recv || [], D.debt_recv_total, D.debt_recv || [], AGING_COLORS, '没有未结清的应收款 🎉') +
+    sec('我欠供应商（应付）', D.aging.pay || [], D.debt_pay_total, D.debt_pay || [], AGING_COLORS2, '没有未结清的应付款 🎉');
+}
+
+/* ---------- 最近单据 ---------- */
+const SUB_CLS = {
+  '采购': 't-blue', '其它': 't-gray', '盘点录入': 't-gray', '组装单': 't-gray', '拆卸单': 't-gray',
+  '销售': 't-green', '零售': 't-green', '调拨': 't-gray',
+  '采购退货': 't-red', '销售退货': 't-red', '零售退货': 't-red',
+};
+function renderRecent() {
+  const rows = D.recent || [];
+  $('#recentCnt').textContent = rows.length ? `（最近 ${rows.length} 张 / 共 ${D.bill_count || rows.length} 张）` : '';
+  $('#recentTbl tbody').innerHTML = rows.length
+    ? rows.map(r => {
+        const sub = (r.type || '').split('·')[1] || r.type;
+        const isIn = (r.type || '').indexOf('入库') === 0;
+        const cls = SUB_CLS[sub] || (isIn ? 't-blue' : 't-green');
+        return `<tr>
+          <td class="muted" style="white-space:nowrap">${esc(r.time)}</td>
+          <td><span class="typ-pill ${cls}">${esc(r.type)}</span></td>
+          <td style="font-family:ui-monospace,Menlo,monospace;font-size:13.5px">${esc(r.number)}</td>
+          <td>${esc(r.party)}</td>
+          <td class="muted">${esc(r.goods)}</td>
+          <td class="num"><b>￥${money(r.total)}</b>${r.debt > 0 ? `<br><span class="hint" style="color:#fa8c16">未结 ￥${money(r.debt)}</span>` : ''}</td>
+          <td>${r.status === '已审核' ? '<span class="typ-pill t-green">已审核</span>' : '<span class="typ-pill t-orange">草稿</span>'}</td>
+        </tr>`;
+      }).join('')
+    : '<tr><td colspan="7" class="muted center">还没有单据，去「对话录单」说一句话就能开单</td></tr>';
+}
+
+/* ---------- 页脚 ---------- */
+function renderFoot() {
+  const ms = D.master || {};
+  $('#footBox').innerHTML =
+    `主数据：供应商 <b>${ms.suppliers || 0}</b> · 客户 <b>${ms.customers || 0}</b> · 商品 <b>${ms.materials || 0}</b> · 仓库 <b>${ms.depots || 0}</b>` +
+    `　|　本页只读，不改动任何 ERP 数据`;
+}
+
+/* ---------- 总渲染 ---------- */
+function renderCharts() {
+  const O = D.official || {};
+  if (trendMode === 'month') trendSVG(O.trend && O.trend.buy || [], O.trend && O.trend.sell || []);
+  else dailySVG(D.daily || [], D.month);
+}
+function renderAll() {
+  renderKPI(); renderFund(); renderGoods(); renderStock(); renderParties(); renderDebt(); renderRecent(); renderFoot(); renderCharts();
 }
 
 async function load() {
@@ -109,78 +471,9 @@ async function load() {
   try {
     const d = await api('/api/dashboard');
     if (!d.ok) { toast(d.message || '加载失败', 'bad'); return; }
-    const O = d.official || {};
-
-    $('#mTitle').textContent = d.month + ' 经营概况';
-
-    // 优先用官方「本月」；跨月或为空时回退到 summary 的「本月(月)」→「全年(all)」
-    const m = O['月'] || d['月'] || d.all;
-    const scopeLabel = O['月'] ? '本月' : (d['月'] && d['月'].buy ? '本月' : '近半月累计');
-    $('#mTitle').textContent = (d['月'] && d['月'].buy ? d.month + ' 经营概况' : '经营概况（累计）');
-    $('#kpiMonth').innerHTML =
-      kpi('', '采购金额', '￥' + money(m.buy), scopeLabel + '进货') +
-      kpi('g', '销售金额', '￥' + money(m.sell), scopeLabel + '出货') +
-      kpi(m.profit >= 0 ? 'g' : 'r', '毛利（销售 − 采购）', '￥' + money(m.profit),
-          m.profit >= 0 ? '净流入为正' : '进货多于出货（备货中）') +
-      kpi('o', '库存货值', '￥' + money((O.stock_money || {}).total_value),
-          '共 ' + ((O.stock_money || {}).total_stock || 0) + ' 件');
-
-    const t = O.today || d.today;
-    $('#kpiToday').innerHTML =
-      kpi('', '今日采购', '￥' + money(t.buy), (t.buy_n || 0) + ' 条') +
-      kpi('g', '今日销售', '￥' + money(t.sell), (t.sell_n || 0) + ' 条') +
-      kpi('o', '账户总余额', '￥' + money((O.account || {}).current), '本月发生 ￥' + money((O.account || {}).month)) +
-      kpi('r', '待处理单据', (O.wait_bills != null ? O.wait_bills : '—'),
-          '待收款 ' + (O.need_recv || 0) + ' · 待付款 ' + (O.need_pay || 0));
-
-    // 月趋势
-    renderTrend(O.trend);
-
-    // 库存
-    const s = d.stock || {};
-    $('#stockSum').innerHTML =
-      `共 <b>${s.kinds || 0}</b> 种商品　` +
-      `<span class="tag" style="background:var(--red-bg);color:#cf1322">负库存 ${s.negative || 0}</span>　` +
-      `<span class="tag tag-new">低于 ${s.threshold || 10} 的 ${s.low || 0}</span>`;
-    const sb = $('#stockTbl tbody');
-    sb.innerHTML = (s.warn_list || []).length
-      ? s.warn_list.map(r => `<tr>
-          <td>${esc(r.name)}</td>
-          <td class="num" style="color:${r.stock < 0 ? '#ff4d4f' : (r.stock === 0 ? '#fa8c16' : 'inherit')};font-weight:600">${r.stock}</td>
-          <td>${esc(r.unit)}</td></tr>`).join('')
-      : '<tr><td colspan="3" class="muted center">库存都很充足</td></tr>';
-
-    // 欠款
-    const box = $('#debtBox');
-    const sec = (title, list, total, cls) => `
-      <div style="margin-bottom:14px">
-        <b>${title}</b>　<span class="amount" style="color:${cls}">￥${money(total)}</span>
-        ${list.length ? `<table class="dtable" style="margin-top:6px">
-          ${list.map(x => `<tr><td>${esc(x.name)}</td><td class="num">￥${money(x.amount)}</td></tr>`).join('')}
-        </table>` : '<div class="muted" style="margin-top:4px">没有未结清的款项</div>'}
-      </div>`;
-    box.innerHTML =
-      sec('客户欠我（应收）', d.debt_recv || [], d.debt_recv_total, '#fa8c16') +
-      sec('我欠供应商（应付）', d.debt_pay || [], d.debt_pay_total, '#ff4d4f');
-
-    // 最近单据
-    $('#recentTbl tbody').innerHTML = (d.recent || []).length
-      ? d.recent.map(r => `<tr>
-          <td>${esc(r.time)}</td>
-          <td><span class="tag ${r.type.indexOf('入库') === 0 ? 'tag-blue' : 'tag-ok'}">${esc(r.type)}</span></td>
-          <td>${esc(r.number)}</td>
-          <td>${esc(r.party)}</td>
-          <td class="muted">${esc(r.goods)}</td>
-          <td class="num"><b>￥${money(r.total)}</b>${r.debt > 0 ? `<br><span class="hint" style="color:#fa8c16">欠 ${money(r.debt)}</span>` : ''}</td>
-          <td>${r.status === '已审核' ? '<span class="tag tag-ok">已审核</span>' : '<span class="tag">草稿</span>'}</td>
-        </tr>`).join('')
-      : '<tr><td colspan="7" class="muted center">还没有单据</td></tr>';
-
-    const ms = d.master || {};
-    $('#masterBox').innerHTML =
-      `供应商 <b>${ms.suppliers || 0}</b>　客户 <b>${ms.customers || 0}</b>　` +
-      `商品 <b>${ms.materials || 0}</b>　仓库 <b>${ms.depots || 0}</b>`;
-
+    D = d;
+    $('#updAt').textContent = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    renderAll();
   } catch (e) {
     toast(e.message, 'bad');
   } finally {
@@ -189,6 +482,17 @@ async function load() {
 }
 
 $('#refresh').onclick = load;
+$('#trendToggle').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  trendMode = b.dataset.m;
+  $$('#trendToggle button').forEach(x => x.classList.toggle('on', x === b));
+  if (D) renderCharts();
+});
+window.addEventListener('resize', () => {
+  if (!D) return;
+  clearTimeout(renderTmr);
+  renderTmr = setTimeout(renderCharts, 220);
+});
 load();
 </script>
 </body>

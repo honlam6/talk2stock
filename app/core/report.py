@@ -5,6 +5,7 @@
 changeAmount/debt/status/materialsList/materialCount/accountName
 """
 import time
+import urllib.parse
 from collections import defaultdict
 
 from .erp import get_client
@@ -31,10 +32,10 @@ def _day(bill):
     return s[:10]
 
 
-def summary(erp=None):
-    """核心经营指标。"""
+def summary(erp=None, bills=None):
+    """核心经营指标。bills 可传入已取好的单据列表（避免重复查询）。"""
     erp = erp or get_client()
-    bills = erp.all_bills()
+    bills = bills if bills is not None else erp.all_bills()
 
     today = time.strftime("%Y-%m-%d")
     month = time.strftime("%Y-%m")
@@ -122,34 +123,47 @@ def recent_bills(erp=None, limit=12):
     return out
 
 
-def stock_overview(erp=None, low_threshold=10, limit=40):
-    """库存总览 + 低库存预警。material/list 行自带 stock 字段。"""
+def stock_overview(erp=None, low_threshold=10, limit=40, goods=None):
+    """库存总览 + 低库存预警。material/list 行自带 stock 字段。
+
+    goods 为 in_out_stats 的结果（可选）：传入时给预警行补库存货值；
+    每商品预警阈值优先取商品自己的 lowDecimal（未设则用 low_threshold）。
+    """
     erp = erp or get_client()
     mats = erp.materials()
+    vals = {}
+    for g in (goods or {}).get("all_rows", []):
+        vals[g["name"]] = g["value"]
     rows, total_kinds, neg, low = [], 0, 0, 0
     for m in mats:
         st = m.get("stock")
         if st is None:
             continue
         st = _f(st)
+        try:
+            thr = _f(m.get("lowDecimal")) or low_threshold
+        except Exception:
+            thr = low_threshold
         total_kinds += 1
         if st < 0:
             neg += 1
-        elif st <= low_threshold:
+        elif st <= thr:
             low += 1
         rows.append({
             "name": m.get("name"),
             "unit": m.get("unit") or "",
             "stock": st,
             "category": m.get("categoryName") or "",
+            "threshold": thr,
+            "value": round(vals.get(m.get("name")) or 0, 2),
         })
-    rows.sort(key=lambda r: r["stock"])
+    rows.sort(key=lambda r: (r["stock"] - r["threshold"]) / max(r["threshold"], 1))
     return {
         "kinds": total_kinds,
         "negative": neg,
         "low": low,
         "threshold": low_threshold,
-        "warn_list": [r for r in rows if r["stock"] <= low_threshold][:limit],
+        "warn_list": [r for r in rows if r["stock"] <= r["threshold"]][:limit],
     }
 
 
@@ -221,11 +235,170 @@ def official_stats(erp=None):
     return out
 
 
+def in_out_stats(erp=None, mats=None, top=10):
+    """官方「进销存统计」接口（按商品，截至今天）：累计入库/出库/现存/库存货值。
+
+    实测 /depotItem/getInOutStock 返回行含 materialName/unitName/inSum/outSum/
+    thisSum/unitPrice（移动加权成本价）/thisAllPrice（现存货值）。
+    """
+    erp = erp or get_client()
+    cats = {}
+    for m in (mats if mats is not None else erp.materials()):
+        cats[m.get("name")] = m.get("categoryName") or ""
+
+    def q(params):
+        s = "&".join("%s=%s" % (k, urllib.parse.quote(str(v)))
+                     for k, v in params.items())
+        try:
+            r = erp._req("/depotItem/getInOutStock?" + s)
+            return r.get("data") if r.get("code") == 200 else None
+        except Exception:
+            return None
+
+    d = q({"currentPage": 1, "pageSize": 500, "beginTime": "2000-01-01",
+           "endTime": time.strftime("%Y-%m-%d"), "materialParam": ""}) or {}
+    rows = []
+    for r in (d.get("rows") or []):
+        name = r.get("materialName")
+        rows.append({
+            "name": name,
+            "category": cats.get(name) or "",
+            "unit": r.get("unitName") or "",
+            "in_qty": _f(r.get("inSum")),
+            "out_qty": _f(r.get("outSum")),
+            "stock": _f(r.get("thisSum")),
+            "price": _f(r.get("unitPrice")),
+            "value": _f(r.get("thisAllPrice")),
+        })
+    rows.sort(key=lambda r: (-r["value"], -(r["in_qty"] + r["out_qty"])))
+    return {
+        "all_rows": rows,
+        "rows": rows[:top],
+        "total_value": round(sum(r["value"] for r in rows), 2),
+        "total_in": round(sum(r["in_qty"] for r in rows), 2),
+        "total_out": round(sum(r["out_qty"] for r in rows), 2),
+    }
+
+
+def daily_trend(bills, month=None):
+    """本月每日采购/销售节奏（退货按负向冲减），用于日粒度柱状图。"""
+    import calendar
+    month = month or time.strftime("%Y-%m")
+    days = {}
+
+    def add(day, key, amt):
+        days.setdefault(day, {"buy": 0.0, "sell": 0.0})
+        days[day][key] += amt
+
+    for b in bills:
+        d = _day(b)
+        if not d.startswith(month):
+            continue
+        st = b.get("subType") or ""
+        amt = _f(b.get("totalPrice"))
+        if st in BUY_SUBS:
+            add(d, "buy", amt)
+        elif st in BUY_BACK_SUBS:
+            add(d, "buy", -amt)
+        elif st in SELL_SUBS:
+            add(d, "sell", amt)
+        elif st in SELL_BACK_SUBS:
+            add(d, "sell", -amt)
+
+    y, n = int(month[:4]), int(month[5:7])
+    last_day = calendar.monthrange(y, n)[1]
+    today_n = int(time.strftime("%d")) if month == time.strftime("%Y-%m") else last_day
+    out = []
+    for i in range(1, today_n + 1):
+        v = days.get("%s-%02d" % (month, i), {})
+        out.append({"x": str(i), "buy": round(v.get("buy", 0), 2),
+                    "sell": round(v.get("sell", 0), 2)})
+    return out
+
+
+def top_parties(bills, top=5):
+    """往来单位排行（累计采购额/销售额），供横向条形图。"""
+    sup, cus = defaultdict(float), defaultdict(float)
+    for b in bills:
+        st = b.get("subType") or ""
+        amt = _f(b.get("totalPrice"))
+        name = b.get("organName") or ""
+        if not name:
+            continue
+        if st in BUY_SUBS:
+            sup[name] += amt
+        elif st in BUY_BACK_SUBS:
+            sup[name] -= amt
+        elif st in SELL_SUBS:
+            cus[name] += amt
+        elif st in SELL_BACK_SUBS:
+            cus[name] -= amt
+
+    def topn(d):
+        return [{"name": k, "amount": round(v, 2)}
+                for k, v in sorted(d.items(), key=lambda x: -x[1])[:top] if v > 0]
+
+    return {"suppliers": topn(sup), "customers": topn(cus)}
+
+
+def debt_aging(bills):
+    """欠款账龄：把未结清单据按账龄分桶（≤30 天 / 31~60 天 / 60 天以上）。"""
+    recv = defaultdict(float)
+    pay = defaultdict(float)
+    now = time.time()
+    for b in bills:
+        dv = _f(b.get("debt"))
+        if dv <= 0:
+            continue
+        st = b.get("subType") or ""
+        try:
+            t = time.mktime(time.strptime(_day(b), "%Y-%m-%d"))
+            age_days = max(0, int((now - t) / 86400))
+        except Exception:
+            age_days = -1
+        bucket = "≤30天" if 0 <= age_days <= 30 else ("31~60天" if age_days <= 60 else "60天以上")
+        if st in SELL_SUBS:
+            recv[bucket] += dv
+        elif st in BUY_SUBS:
+            pay[bucket] += dv
+    order = ["≤30天", "31~60天", "60天以上"]
+
+    def tolist(d):
+        return [{"name": k, "amount": round(d.get(k, 0), 2)}
+                for k in order if d.get(k, 0) > 0]
+
+    return {"recv": tolist(recv), "pay": tolist(pay)}
+
+
+def account_breakdown(erp=None):
+    """资金账户明细（每个账户的当前余额）。"""
+    erp = erp or get_client()
+    try:
+        rows = erp.accounts()
+    except Exception:
+        return []
+    out = []
+    for a in rows:
+        try:
+            if str(a.get("enabled", 1)) in ("0", "False", "false"):
+                continue
+        except Exception:
+            pass
+        out.append({"name": a.get("name") or "（未命名账户）",
+                    "amount": round(_f(a.get("currentAmount")), 2)})
+    out.sort(key=lambda x: -x["amount"])
+    return out
+
+
 def dashboard(erp=None):
     """看板一次性数据。"""
     erp = erp or get_client()
     try:
-        s = summary(erp)
+        bills = [b for b in erp.all_bills() if str(b.get("deleteFlag")) != "1"]
+    except Exception as e:
+        return {"ok": False, "message": "统计失败：%s" % e}
+    try:
+        s = summary(erp, bills=bills)
     except Exception as e:
         return {"ok": False, "message": "统计失败：%s" % e}
     try:
@@ -237,9 +410,29 @@ def dashboard(erp=None):
     except Exception:
         s["recent"] = []
     try:
-        s["stock"] = stock_overview(erp)
+        s["goods"] = in_out_stats(erp)
+    except Exception:
+        s["goods"] = {"rows": [], "all_rows": []}
+    try:
+        s["stock"] = stock_overview(erp, goods=s["goods"])
     except Exception:
         s["stock"] = {"kinds": 0, "negative": 0, "low": 0, "warn_list": []}
+    try:
+        s["daily"] = daily_trend(bills)
+    except Exception:
+        s["daily"] = []
+    try:
+        s["parties"] = top_parties(bills)
+    except Exception:
+        s["parties"] = {"suppliers": [], "customers": []}
+    try:
+        s["aging"] = debt_aging(bills)
+    except Exception:
+        s["aging"] = {"recv": [], "pay": []}
+    try:
+        s["accounts"] = account_breakdown(erp)
+    except Exception:
+        s["accounts"] = []
     try:
         s["master"] = {
             "suppliers": len(erp.suppliers("供应商")),
