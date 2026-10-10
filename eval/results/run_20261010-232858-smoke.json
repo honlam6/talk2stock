@@ -1,0 +1,383 @@
+{
+ "summary": {
+  "corpus_version": "v1-20261010",
+  "model": "global:deepseek-v4.1-flash",
+  "prompt": "v1-20261010/258de44c",
+  "n": 8,
+  "whole_bill_acc": 1.0,
+  "field_acc": {
+   "biz": [
+    8,
+    8
+   ],
+   "party": [
+    8,
+    8
+   ],
+   "item_name": [
+    8,
+    8
+   ],
+   "item_qty": [
+    8,
+    8
+   ],
+   "item_unit": [
+    8,
+    8
+   ],
+   "item_price": [
+    8,
+    8
+   ],
+   "depot": [
+    8,
+    8
+   ],
+   "date": [
+    8,
+    8
+   ],
+   "pay_amount": [
+    8,
+    8
+   ]
+  },
+  "hallucination_total": 0,
+  "hallucination_cases": 0,
+  "errors": [],
+  "latency_avg_s": 2.86,
+  "latency_p95_s": 4.6,
+  "conf_low_on_adversarial": "0/0"
+ },
+ "results": [
+  {
+   "id": "n01",
+   "type": "normal",
+   "latency_s": 2.64,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "可乐",
+      "qty": 30,
+      "unit": "瓶",
+      "price": 3.5
+     },
+     "draft": {
+      "name": "可乐",
+      "qty": 30.0,
+      "unit": "瓶",
+      "price": 3.5
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true
+  },
+  {
+   "id": "n02",
+   "type": "normal",
+   "latency_s": 1.75,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "纸箱",
+      "qty": 200,
+      "unit": "个",
+      "price": 5
+     },
+     "draft": {
+      "name": "纸箱",
+      "qty": 200.0,
+      "unit": "个",
+      "price": 5.0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true
+  },
+  {
+   "id": "n03",
+   "type": "normal",
+   "latency_s": 3.05,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "矿泉水",
+      "qty": 100,
+      "unit": "瓶",
+      "price": 2
+     },
+     "draft": {
+      "name": "矿泉水",
+      "qty": 100.0,
+      "unit": "瓶",
+      "price": 2.0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true
+  },
+  {
+   "id": "n04",
+   "type": "normal",
+   "latency_s": 1.81,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "衣服",
+      "qty": 50,
+      "unit": "件",
+      "price": 120
+     },
+     "draft": {
+      "name": "衣服",
+      "qty": 50.0,
+      "unit": "件",
+      "price": 120.0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true
+  },
+  {
+   "id": "n05",
+   "type": "normal",
+   "latency_s": 2.67,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "可乐",
+      "qty": 5,
+      "unit": "瓶",
+      "price": 3.5
+     },
+     "draft": {
+      "name": "可乐",
+      "qty": 5.0,
+      "unit": "瓶",
+      "price": 3.5
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true
+  },
+  {
+   "id": "n06",
+   "type": "normal",
+   "latency_s": 2.03,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "衣服",
+      "qty": 2,
+      "unit": "件",
+      "price": 130
+     },
+     "draft": {
+      "name": "衣服",
+      "qty": 2.0,
+      "unit": "件",
+      "price": 130.0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true
+  },
+  {
+   "id": "n07",
+   "type": "normal",
+   "latency_s": 4.34,
+   "confidence": "medium",
+   "note": "未提供单价，price已填0；盘盈无供应商，party留空",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "牛皮纸",
+      "qty": 3,
+      "unit": "卷",
+      "price": null
+     },
+     "draft": {
+      "name": "牛皮纸",
+      "qty": 3.0,
+      "unit": "卷",
+      "price": 0.0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true
+  },
+  {
+   "id": "n08",
+   "type": "normal",
+   "latency_s": 4.6,
+   "confidence": "high",
+   "note": "未提供单价，报损出库通常不计价",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "商品1",
+      "qty": 5,
+      "unit": "个",
+      "price": null
+     },
+     "draft": {
+      "name": "商品1",
+      "qty": 5.0,
+      "unit": "个",
+      "price": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true
+  }
+ ]
+}
