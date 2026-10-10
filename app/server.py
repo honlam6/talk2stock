@@ -16,9 +16,9 @@
     POST   /api/config/llm        → 新增/更新/切换启用（action=save|activate|delete）
     DELETE /api/config/llm?key=x  → 删除档案
     POST   /api/config/llm/test   → 测试档案连通性
-    POST   /api/parse             → 自然语言 → draft + 预览
-    POST   /api/resolve           → draft → 预览（只读，不写库）
-    POST   /api/commit            → draft → 真正写入 ERP
+    POST   /api/parse             → 自然语言 → draft + 预览 + 确认令牌
+    POST   /api/resolve           → draft → 预览（只读）+ 确认令牌
+    POST   /api/commit            → draft + 确认令牌 → 真正写入 ERP（无令牌一律拒绝）
     GET    /api/master            → 主数据（供应商/客户/商品/仓库/账户/单位）
 
 所有 /api 响应均为 UTF-8 JSON；任何异常都被捕获成
@@ -40,6 +40,7 @@ if APP_DIR not in sys.path:
 from core import config as cfgmod          # noqa: E402
 from core import draft as draftmod          # noqa: E402
 from core import erp as erpmod              # noqa: E402
+from core import gate as gatemod            # noqa: E402
 from core import llm as llmmod              # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8090"))
@@ -218,6 +219,14 @@ def api_master(_q, _body):
     }
 
 
+def _confirm_meta(source, raw_text="", model="", extra=None):
+    """签发确认令牌时随令牌保存的审计上下文。"""
+    meta = {"source": source, "raw_text": raw_text or "", "model": model or ""}
+    meta.update(gatemod.prompt_fingerprint())
+    meta.update(extra or {})
+    return meta
+
+
 def api_parse(_q, body):
     text = (body.get("text") or "").strip()
     if not text:
@@ -231,6 +240,11 @@ def api_parse(_q, body):
     except Exception as e:
         return {"ok": False, "message": "AI 解析失败：%s" % friendly(e)}
     preview = draftmod.resolve(draft, erp)
+    preview["ai"] = {"confidence": meta.get("confidence", ""),
+                     "note": meta.get("note", ""), "problems": meta.get("problems", [])}
+    meta_info = _confirm_meta("ai", text, model=meta.get("model", ""),
+                              extra={"draft_resolved": draft, "profile": meta.get("profile", "")})
+    preview["confirm_token"] = gatemod.issue(draft, meta_info)
     return {"ok": True, "draft": draft, "meta": meta, "preview": preview}
 
 
@@ -240,6 +254,9 @@ def api_resolve(_q, body):
         return {"ok": False, "message": "缺少草稿数据"}
     erp = _erp()
     preview = draftmod.resolve(d, erp)
+    meta_info = _confirm_meta((body.get("source") or "form").strip(),
+                              extra={"draft_resolved": d})
+    preview["confirm_token"] = gatemod.issue(d, meta_info)
     return {"ok": True, "draft": d, "preview": preview}
 
 
@@ -247,16 +264,40 @@ def api_commit(_q, body):
     d = _pick_draft(body)
     if not d:
         return {"ok": False, "message": "缺少草稿数据"}
+    token = (body.get("confirm_token") or "").strip()
+    source = (body.get("source") or "").strip()
+    raw_text = (body.get("raw_text") or "").strip()
+    ok, meta, reason = gatemod.check(token, d)
+    if not ok:
+        # 闸门拒绝：不写库，记录审计（这正是「未经确认写入为 0」的取证位置）
+        gatemod.log_rejected(reason, d, source=source, raw_text=raw_text)
+        return {"ok": False, "need_confirm": True, "message": reason}
     erp = _erp()
     res = draftmod.commit(d, erp)
     if not res.get("ok") and not res.get("message"):
         res["message"] = "写入失败，请检查数据后重试"
+    if res.get("ok"):
+        diff = gatemod.diff_drafts(meta.get("draft_resolved") or {}, d)
+        gatemod.log_write(meta, d, res, diff=diff, source=source, raw_text=raw_text)
     # 写库后主数据可能变了，清缓存让下次预览拿到最新
     try:
         erp.invalidate("")
     except Exception:
         pass
     return res
+
+
+def api_ask(_q, body):
+    """只读问答：选工具 → 查数据 → 依数据作答。绝不写库。"""
+    text = (body.get("text") or "").strip()
+    if not text:
+        return {"ok": False, "message": "请输入问题，例如「可乐还有多少库存？」"}
+    if not llmmod.is_configured():
+        return {"ok": False, "need_config": True,
+                "message": "尚未配置 AI 模型，请点右上角「设置」添加。"}
+    erp = _erp()
+    from core import ask as askmod
+    return askmod.ask(text, erp)
 
 
 def api_dashboard(_q, _body):
@@ -299,6 +340,7 @@ ROUTES = {
     ("POST", "/api/config/llm/test"): api_llm_test,
     ("GET", "/api/master"): api_master,
     ("GET", "/api/dashboard"): api_dashboard,
+    ("POST", "/api/ask"): api_ask,
     ("POST", "/api/parse"): api_parse,
     ("POST", "/api/resolve"): api_resolve,
     ("POST", "/api/commit"): api_commit,
@@ -456,6 +498,8 @@ class Handler(BaseHTTPRequestHandler):
             self._static("ai.html")
         elif path in ("/form", "/form.html"):
             self._static("form.html")
+        elif path in ("/ask", "/ask.html"):
+            self._static("ask.html")
         elif path in ("/dashboard", "/dashboard.html", "/board"):
             self._static("dashboard.html")
         elif path == "/style.css":

@@ -89,6 +89,9 @@ def resolve(draft, erp=None):
         "matched": bool(prow), "match_kind": pkind,
         "matched_name": prow.get("supplier") if prow else None,
         "will_create": bool(party_name) and not prow,
+        # 没匹配上时给 top3 相似候选，确认卡上可点选（点选后重新预览）
+        "candidates": erp.party_candidates(party_name, party_type)
+                      if (party_name and not prow) else [],
     }
     if party_info["will_create"]:
         to_create.append(f"新建{party_type}：{party_name}")
@@ -113,7 +116,7 @@ def resolve(draft, erp=None):
     # 商品明细
     items = []
     total = 0.0
-    for it in (draft.get("items") or []):
+    for idx, it in enumerate(draft.get("items") or [], 1):
         name = (it.get("name") or "").strip()
         unit = (it.get("unit") or "个").strip()
         qty = _num(it.get("qty"))
@@ -126,12 +129,17 @@ def resolve(draft, erp=None):
             to_create.append(f"新建商品：{name}（{unit}）")
         if mkind == "fuzzy":
             warnings.append(f"商品「{name}」模糊匹配到「{mrow.get('name')}」，请确认")
+        price_missing = qty > 0 and price == 0
+        if price_missing:
+            warnings.append(f"第{idx}行「{name}」单价为 0：原话里可能没说价格，将按 0 元入账；若非赠品请先补单价")
         row = {
             "name": name, "qty": qty, "unit": unit, "price": price, "amount": amount,
             "material_id": mrow.get("id") if mrow else None,
             "matched": bool(mrow), "match_kind": mkind,
             "matched_name": mrow.get("name") if mrow else None,
             "will_create": will_create,
+            "price_missing": price_missing,
+            "candidates": erp.material_candidates(name) if (name and not mrow) else [],
             "stock": None,
         }
         # 出库业务：查库存给出负库存提醒

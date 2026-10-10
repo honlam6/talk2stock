@@ -9,6 +9,8 @@
 """
 import json
 import re
+import ssl
+import time
 import urllib.error
 import urllib.request
 
@@ -16,6 +18,12 @@ from . import config as cfgmod
 from .erp import BILL_TYPES
 
 TIMEOUT = 120
+
+# 提示词版本号：每次改动 SYSTEM_PROMPT 都要更新，并写进审计日志（迭代留痕）。
+# 变更记录：
+#   v1-20261010  初始版本（4 类信息抽取 + 禁止编造 + confidence/note）
+#   v2-20261010  修相对日期失分：注入当前日期，要求今天/昨天/明天/后天换算成绝对日期
+PROMPT_VERSION = "v2-20261010"
 
 BIZ_ENUM = list(BILL_TYPES.keys())
 
@@ -103,7 +111,15 @@ def is_configured():
     return cfgmod.active_profile() is not None
 
 
-def _post(url, payload, api_key, stream=False):
+def _insecure_context():
+    """档案声明 insecure 时跳过证书校验（IP 直连 / 自签证书的自建网关）。"""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def _post(url, payload, api_key, stream=False, ssl_context=None):
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
@@ -111,7 +127,10 @@ def _post(url, payload, api_key, stream=False):
         "Accept": "text/event-stream" if stream else "application/json",
     }
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+    kw = {"timeout": TIMEOUT}
+    if ssl_context is not None:
+        kw["context"] = ssl_context
+    with urllib.request.urlopen(req, **kw) as r:
         if not stream:
             return json.loads(r.read().decode("utf-8", "replace"))
         # SSE 流式：逐行读取 "data: {...}"，拼接 choices[0].delta.content
@@ -164,11 +183,12 @@ def _chat(prof, messages, force_json=True):
     }
     if force_json:
         base["response_format"] = {"type": "json_object"}
+    ctx = _insecure_context() if prof.get("insecure") else None
 
     last_err = None
     # 1) 流式 + response_format（优先；很多推理端点非流式会挂起）
     try:
-        txt = _post(url, dict(base, stream=True), prof["api_key"], stream=True)
+        txt = _post(url, dict(base, stream=True), prof["api_key"], stream=True, ssl_context=ctx)
         if txt and txt.strip():
             return txt
     except Exception as e:
@@ -177,7 +197,7 @@ def _chat(prof, messages, force_json=True):
     try:
         payload = {k: v for k, v in base.items() if k != "response_format"}
         payload["stream"] = True
-        txt = _post(url, payload, prof["api_key"], stream=True)
+        txt = _post(url, payload, prof["api_key"], stream=True, ssl_context=ctx)
         if txt and txt.strip():
             return txt
     except Exception as e:
@@ -185,12 +205,12 @@ def _chat(prof, messages, force_json=True):
     # 3) 非流式兜底（去掉 response_format 重试一次）
     try:
         payload = {k: v for k, v in base.items() if k != "response_format"}
-        j = _post(url, payload, prof["api_key"], stream=False)
+        j = _post(url, payload, prof["api_key"], stream=False, ssl_context=ctx)
         return j["choices"][0]["message"]["content"]
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
         if force_json and ("response_format" in detail or e.code == 400):
-            j = _post(url, payload, prof["api_key"], stream=False)
+            j = _post(url, payload, prof["api_key"], stream=False, ssl_context=ctx)
             return j["choices"][0]["message"]["content"]
         raise RuntimeError(f"AI 接口报错 {e.code}：{detail}")
     except Exception as e:
@@ -326,12 +346,19 @@ def normalize(raw):
     return draft, problems
 
 
+def _date_block():
+    """注入当前日期：模型不知道今天几号，相对日期（昨天/明天）必须由我们供给基准。"""
+    return ("\n\n# 当前日期\n今天是 %s。用户说「今天／昨天／明天／后天／大后天」等相对日期时，"
+            "oper_time 必须换算成对应的绝对日期，格式 YYYY-MM-DD HH:MM:SS。"
+            % time.strftime("%Y-%m-%d"))
+
+
 def parse(text, erp=None):
     """自然语言 → (draft, meta)。未配置模型或调用失败时抛 RuntimeError。"""
     prof = cfgmod.active_profile()
     if not prof:
         raise RuntimeError("尚未配置 AI 模型，请在「设置」里添加一个模型档案")
-    sys_prompt = SYSTEM_PROMPT + (_context_block(erp) if erp else "")
+    sys_prompt = SYSTEM_PROMPT + _date_block() + (_context_block(erp) if erp else "")
     content = _chat(prof, [
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": text},

@@ -5,7 +5,7 @@
     "pass": ""
   },
   "llm": {
-    "active": "",
+    "active": "workbuddy",
     "profiles": {
       "deepseek": {
         "name": "DeepSeek",
@@ -27,6 +27,22 @@
         "api_key": "",
         "model": "qwen-plus",
         "temperature": 0.2
+      },
+      "workbuddy": {
+        "name": "本地 DeepSeek V4.1 Flash",
+        "base_url": "https://your-llm-gateway.example/v1",
+        "api_key": "",
+        "model": "global:deepseek-v4.1-flash",
+        "temperature": 0,
+        "insecure": true,
+        "merge_system": true
+      },
+      "moda": {
+        "name": "ModelScope·Qwen3.8-Flash-Next（备用）",
+        "base_url": "https://api-inference.modelscope.cn/v1",
+        "api_key": "",
+        "model": "Qwen/Qwen3.8-Flash-Next",
+        "temperature": 0
       }
     }
   },

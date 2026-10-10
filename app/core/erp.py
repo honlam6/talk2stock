@@ -171,6 +171,31 @@ class JshERP:
     def _norm(s):
         return (str(s or "")).strip().lower().replace(" ", "")
 
+    def _ranked_candidates(self, rows, field, name, n=3, min_score=0.35):
+        """没匹配上时给 top-N 相似候选（编辑相似度 + 前缀加分），供用户点选。"""
+        import difflib
+        q = self._norm(name)
+        if not q:
+            return []
+        scored = []
+        for r in rows:
+            v = str(r.get(field) or "").strip()
+            nv = self._norm(v)
+            if not nv or nv == q:
+                continue
+            score = difflib.SequenceMatcher(None, q, nv).ratio()
+            if nv.startswith(q) or q.startswith(nv):
+                score += 0.15
+            scored.append((score, v))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        return [v for sc, v in scored[:n] if sc >= min_score]
+
+    def party_candidates(self, name, ptype, n=3):
+        return self._ranked_candidates(self.suppliers(ptype), "supplier", name, n)
+
+    def material_candidates(self, name, n=3):
+        return self._ranked_candidates(self.materials(), "name", name, n)
+
     def find_party(self, name, ptype):
         """精确 → 忽略大小写空格 → 包含。返回 (row, match_kind)"""
         if not name:
