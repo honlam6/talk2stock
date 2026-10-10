@@ -187,7 +187,18 @@ def ask(text, erp=None):
         ])
         txt = (raw2 or "").strip()
         if txt:
-            txt = llmmod._extract_json(txt)["answer"] if txt.lstrip().startswith("{") else txt
+            head = txt.lstrip()[:1]
+            if head == "{":                       # {"answer": "..."} → 取字段
+                txt = str(llmmod._extract_json(txt).get("answer") or "").strip()
+            elif head == "[":                     # [{"text": "..."}] 之类的数组壳 → 摘出来
+                try:
+                    arr = llmmod._extract_json(txt)
+                    if isinstance(arr, list) and arr and isinstance(arr[0], dict):
+                        txt = str(arr[0].get("text") or arr[0].get("answer") or "").strip()
+                    else:
+                        txt = ""
+                except Exception:
+                    txt = ""
             if txt:
                 answer = txt.strip()
     except Exception:
