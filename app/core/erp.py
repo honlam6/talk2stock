@@ -78,6 +78,10 @@ class JshERP:
         try:
             j = json.loads(raw)
         except Exception:
+            # 会话失效时后端可能直接回 "loginOut" 纯文本而非 JSON code——重登一次再试
+            if retry_login and "loginOut" in raw:
+                self.login()
+                return self._req(path, method, data, retry_login=False)
             raise ErpError(f"ERP 返回非 JSON：{raw[:200]}")
         # token 过期自动重登
         if retry_login and isinstance(j, dict) and j.get("code") in (510, 401):
