@@ -23,7 +23,9 @@ TIMEOUT = 120
 # 变更记录：
 #   v1-20261010  初始版本（4 类信息抽取 + 禁止编造 + confidence/note）
 #   v2-20261010  修相对日期失分：注入当前日期，要求今天/昨天/明天/后天换算成绝对日期
-PROMPT_VERSION = "v2-20261010"
+#   v3-20261011  多轮修正：用户对上一稿说「改成50瓶」时，把上一稿 JSON 随输入带入，
+#                只改提到的字段、其余保留，输出完整新草稿
+PROMPT_VERSION = "v3-20261011"
 
 BIZ_ENUM = list(BILL_TYPES.keys())
 
@@ -353,15 +355,25 @@ def _date_block():
             % time.strftime("%Y-%m-%d"))
 
 
-def parse(text, erp=None):
-    """自然语言 → (draft, meta)。未配置模型或调用失败时抛 RuntimeError。"""
+def _revision_block(prev_draft):
+    """多轮修正：把上一稿带给模型，本轮输入是对它的增量修改指令。"""
+    return ("\n\n# 修正上一张草稿\n"
+            "用户本轮输入是对下面这张已有草稿的修改要求（改数量/单价/仓库/往来单位/日期，或增删商品行），"
+            "不是一笔新业务。只修改用户提到的部分，其余字段原样保留，输出修改后的完整草稿 JSON。\n"
+            "上一轮草稿：" + json.dumps(prev_draft, ensure_ascii=False))
+
+
+def parse(text, erp=None, prev_draft=None):
+    """自然语言 → (draft, meta)。未配置模型或调用失败时抛 RuntimeError。
+    prev_draft 非空时表示多轮修正：本轮输入是对该草稿的增量修改。"""
     prof = cfgmod.active_profile()
     if not prof:
         raise RuntimeError("尚未配置 AI 模型，请在「设置」里添加一个模型档案")
     sys_prompt = SYSTEM_PROMPT + _date_block() + (_context_block(erp) if erp else "")
+    user_content = text + (_revision_block(prev_draft) if prev_draft else "")
     content = _chat(prof, [
         {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": text},
+        {"role": "user", "content": user_content},
     ])
     raw = _extract_json(content)
     draft, problems = normalize(raw)
@@ -371,6 +383,7 @@ def parse(text, erp=None):
         "confidence": raw.get("confidence") or "",
         "note": raw.get("note") or "",
         "problems": problems,
+        "revision": bool(prev_draft),
         "raw": raw,
     }
     return draft, meta

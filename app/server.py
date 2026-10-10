@@ -20,6 +20,7 @@
     POST   /api/resolve           → draft → 预览（只读）+ 确认令牌
     POST   /api/commit            → draft + 确认令牌 → 真正写入 ERP（无令牌一律拒绝）
     GET    /api/master            → 主数据（供应商/客户/商品/仓库/账户/单位）
+    GET    /api/history           → 最近录单（审计日志 commit_ok 的只读视图）
 
 所有 /api 响应均为 UTF-8 JSON；任何异常都被捕获成
 {"ok": false, "message": "中文提示"}，不会向客户端抛栈。
@@ -234,16 +235,20 @@ def api_parse(_q, body):
     if not llmmod.is_configured():
         return {"ok": False, "need_config": True,
                 "message": "尚未配置 AI 模型，请点右上角「设置」添加一个模型档案（Base URL / API Key / 模型名）后再试。"}
+    # 多轮修正：body.draft 非空时，本轮输入是对该草稿的增量修改指令
+    prev = body.get("draft")
+    prev = prev if isinstance(prev, dict) and prev else None
     erp = _erp()
     try:
-        draft, meta = llmmod.parse(text, erp)
+        draft, meta = llmmod.parse(text, erp, prev_draft=prev)
     except Exception as e:
         return {"ok": False, "message": "AI 解析失败：%s" % friendly(e)}
     preview = draftmod.resolve(draft, erp)
     preview["ai"] = {"confidence": meta.get("confidence", ""),
                      "note": meta.get("note", ""), "problems": meta.get("problems", [])}
     meta_info = _confirm_meta("ai", text, model=meta.get("model", ""),
-                              extra={"draft_resolved": draft, "profile": meta.get("profile", "")})
+                              extra={"draft_resolved": draft, "profile": meta.get("profile", ""),
+                                     "revision": bool(prev)})
     preview["confirm_token"] = gatemod.issue(draft, meta_info)
     return {"ok": True, "draft": draft, "meta": meta, "preview": preview}
 
@@ -305,6 +310,56 @@ def api_dashboard(_q, _body):
     return reportmod.dashboard(_erp())
 
 
+def api_history(q, _body):
+    """最近录单：读审计日志里 commit_ok 的记录（只读），供「最近录单」卡片展示。
+    只回传白名单字段，不带草稿全量与提示词指纹。"""
+    try:
+        limit = min(max(int((q.get("limit") or ["30"])[0]), 1), 100)
+    except Exception:
+        limit = 30
+    path = os.path.join(cfgmod.DATA_DIR, "audit.jsonl")
+    if not os.path.isfile(path):
+        return {"ok": True, "items": []}
+    recs = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get("event") == "commit_ok":
+                    recs.append(rec)
+    except Exception as e:
+        return {"ok": False, "message": friendly(e)}
+    out = []
+    for rec in reversed(recs):                      # 最新在前
+        d = rec.get("draft") or {}
+        r = rec.get("result") or {}
+        out.append({
+            "ts": rec.get("ts", ""),
+            "source": rec.get("source", ""),
+            "raw_text": rec.get("raw_text", ""),
+            "model": rec.get("model", ""),
+            "number": r.get("number", ""),
+            "total": r.get("total", 0),
+            "biz_label": r.get("biz_label", ""),
+            "created": r.get("created", []) or [],
+            "party": d.get("party", ""),
+            "depot": d.get("depot", ""),
+            "items": [{"name": (it or {}).get("name", ""), "qty": (it or {}).get("qty"),
+                       "unit": (it or {}).get("unit", ""), "price": (it or {}).get("price")}
+                      for it in (d.get("items") or [])[:20]],
+            "changed": [x.get("field") for x in (rec.get("diff") or [])],
+        })
+        if len(out) >= limit:
+            break
+    return {"ok": True, "items": out}
+
+
 def api_upload(q, body):
     """代理 ERP 附件上传：接收 multipart 文件，暂存后调 erp.upload_file。
     请求体为 multipart/form-data（字段 file + 可选 biz），由 _handle 解析后传入。
@@ -340,6 +395,7 @@ ROUTES = {
     ("POST", "/api/config/llm/test"): api_llm_test,
     ("GET", "/api/master"): api_master,
     ("GET", "/api/dashboard"): api_dashboard,
+    ("GET", "/api/history"): api_history,
     ("POST", "/api/ask"): api_ask,
     ("POST", "/api/parse"): api_parse,
     ("POST", "/api/resolve"): api_resolve,
