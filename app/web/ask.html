@@ -5,44 +5,46 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>问一问 · Talk2Stock</title>
 <link rel="stylesheet" href="/style.css">
-<style>
-  .chat-wrap { display:flex; flex-direction:column; min-height: calc(100vh - 190px); }
-  .chat-log { flex:1; display:flex; flex-direction:column; gap:14px; padding:6px 2px 18px; }
-  .msg { max-width:82%; padding:12px 16px; border-radius:14px; font-size:16.5px; line-height:1.7; white-space:pre-wrap; word-break:break-word; }
-  .msg.user { align-self:flex-end; background:linear-gradient(135deg,var(--brand-1),#0e56d6); color:#fff; border-bottom-right-radius:4px; }
-  .msg.bot  { align-self:flex-start; background:#fff; border:1px solid var(--bd-light); box-shadow:0 1px 2px rgba(16,42,100,.05); border-bottom-left-radius:4px; }
-  .msg.bot .src { display:block; margin-top:8px; font-size:12.5px; color:var(--text-3); }
-  .msg.bot.err { background:var(--red-bg); border-color:var(--red-bd); }
-  .chat-input { display:flex; gap:10px; position:sticky; bottom:0; background:var(--bg); padding:12px 0 4px; }
-  .chat-input textarea { flex:1; font-size:17px; padding:12px 14px; border:2px solid var(--bd); border-radius:12px; font-family:inherit; resize:none; height:52px; line-height:1.5; }
-  .chat-input textarea:focus { outline:none; border-color:var(--brand-1); box-shadow:0 0 0 3px rgba(26,111,232,.14); }
-</style>
 </head>
 <body>
-<div id="nav"></div>
-
 <div class="wrap">
+  <div id="ph"></div>
+
   <div class="chat-wrap">
     <div class="chat-log" id="log"></div>
-    <div class="hint" style="margin:4px 0 8px">试试：
-      <span class="tag tag-blue" style="cursor:pointer" data-q="可乐还有多少库存？">可乐还有多少库存？</span>
-      <span class="tag tag-blue" style="cursor:pointer" data-q="今天卖了多少？">今天卖了多少？</span>
-      <span class="tag tag-blue" style="cursor:pointer" data-q="谁欠我钱？">谁欠我钱？</span>
-      <span class="tag tag-blue" style="cursor:pointer" data-q="什么货快没了？">什么货快没了？</span>
+    <div class="hint" style="max-width:860px;margin:4px auto 8px;width:100%">试试：
+      <span class="tag tag-new" style="cursor:pointer" data-q="可乐还有多少库存？">可乐还有多少库存？</span>
+      <span class="tag tag-new" style="cursor:pointer" data-q="今天卖了多少？">今天卖了多少？</span>
+      <span class="tag tag-new" style="cursor:pointer" data-q="谁欠我钱？">谁欠我钱？</span>
+      <span class="tag tag-new" style="cursor:pointer" data-q="什么货快没了？">什么货快没了？</span>
     </div>
-    <div class="chat-input">
+    <div class="chat-input-row">
       <textarea id="q" placeholder="问一句经营数据，例如「矿泉水还有货吗」"></textarea>
       <button class="btn btn-primary" id="send">提问</button>
     </div>
-    <div class="hint" style="margin-top:6px">只读问答：只会查询数据，不会改动任何单据。回答里的数字全部来自 ERP 实时接口。</div>
+    <div class="hint center" style="margin-top:6px">只读问答：只查数据，不改任何单据。数字全部来自 ERP 实时接口。</div>
   </div>
 </div>
 
 <script src="/common.js"></script>
 <script>
-$('#nav').innerHTML = topbar('/ask', '问一问 · 只读问答', '库存 / 采销 / 欠款，随口问，答案带数据来源');
+shell('/ask');
+$('#ph').innerHTML = pageHead('ASK', '问一问', '库存 / 采销 / 欠款，随口问，答案带数据来源');
 
 const log = $('#log');
+
+// 空状态引导（首问之后自动消失）
+(function emptyState() {
+  const d = document.createElement('div');
+  d.className = 'msg bot';
+  d.innerHTML = '我在。想问哪本账？<br><span class="muted" style="font-size:13.5px">库存余量 · 今日 / 本月采销 · 谁欠谁钱 · 哪些货快没了 · 库存值多少钱</span>';
+  const s = document.createElement('span');
+  s.className = 'src';
+  s.textContent = '所有回答只读，数字实时取自 ERP';
+  d.appendChild(s);
+  log.appendChild(d);
+})();
+
 function add(cls, text, src) {
   const d = document.createElement('div');
   d.className = 'msg ' + cls;

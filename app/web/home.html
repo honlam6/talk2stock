@@ -3,206 +3,100 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Talk2Stock · 对话式进销存智能体</title>
+<title>工作台 · Talk2Stock</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<div id="nav"></div>
-
 <div class="wrap">
-  <div class="card" style="text-align:center;padding:26px 20px 22px">
-    <h2 class="home-hero-title" style="justify-content:center;font-size:25px;margin-bottom:6px;font-weight:800">把一句话，变成一张 ERP 单据</h2>
-    <div class="muted">解析口语 → 生成草稿 → 标出来历 → 人工确认 → 写入真实 ERP，全程留痕可审计。</div>
-  </div>
 
-  <!-- 聚合命令框：录单 / 提问 二选一，显式点击执行 -->
-  <div class="card">
-    <h2><span class="bar"></span>今天要做什么？</h2>
-    <div class="say-row">
-      <textarea id="omni" placeholder="说一句话：录单写「从美宜佳买了3瓶可乐单价3块5」；提问写「可乐还有多少库存？」"></textarea>
+  <!-- Hero：品牌区 + 指针光斑 + 入场动画（纯 CSS/JS） -->
+  <section class="hero" id="hero">
+    <div class="hero-grid-bg"></div>
+    <div class="hero-glow" id="glow"></div>
+    <div class="hero-in">
+      <div class="hero-eyebrow"><span class="pulse"></span>对话式进销存智能体</div>
+      <h1>把一句话，记成<br><span class="gold">一笔明明白白的账</span></h1>
+      <p class="lead">说出业务，智能体拆成单据草稿；数字来历逐条标明，确认后才写入真实 ERP。全程留痕，随时可审。</p>
+      <div class="hero-flow">
+        <span class="hero-step"><b>说</b>一句话</span><span class="hero-arrow">→</span>
+        <span class="hero-step">生成<b>草稿</b></span><span class="hero-arrow">→</span>
+        <span class="hero-step">人工<b>确认</b></span><span class="hero-arrow">→</span>
+        <span class="hero-step">写入 <b>ERP</b></span>
+      </div>
     </div>
-    <div class="wb-suggest" id="sug">选择动作：<b>录单</b>解析成草稿待你确认写入，<b>提问</b>只查数据不改任何东西</div>
-    <div class="wb-actions">
-      <button class="btn btn-primary btn-lg" id="doBill">💬 录单（写入 ERP）</button>
-      <button class="btn btn-lg" id="doAsk">🔎 提问（只读）</button>
-      <span class="hint" style="flex:1;text-align:right">两个动作都要你亲手点，不会自动执行</span>
-    </div>
-    <div class="examples">
-      <span class="chip" data-fill="从美宜佳买了3瓶可乐单价3块5">从美宜佳买了3瓶可乐单价3块5</span>
-      <span class="chip" data-fill="卖给永辉超市200个纸箱，一个5块，从成品仓出">卖给永辉超市200个纸箱，一个5块</span>
-      <span class="chip" data-fill="玖龙纸业那批牛皮纸有问题，退10卷回去，每卷80">退10卷牛皮纸给玖龙纸业</span>
-      <span class="chip" data-fill="可乐还有多少库存？">可乐还有多少库存？</span>
-      <span class="chip" data-fill="今天卖了多少？">今天卖了多少？</span>
-      <span class="chip" data-fill="谁欠我钱？">谁欠我钱？</span>
-    </div>
-    <div class="wb-answer" id="answer"></div>
-  </div>
+  </section>
 
-  <!-- KPI 顶条（lite 数据，点击进看板） -->
-  <div class="wb-kpis">
-    <div class="kpi-grid" id="kpis">
-      <div class="kpi b"><div class="lbl">加载中…</div><div class="val">—</div></div>
-    </div>
-  </div>
-
-  <!-- 最近录单 -->
-  <div class="card" id="recentCard" style="display:none">
-    <h2><span class="bar"></span>最近录单
-      <span class="spacer" style="flex:1"></span>
-      <button class="btn btn-sm btn-ghost" id="recentRefresh">↻ 刷新</button>
-      <a class="btn btn-sm btn-ghost" href="/dashboard">全部 → 看板</a>
-    </h2>
-    <div id="recentList"></div>
-  </div>
-
-  <!-- 五入口 -->
-  <div class="home-grid">
-    <a class="home-card" href="/ai">
-      <div class="ico">💬</div>
-      <h3>对话录单（Agent）</h3>
-      <p>直接说「从美宜佳买了3瓶可乐单价3块5」，智能体拆解成单据草稿，缺什么会提醒你补，确认后才写入。支持多轮修正。</p>
-      <span class="badge" id="aiBadge">需配置模型</span>
+  <!-- 快速操作 -->
+  <div class="quick-grid">
+    <a class="quick-card" href="/new?mode=ai">
+      <span class="go">↗</span>
+      <div class="ico">✎</div>
+      <h3>对话录单</h3>
+      <p id="aiDesc">说一句话建单，多轮修正、语音输入、附件随单。</p>
     </a>
-
-    <a class="home-card" href="/form">
-      <div class="ico">📋</div>
+    <a class="quick-card" href="/new?mode=form">
+      <span class="go">↗</span>
+      <div class="ico">▤</div>
       <h3>表单录单</h3>
-      <p>精确控制每个字段：选业务类型 → 填往来单位和明细 → 预览确认。自动补全 + 键盘连续录入。</p>
-      <span class="badge">不依赖 AI · 随时可用</span>
+      <p>逐字段精确控制，自动补全 + 键盘连录，不依赖 AI。</p>
     </a>
-
-    <a class="home-card" href="/ask">
-      <div class="ico">🔎</div>
-      <h3>问一问（只读）</h3>
-      <p>「可乐还有多少」「今天卖了多少」「谁欠我钱」——随口问，答案全部来自 ERP 实时数据，绝不改数据。</p>
-      <span class="badge">只读 · 不改数据</span>
+    <a class="quick-card" href="/ask">
+      <span class="go">↗</span>
+      <div class="ico">❝</div>
+      <h3>问一问</h3>
+      <p>「可乐还有多少」「谁欠我钱」——只读查询，不改数据。</p>
     </a>
-
-    <a class="home-card" href="/dashboard">
-      <div class="ico">📊</div>
+    <a class="quick-card" href="/dashboard">
+      <span class="go">↗</span>
+      <div class="ico">◫</div>
       <h3>经营看板</h3>
-      <p>老板视角：本月采购销售、差额、欠款、库存预警、趋势图表，一眼看完。</p>
-      <span class="badge">只读 · 不改数据</span>
-    </a>
-
-    <a class="home-card" href="http://localhost:8080" target="_blank">
-      <div class="ico">🗄</div>
-      <h3>打开原版 ERP</h3>
-      <p>报表、权限、盘点、财务等高级功能仍回 jshERP 原系统；本系统只做加法，不改原版。</p>
-      <span class="badge">localhost:8080</span>
+      <p>采销毛利、欠款、库存预警、趋势图，老板视角一页看完。</p>
     </a>
   </div>
 
-  <div class="card" style="margin-top:18px">
-    <h2><span class="bar"></span>系统状态</h2>
-    <div id="stat" class="muted">检查中…</div>
+  <!-- KPI 顶条 -->
+  <div style="margin-top:20px" class="kpi-grid" id="kpis">
+    <div class="kpi b"><div class="lbl">加载中</div><div class="val">—</div></div>
   </div>
+
+  <!-- 最近录单 + 系统状态 -->
+  <div class="two-col" style="margin-top:20px">
+    <div class="card" id="recentCard" style="display:none;margin-bottom:0">
+      <h2><span class="bar"></span>最近录单
+        <span style="flex:1"></span>
+        <button class="btn btn-sm btn-ghost" id="recentRefresh">↻ 刷新</button>
+      </h2>
+      <div id="recentList"></div>
+    </div>
+    <div class="card" style="margin-bottom:0">
+      <h2><span class="bar"></span>系统状态</h2>
+      <div id="stat" class="muted">检查中…</div>
+      <div id="llmStat" class="muted" style="margin-top:8px"></div>
+    </div>
+  </div>
+
 </div>
 
 <script src="/common.js"></script>
 <script>
-$('#nav').innerHTML = topbar('/', 'Talk2Stock · 对话式进销存智能体', '一句话 → 草稿 → 确认 → 写入真实 ERP，全程留痕');
+shell('/');
 
-const omni = $('#omni'), sug = $('#sug'), answer = $('#answer');
-const ASK_RE  = /(多少|几|欠|还剩|还余|快没|缺|货值|值多少|库存|今天|昨天|本月|这个月|上月|排行|趋势)/;
-const BILL_RE = /(买|卖|退|进|发货|入库|出库|采购|销售|单价|块|元|￥|\d)/;
-
-// 输入建议：只给提示和高亮，不执行任何动作（用户偏好：少一步的自动化要谨慎）
-function suggest(v) {
-  if (!v.trim()) return '';
-  if (ASK_RE.test(v)) return 'ask';
-  if (BILL_RE.test(v)) return 'bill';
-  return '';
-}
-function paintSuggest() {
-  const s = suggest(omni.value);
-  const bBill = $('#doBill'), bAsk = $('#doAsk');
-  bBill.classList.toggle('btn-primary', s !== 'ask');
-  bAsk.classList.toggle('btn-primary', s === 'ask');
-  sug.innerHTML = !omni.value.trim() ? '选择动作：<b>录单</b>解析成草稿待你确认写入，<b>提问</b>只查数据不改任何东西'
-    : s === 'ask' ? '猜你想<b>提问</b>（只读）——点右侧「提问」执行'
-    : s === 'bill' ? '猜你想<b>录单</b>——点「录单」解析成草稿，确认后才会写入'
-    : '看不出意图：录单或提问都行，点按钮选择';
-  answer.className = 'wb-answer';   // 新输入隐藏旧回答
-}
-omni.addEventListener('input', paintSuggest);
-
-// 示例词条：只填入，不解析
-document.querySelectorAll('[data-fill]').forEach(el =>
-  el.onclick = () => { omni.value = el.dataset.fill; paintSuggest(); omni.focus(); });
-
-// ---------- 录单：解析 → 预览确认弹层（与对话录单/表单录单同一条链路） ----------
-async function doBill() {
-  const text = omni.value.trim();
-  if (!text) { omni.focus(); toast('先说一句话业务描述', 'warn'); return; }
-  const btn = $('#doBill');
-  btn.disabled = true; btn.textContent = '解析中…';
-  try {
-    await loadMaster();                       // 预览弹层的自动补全需要主数据
-    const r = await api('/api/parse', { method: 'POST', body: { text } });
-    if (!r.ok) {
-      toast(r.message || '解析失败', r.need_config ? 'warn' : 'bad');
-      return;
-    }
-    showPreview(r.preview, r.draft, onBillDone, [], {
-      source: 'ai', rawText: text,
-      onCancel() { omni.focus(); },
+// 指针光斑（rAF 节流，离开即隐）
+(() => {
+  const hero = $('#hero'), glow = $('#glow');
+  let raf = 0;
+  hero.addEventListener('pointermove', e => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      const r = hero.getBoundingClientRect();
+      glow.style.left = (e.clientX - r.left) + 'px';
+      glow.style.top = (e.clientY - r.top) + 'px';
+      raf = 0;
     });
-  } catch (e) {
-    toast(e.message, 'bad');
-  } finally {
-    btn.disabled = false; btn.textContent = '💬 录单（写入 ERP）';
-  }
-}
-function onBillDone(res, d) {
-  if (res && res.ok) {
-    toast(res.message || '已写入', 'ok');
-    omni.value = ''; paintSuggest();
-    setTimeout(refreshAll, 300);              // 服务端写入后已清缓存，这里拉最新
-  } else {
-    toast((res && res.message) || '写入失败', 'bad');
-  }
-}
+  });
+})();
 
-// ---------- 提问：只读问答 ----------
-const TOOL_LABEL = {
-  stock_query: '库存查询（实时）', low_stock: '库存预警（实时）',
-  today_stats: '今日经营（官方统计接口）', month_stats: '本月经营（官方统计接口）',
-  debts: '应收应付（单据 debt 字段）', recent_bills: '最近单据', stock_value: '库存货值（官方统计接口）',
-};
-async function doAsk() {
-  const text = omni.value.trim();
-  if (!text) { omni.focus(); toast('先说一句想问的', 'warn'); return; }
-  const btn = $('#doAsk');
-  btn.disabled = true; btn.textContent = '查询中…';
-  answer.className = 'wb-answer show';
-  answer.innerHTML = '<span class="muted">查询中…</span>';
-  try {
-    const r = await api('/api/ask', { method: 'POST', body: { text } });
-    if (!r.ok) {
-      answer.className = 'wb-answer show err';
-      answer.textContent = r.message || '查询失败';
-      return;
-    }
-    answer.className = 'wb-answer show';
-    answer.innerHTML = '';
-    answer.appendChild(document.createTextNode(r.answer || '（无回答）'));
-    const src = document.createElement('span');
-    src.className = 'src';
-    src.textContent = '数据来源：' + (r.tool && r.tool !== 'none' ? (TOOL_LABEL[r.tool] || r.tool) : 'AI 通用回答') +
-      ' · 继续追问请进「问一问」';
-    answer.appendChild(src);
-  } catch (e) {
-    answer.className = 'wb-answer show err';
-    answer.textContent = e.message;
-  } finally {
-    btn.disabled = false; btn.textContent = '🔎 提问（只读）';
-  }
-}
-$('#doBill').onclick = doBill;
-$('#doAsk').onclick = doAsk;
-
-// ---------- KPI 顶条（lite 接口，30s 服务端缓存） ----------
+// ---------- KPI（lite 接口） ----------
 function renderKPI(d) {
   if (!d || d.ok === false) {
     $('#kpis').innerHTML = '<div class="kpi r"><div class="lbl">看板数据</div><div class="val">—</div><div class="sub">' +
@@ -214,16 +108,15 @@ function renderKPI(d) {
   $('#kpis').innerHTML = `
     <a class="kpi b" href="/dashboard"><div class="lbl">今日采购</div><div class="val">￥${money(t.buy)}</div><div class="sub">${t.buy_n || 0} 笔</div></a>
     <a class="kpi g" href="/dashboard"><div class="lbl">今日销售</div><div class="val">￥${money(t.sell)}</div><div class="sub">${t.sell_n || 0} 笔</div></a>
-    <a class="kpi o" href="/dashboard"><div class="lbl">今日差额</div><div class="val">￥${money(t.profit)}</div><div class="sub">销售 − 采购（现金流）</div></a>
-    <a class="kpi r" href="/dashboard"><div class="lbl">客户欠款（应收）</div><div class="val">￥${money(d.debt_recv_total)}</div><div class="sub">${(d.debt_recv || []).length ? '最多：' + esc(d.debt_recv[0].name) : '暂无欠款'}</div></a>
-    <a class="kpi o" href="/dashboard"><div class="lbl">供应商欠款（应付）</div><div class="val">￥${money(d.debt_pay_total)}</div><div class="sub">${(d.debt_pay || []).length ? '最多：' + esc(d.debt_pay[0].name) : '暂无欠款'}</div></a>
+    <a class="kpi o" href="/dashboard"><div class="lbl">今日差额</div><div class="val">￥${money(t.profit)}</div><div class="sub">销售 − 采购</div></a>
+    <a class="kpi r" href="/dashboard"><div class="lbl">应收欠款</div><div class="val">￥${money(d.debt_recv_total)}</div><div class="sub">${(d.debt_recv || []).length ? '最多：' + esc(d.debt_recv[0].name) : '暂无欠款'}</div></a>
     <a class="kpi ${warnN > 0 ? 'r' : 'g'}" href="/dashboard"><div class="lbl">库存预警</div><div class="val">${warnN}</div><div class="sub">负库存 ${st.negative || 0} · 低库存 ${st.low || 0}</div></a>`;
 }
 async function refreshKPI() {
   try { renderKPI(await api('/api/dashboard?lite=1')); } catch (e) { renderKPI(null); }
 }
 
-// ---------- 最近录单（/api/history，审计只读视图） ----------
+// ---------- 最近录单 ----------
 function fieldZh(s) {
   return String(s || '')
     .replace(/^biz$/, '业务类型').replace(/^party$/, '往来单位').replace(/^depot$/, '仓库')
@@ -250,27 +143,23 @@ async function refreshHistory() {
           ${h.raw_text ? `「${esc(h.raw_text)}」 · ` : ''}${esc(h.ts || '')}${(h.changed && h.changed.length)
             ? ` · 确认时改过：${h.changed.map(fieldZh).join('、')}` : ''}
         </div>
-      </div>`).join('') : '<div class="muted center" style="padding:14px 0">还没有录过单，在上面说第一句吧</div>';
+      </div>`).join('') : '<div class="muted center" style="padding:14px 0">还没有录过单，去「录单」说第一句吧</div>';
   } catch (e) { /* 审计读取失败不打断首页 */ }
 }
 $('#recentRefresh').onclick = () => { refreshHistory(); refreshKPI(); };
 
-function refreshAll() { refreshKPI(); refreshHistory(); }
-
-// ---------- 状态 + 模型徽标 ----------
+// ---------- 状态 ----------
 (async () => {
-  refreshAll();
+  refreshKPI(); refreshHistory();
   try {
     const r = await api('/api/config');
     const cfg = r.config || r;
     const llm = cfg.llm || {};
     const act = llm.profiles && llm.profiles[llm.active];
-    if (act) {
-      const b = $('#aiBadge');
-      b.textContent = '已配置：' + (act.name || act.model);
-      b.style.background = 'var(--green-bg)';
-      b.style.color = '#389e0d';
-    }
+    $('#llmStat').innerHTML = act
+      ? `<span class="tag tag-ok">AI 模型</span>　${esc(act.name || llm.active)} · ${esc(act.model || '')}`
+      : `<span class="tag tag-new">AI 模型未配置</span>　<a href="/settings" style="color:var(--gold-strong)">去设置 →</a>（表单录单不受影响）`;
+    if (!act) $('#aiDesc').innerHTML = '说一句话建单。<b style="color:var(--gold-strong)">需先配置模型 →</b>';
   } catch (e) {}
   try {
     const m = await loadMaster();
@@ -280,8 +169,8 @@ function refreshAll() { refreshKPI(); refreshHistory(); }
       `供应商 <b>${c.suppliers || 0}</b>　客户 <b>${c.customers || 0}</b>　` +
       `商品 <b>${c.materials || 0}</b>　仓库 <b>${c.depots || 0}</b>　账户 <b>${c.accounts || 0}</b>`;
   } catch (e) {
-    $('#stat').innerHTML = `<span class="tag" style="background:var(--red-bg);color:#cf1322">ERP 连不上</span>　${esc(e.message)}
-      <div class="hint">启动命令：cd ~/Desktop/jshERP-suite/jshERP-latest/deploy && docker compose up -d --no-build</div>`;
+    $('#stat').innerHTML = `<span class="tag t-red">ERP 连不上</span>　${esc(e.message)}
+      <div class="hint">到「设置」检查连接，或启动：cd ~/Desktop/jshERP-suite/jshERP-latest/deploy && docker compose up -d --no-build</div>`;
     renderKPI(null);
   }
 })();

@@ -7,8 +7,6 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<div id="nav"></div>
-
 <div class="wrap">
 
   <div class="db-head">
@@ -32,8 +30,8 @@
       </h2>
       <div class="db-chart" id="trendChart">
         <div class="db-legend" style="margin-bottom:8px">
-          <span><i style="background:var(--brand-1)"></i>采购</span>
-          <span><i style="background:var(--green)"></i>销售</span>
+          <span><i style="background:var(--gold)"></i>采购</span>
+          <span><i style="background:var(--jade)"></i>销售</span>
         </div>
         <div id="trendBox" class="muted center" style="padding:40px 0">加载中…</div>
       </div>
@@ -89,7 +87,7 @@
 
 <script src="/common.js"></script>
 <script>
-$('#nav').innerHTML = topbar('/dashboard', '经营看板', '老板视角 · 只读 · 不改任何数据');
+shell('/dashboard');
 
 let D = null;          // 最新一次 /api/dashboard 数据
 let trendMode = 'month';
@@ -143,34 +141,34 @@ function trendSVG(buy, sell) {
   let grid = '', xl = '';
   for (let g = 0; g <= 4; g++) {
     const v = top * g / 4, y = Y(v);
-    grid += `<line x1="${L}" y1="${y}" x2="${W - R}" y2="${y}" stroke="#eef1f6" stroke-width="1"/>
-             <text x="${L - 7}" y="${y + 4}" text-anchor="end" font-size="${compact ? 10 : 11.5}" fill="#8c8c8c">${shortMoney(v)}</text>`;
+    grid += `<line x1="${L}" y1="${y}" x2="${W - R}" y2="${y}" stroke="#e9e4d4" stroke-width="1"/>
+             <text x="${L - 7}" y="${y + 4}" text-anchor="end" font-size="${compact ? 10 : 11.5}" fill="#98a08d">${shortMoney(v)}</text>`;
   }
   const xstep = buy.length > 8 ? 2 : 1;
   buy.forEach((p, i) => {
     if (i % xstep) return;
-    xl += `<text x="${X(i)}" y="${H - 10}" text-anchor="middle" font-size="${compact ? 10 : 11.5}" fill="#8c8c8c">${esc(String(p.x).slice(5))}月</text>`;
+    xl += `<text x="${X(i)}" y="${H - 10}" text-anchor="middle" font-size="${compact ? 10 : 11.5}" fill="#98a08d">${esc(String(p.x).slice(5))}月</text>`;
   });
 
   box.innerHTML = `
   <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block">
     <defs>
       <linearGradient id="gb" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#1a6fe8" stop-opacity=".22"/><stop offset="1" stop-color="#1a6fe8" stop-opacity="0"/>
+        <stop offset="0" stop-color="#c29a3b" stop-opacity=".22"/><stop offset="1" stop-color="#c29a3b" stop-opacity="0"/>
       </linearGradient>
       <linearGradient id="gs" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#52c41a" stop-opacity=".18"/><stop offset="1" stop-color="#52c41a" stop-opacity="0"/>
+        <stop offset="0" stop-color="#1e7d5a" stop-opacity=".18"/><stop offset="1" stop-color="#1e7d5a" stop-opacity="0"/>
       </linearGradient>
     </defs>
     ${grid}${xl}
-    ${ap(pb, T + ih)}<path d="${lp(pb)}" fill="none" stroke="#1a6fe8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-    ${ap(ps, T + ih)}<path d="${lp(ps)}" fill="none" stroke="#52c41a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
-    ${pb.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3.2" fill="#fff" stroke="#1a6fe8" stroke-width="2"/>`).join('')}
-    ${ps.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3.2" fill="#fff" stroke="#52c41a" stroke-width="2"/>`).join('')}
+    ${ap(pb, T + ih)}<path d="${lp(pb)}" fill="none" stroke="#c29a3b" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    ${ap(ps, T + ih)}<path d="${lp(ps)}" fill="none" stroke="#1e7d5a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    ${pb.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3.2" fill="#fff" stroke="#c29a3b" stroke-width="2"/>`).join('')}
+    ${ps.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="3.2" fill="#fff" stroke="#1e7d5a" stroke-width="2"/>`).join('')}
     <g id="tHov" style="display:none">
-      <line id="tHovLine" y1="${T}" y2="${T + ih}" stroke="#b9c6e0" stroke-dasharray="3 3"/>
-      <circle id="tHovB" r="4.5" fill="#1a6fe8" stroke="#fff" stroke-width="2"/>
-      <circle id="tHovS" r="4.5" fill="#52c41a" stroke="#fff" stroke-width="2"/>
+      <line id="tHovLine" y1="${T}" y2="${T + ih}" stroke="#c9bd9b" stroke-dasharray="3 3"/>
+      <circle id="tHovB" r="4.5" fill="#c29a3b" stroke="#fff" stroke-width="2"/>
+      <circle id="tHovS" r="4.5" fill="#1e7d5a" stroke="#fff" stroke-width="2"/>
     </g>
     <rect x="${L}" y="${T}" width="${iw}" height="${ih}" fill="transparent" id="tHit"/>
   </svg>
@@ -220,18 +218,18 @@ function dailySVG(daily, month) {
   let grid = '', bars = '', xl = '';
   for (let g = 0; g <= 4; g++) {
     const v = top * g / 4, y = Y(v);
-    grid += `<line x1="${L}" y1="${y}" x2="${W - R}" y2="${y}" stroke="#eef1f6"/>
-             <text x="${L - 7}" y="${y + 4}" text-anchor="end" font-size="${compact ? 10 : 11.5}" fill="#8c8c8c">${shortMoney(v)}</text>`;
+    grid += `<line x1="${L}" y1="${y}" x2="${W - R}" y2="${y}" stroke="#e9e4d4"/>
+             <text x="${L - 7}" y="${y + 4}" text-anchor="end" font-size="${compact ? 10 : 11.5}" fill="#98a08d">${shortMoney(v)}</text>`;
   }
   daily.forEach((p, i) => {
     const cx = L + gw * i + gw / 2;
     const bh = b => b > 0 ? (T + ih - Y(b)) : 0;
     bars += `<g class="db-bar" data-i="${i}">
-      <rect x="${(cx - bw - 1).toFixed(1)}" y="${(T + ih - bh(p.buy)).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh(p.buy).toFixed(1)}" rx="2" fill="#1a6fe8"><title>${month}-${p.x} 采购 ￥${money(p.buy)}</title></rect>
-      <rect x="${(cx + 1).toFixed(1)}" y="${(T + ih - bh(p.sell)).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh(p.sell).toFixed(1)}" rx="2" fill="#52c41a"><title>${month}-${p.x} 销售 ￥${money(p.sell)}</title></rect>
+      <rect x="${(cx - bw - 1).toFixed(1)}" y="${(T + ih - bh(p.buy)).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh(p.buy).toFixed(1)}" rx="2" fill="#c29a3b"><title>${month}-${p.x} 采购 ￥${money(p.buy)}</title></rect>
+      <rect x="${(cx + 1).toFixed(1)}" y="${(T + ih - bh(p.sell)).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh(p.sell).toFixed(1)}" rx="2" fill="#1e7d5a"><title>${month}-${p.x} 销售 ￥${money(p.sell)}</title></rect>
     </g>`;
     if (n <= 16 || i % Math.ceil(n / 12) === 0 || i === n - 1)
-      xl += `<text x="${cx}" y="${H - 10}" text-anchor="middle" font-size="${compact ? 9.5 : 11}" fill="#8c8c8c">${p.x}</text>`;
+      xl += `<text x="${cx}" y="${H - 10}" text-anchor="middle" font-size="${compact ? 9.5 : 11}" fill="#98a08d">${p.x}</text>`;
   });
 
   box.innerHTML = `
@@ -273,7 +271,7 @@ function renderKPI() {
   sub(cards[1], `${cards[1].querySelector('.sub').textContent}　${deltaChip(m.sell, prevSell, 'up-good')}`);
   sub(cards[2], deltaChip(m.profit, prevProfit, 'up-good'));
   if ((D.stock.negative || 0) > 0)
-    sub(cards[3], `${cards[3].querySelector('.sub').textContent} · <span style="color:#cf1322;font-weight:600">负库存 ${D.stock.negative} 种</span>`);
+    sub(cards[3], `${cards[3].querySelector('.sub').textContent} · <span style="color:#b5532f;font-weight:600">负库存 ${D.stock.negative} 种</span>`);
 }
 
 function kpi(cls, label, val, subTxt) {
@@ -330,9 +328,9 @@ function renderGoods() {
           <td title="${esc(r.name)}">${esc(r.name)}${r.unit ? `<span class="muted" style="font-size:12px"> / ${esc(r.unit)}</span>` : ''}</td>
           <td class="num">${r.in_qty || '—'}</td>
           <td class="num">${r.out_qty || '—'}</td>
-          <td class="num" style="color:${r.stock <= 0 ? '#fa8c16' : 'inherit'};font-weight:600">${r.stock}</td>
+          <td class="num" style="color:${r.stock <= 0 ? '#a87f26' : 'inherit'};font-weight:600">${r.stock}</td>
           <td><div class="hbar-row" style="padding:0">
-            <span class="track" style="height:10px"><span class="fill" style="width:${(r.value / maxV * 100).toFixed(1)}%;background:linear-gradient(90deg,#ffd591,#fa8c16)"></span></span>
+            <span class="track" style="height:10px"><span class="fill" style="width:${(r.value / maxV * 100).toFixed(1)}%;background:linear-gradient(90deg,var(--gold-soft),var(--gold-strong))"></span></span>
             <span class="amt" style="width:auto">${r.value > 0 ? '￥' + money(r.value) : '—'}</span>
           </div></td>
         </tr>`).join('')}
@@ -347,17 +345,17 @@ function renderStock() {
   $('#stockSum').innerHTML =
     `共 <b>${s.kinds || 0}</b> 种商品　` +
     `<span class="tag tag-new">低库存 ${s.low || 0}</span>` +
-    ((s.negative || 0) > 0 ? `　<span class="tag" style="background:var(--red-bg);color:#cf1322">负库存 ${s.negative}</span>` : '');
+    ((s.negative || 0) > 0 ? `　<span class="tag" style="background:var(--rust-bg);color:#b5532f">负库存 ${s.negative}</span>` : '');
   const box = $('#stockBox');
   if (!list.length) { box.innerHTML = '<div class="muted center" style="padding:26px 0">库存都很充足 👍</div>'; return; }
   box.innerHTML = list.slice(0, 9).map(r => {
     const ratio = Math.max(0, Math.min(100, r.stock / Math.max(r.threshold, 1) * 100));
-    const color = r.stock < 0 ? '#ff4d4f' : (r.stock === 0 ? '#fa8c16' : '#ffc53d');
+    const color = r.stock < 0 ? '#b5532f' : (r.stock === 0 ? '#a87f26' : '#e8c97a');
     return `
     <div class="hbar-row">
       <span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
       <span class="track" style="height:12px"><span class="fill" style="width:${ratio.toFixed(1)}%;background:${color}"></span></span>
-      <span class="amt" style="color:${r.stock < 0 ? '#ff4d4f' : 'inherit'};font-weight:600">${r.stock}<span class="muted" style="font-weight:400;font-size:12px"> ${esc(r.unit || '')}</span></span>
+      <span class="amt" style="color:${r.stock < 0 ? '#b5532f' : 'inherit'};font-weight:600">${r.stock}<span class="muted" style="font-weight:400;font-size:12px"> ${esc(r.unit || '')}</span></span>
     </div>`;
   }).join('') +
   (list.length > 9 ? `<div class="muted center" style="font-size:13px;padding-top:6px">还有 ${list.length - 9} 种未列出…</div>` : '');
@@ -378,15 +376,15 @@ function renderParties() {
         </div>`).join('')
         : '<div class="muted" style="font-size:13.5px;padding:2px 0 4px">暂无记录</div>'}
     </div>`;
-  box.innerHTML = sec('供应商 · 累计采购', p.suppliers || [], 'linear-gradient(90deg,#69b4ff,#1a6fe8)') +
-                  sec('客户 · 累计销售', p.customers || [], 'linear-gradient(90deg,#8fdd70,#52c41a)');
+  box.innerHTML = sec('供应商 · 累计采购', p.suppliers || [], 'linear-gradient(90deg,var(--gold-soft),var(--gold-strong))') +
+                  sec('客户 · 累计销售', p.customers || [], 'linear-gradient(90deg,var(--jade-soft),var(--jade))');
 }
 
 /* ---------- 往来欠款 + 账龄 ---------- */
 function renderDebt() {
   const box = $('#debtBox');
-  const AGING_COLORS = [' #ffd666', '#ff9c6e', '#ff4d4f'];
-  const AGING_COLORS2 = ['#91caff', '#69b1ff', '#1677ff'];
+  const AGING_COLORS = ['#e8c97a', '#d99a4e', '#b5532f'];
+  const AGING_COLORS2 = ['#b8cfae', '#7fb08f', '#1e7d5a'];
   const sec = (title, list, total, topList, colors, emptyTip) => {
     const maxA = Math.max(1, ...list.map(x => x.amount));
     const sum = list.reduce((a, x) => a + x.amount, 0) || 1;
@@ -440,7 +438,7 @@ function renderRecent() {
           <td style="font-family:ui-monospace,Menlo,monospace;font-size:13.5px">${esc(r.number)}</td>
           <td>${esc(r.party)}</td>
           <td class="muted">${esc(r.goods)}</td>
-          <td class="num"><b>￥${money(r.total)}</b>${r.debt > 0 ? `<br><span class="hint" style="color:#fa8c16">未结 ￥${money(r.debt)}</span>` : ''}</td>
+          <td class="num"><b>￥${money(r.total)}</b>${r.debt > 0 ? `<br><span class="hint" style="color:#a87f26">未结 ￥${money(r.debt)}</span>` : ''}</td>
           <td>${r.status === '已审核' ? '<span class="typ-pill t-green">已审核</span>' : '<span class="typ-pill t-orange">草稿</span>'}</td>
         </tr>`;
       }).join('')
