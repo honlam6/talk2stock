@@ -20,6 +20,7 @@
     POST   /api/resolve           → draft → 预览（只读）+ 确认令牌
     POST   /api/commit            → draft + 确认令牌 → 真正写入 ERP（无令牌一律拒绝）
     GET    /api/master            → 主数据（供应商/客户/商品/仓库/账户/单位）
+    GET    /api/dashboard         → 经营看板全量数据（?lite=1 为工作台 KPI 精简版）
     GET    /api/history           → 最近录单（审计日志 commit_ok 的只读视图）
 
 所有 /api 响应均为 UTF-8 JSON；任何异常都被捕获成
@@ -284,9 +285,14 @@ def api_commit(_q, body):
     if res.get("ok"):
         diff = gatemod.diff_drafts(meta.get("draft_resolved") or {}, d)
         gatemod.log_write(meta, d, res, diff=diff, source=source, raw_text=raw_text)
-    # 写库后主数据可能变了，清缓存让下次预览拿到最新
+    # 写库后主数据/单据可能变了，清缓存让下次预览和看板拿到最新
     try:
         erp.invalidate("")
+    except Exception:
+        pass
+    try:
+        from core import report as reportmod
+        reportmod.invalidate()
     except Exception:
         pass
     return res
@@ -305,9 +311,10 @@ def api_ask(_q, body):
     return askmod.ask(text, erp)
 
 
-def api_dashboard(_q, _body):
+def api_dashboard(q, _body):
     from core import report as reportmod
-    return reportmod.dashboard(_erp())
+    lite = (q.get("lite") or [""])[0].strip().lower() in ("1", "true", "yes")
+    return reportmod.dashboard(_erp(), lite=lite)
 
 
 def api_history(q, _body):

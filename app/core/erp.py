@@ -10,10 +10,12 @@
 """
 import hashlib
 import json
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 TIMEOUT = 30
 
@@ -49,6 +51,23 @@ class ErpError(Exception):
     pass
 
 
+def _safe(fn):
+    try:
+        return fn()
+    except Exception:
+        return None
+
+
+def parallel(fns, workers=6):
+    """并行执行一组无参函数，保持顺序；单个失败该位为 None，不中断其它。
+    纯标准库（concurrent.futures），用于把对 ERP 的多次独立请求并行化。"""
+    fns = list(fns)
+    if len(fns) <= 1:
+        return [_safe(fn) for fn in fns]
+    with ThreadPoolExecutor(max_workers=min(workers, len(fns))) as ex:
+        return list(ex.map(_safe, fns))
+
+
 class JshERP:
     def __init__(self, base="http://localhost:9999/jshERP-boot", user="jsh", password="123456"):
         self.base = base.rstrip("/")
@@ -57,6 +76,10 @@ class JshERP:
         self.token = None
         self._cache = {}
         self._cache_at = {}
+        self._login_lock = threading.Lock()
+        self._stock_tbl = None          # (条码 → 仓库 → 净库存) 聚合表，见 stock_table()
+        self._stock_tbl_at = 0.0
+        self._stock_lock = threading.Lock()
 
     # ---------- 底层请求 ----------
     def _req(self, path, method="GET", data=None, retry_login=True):
@@ -90,16 +113,20 @@ class JshERP:
         return j
 
     def login(self):
-        pwd = hashlib.md5(self.password.encode()).hexdigest()
-        self.token = None
-        j = self._req("/user/login", "POST",
-                      {"loginName": self.user, "password": pwd}, retry_login=False)
-        tok = (j.get("data") or {}).get("token")
-        if j.get("code") == 200 and tok:
-            self.token = tok
-            self._cache.clear()
-            return True
-        raise ErpError(f"ERP 登录失败：{j.get('data', {}).get('msgTip') or j}")
+        # 加锁：ThreadingHTTPServer 下多线程共用本实例，token 过期时
+        # 并发 401 重登会互相踩踏（后者可能顶掉前者刚拿到的会话）
+        with self._login_lock:
+            pwd = hashlib.md5(self.password.encode()).hexdigest()
+            self.token = None
+            j = self._req("/user/login", "POST",
+                          {"loginName": self.user, "password": pwd}, retry_login=False)
+            tok = (j.get("data") or {}).get("token")
+            if j.get("code") == 200 and tok:
+                self.token = tok
+                self._cache.clear()
+                self._stock_tbl = None
+                return True
+            raise ErpError(f"ERP 登录失败：{j.get('data', {}).get('msgTip') or j}")
 
     def ensure_login(self):
         if not self.token:
@@ -126,6 +153,8 @@ class JshERP:
             if k.startswith(prefix):
                 self._cache.pop(k, None)
                 self._cache_at.pop(k, None)
+        # 单据/明细可能变了，库存聚合表一并作废
+        self._stock_tbl = None
 
     # ---------- 主数据读取 ----------
     def suppliers(self, stype=None):
@@ -336,68 +365,104 @@ class JshERP:
         return row, created
 
     # ---------- 库存 ----------
+    # 分仓库存的扫描口径（type, subType, 方向），与出入库明细一致
+    STOCK_SCAN = [
+        ("入库", ["采购", "其它", "盘点录入", "销售退货"], 1.0),
+        ("出库", ["销售", "采购退货", "其它", "调拨"], -1.0),
+    ]
+
+    def stock_table(self, max_age=60):
+        """一次性把全部出入库明细拉平，按 (条码 → 仓库 → 净库存) 聚合。
+
+        旧实现 _stock_by_depot 是 O(仓 × 子类型 × 单据) 次串行请求
+        （按仓循环 × 每单一次 getDetailList，5 仓就能把一次库存问答拖到 10s+）。
+        这里固定为 (子类型组 + 单据数) 次并行请求，结果缓存 60s，
+        写入后由 invalidate() 清空。⚠️ getDetailList 的明细行没有 materialId，
+        统一用 barCode（= BC<商品id>）锁定商品。
+        """
+        now = time.time()
+        if self._stock_tbl is not None and now - self._stock_tbl_at < max_age:
+            return self._stock_tbl
+        with self._stock_lock:
+            if self._stock_tbl is not None and time.time() - self._stock_tbl_at < max_age:
+                return self._stock_tbl
+            sweeps = [(btype, st, sign)
+                      for btype, subs, sign in self.STOCK_SCAN for st in subs]
+            bill_lists = parallel([
+                lambda bt=bt, st=st: self.bills(btype=bt, sub_type=st, page_size=500)
+                for bt, st, _ in sweeps
+            ], workers=8)
+            sign_of = {(bt, st): sign for bt, st, sign in sweeps}
+            all_bills_ = []
+            for rows in bill_lists:
+                if rows:
+                    all_bills_.extend(rows)
+            details = parallel([
+                lambda b=b: self._bill_details(b.get("id")) for b in all_bills_
+            ], workers=8)
+            tbl = {}
+            for b, rows in zip(all_bills_, details):
+                sign = sign_of.get((b.get("type") or "", b.get("subType") or ""), 0.0)
+                if not sign:
+                    continue
+                for r in rows or []:
+                    bc = str(r.get("barCode") or "")
+                    if not bc:
+                        continue
+                    try:
+                        qty = sign * float(r.get("operNumber") or 0)
+                    except Exception:
+                        continue
+                    depot = str(r.get("depotId") or "")
+                    tbl.setdefault(bc, {}).setdefault(depot, 0.0)
+                    tbl[bc][depot] += qty
+            self._stock_tbl = tbl
+            self._stock_tbl_at = time.time()
+            return tbl
+
+    def _bill_details(self, header_id):
+        try:
+            j = self._req(f"/depotItem/getDetailList?headerId={header_id}")
+            return (j.get("data") or {}).get("rows") or []
+        except Exception:
+            return []
+
+    def _barcode_of(self, material_id):
+        """商品条码（BC<id>），从 materials 列表行取，不额外发请求。"""
+        for m in self.materials():
+            if str(m.get("id")) == str(material_id):
+                return str(m.get("mBarCode") or m.get("barCode") or "")
+        return ""
+
     def stock(self, material_id, depot_id=None):
         """返回某商品（指定仓库时按仓库）的实时库存数量。
 
-        ⚠️ 版本兼容：本环境 /depotItem/getStockByParam 接口返回 404（路径不存在），
-        旧实现 catch 异常后返回 None，导致 AI 录入预览把库存显示成 0（假 0）。
-        真实库存直接挂在 /material/list 每行的 `stock` 字段上（ERP 已算好），
-        优先用它；需要按仓库维度时，material 行不带分仓数据，降级到遍历出入库明细累加。
+        ⚠️ 版本兼容：/depotItem/getStockByParam 在本环境 404，
+        material 列表行自带全仓合计 stock 字段；分仓数据用 stock_table()
+        聚合表查（一次拉平 + 缓存），不再逐仓逐单扫描。
         """
         try:
-            # 1) 指定仓库：material 列表无分仓库存，遍历该仓出入库明细累加
             if depot_id:
-                return self._stock_by_depot(material_id, depot_id)
-            # 2) 不指定仓库：直接用 material 行的 stock 字段（快且准）
+                bc = self._barcode_of(material_id)
+                if not bc:
+                    return None
+                per_depot = self.stock_table().get(bc) or {}
+                total = sum(v for k, v in per_depot.items() if str(k) == str(depot_id))
+                return float(total)
             rows = self.materials()
             for m in rows:
                 if str(m.get("id")) == str(material_id):
                     s = m.get("stock")
                     if s is not None:
                         return float(s)
-            # 没在 material 列表里找到（理论上不该发生），降级到全仓累加
-            return self._stock_by_depot(material_id, None)
+            # material 行没有 stock 字段（理论上不该发生），降级到全仓聚合
+            bc = self._barcode_of(material_id)
+            if not bc:
+                return None
+            per_depot = self.stock_table().get(bc) or {}
+            return float(sum(per_depot.values()))
         except Exception:
             return None
-
-    def _stock_by_depot(self, material_id, depot_id=None):
-        """遍历所有出入库明细，按 materialId 累加净库存（入库 +、出库 -）。"""
-        net = 0.0
-        # 明细行没有 materialId 字段，改用 mBarCode 锁定商品
-        target_bc = None
-        for m in self.materials():
-            if str(m.get("id")) == str(material_id):
-                target_bc = str(m.get("mBarCode") or m.get("barCode") or "")
-                break
-        for btype, subs, sign in [
-            ("入库", ["采购", "其它", "盘点录入", "销售退货"], 1.0),
-            ("出库", ["销售", "采购退货", "其它", "调拨"], -1.0),
-        ]:
-            for st in subs:
-                try:
-                    bills = self.bills(btype=btype, sub_type=st, page_size=500)
-                except Exception:
-                    continue
-                for b in bills:
-                    if depot_id and str(b.get("depotId")) != str(depot_id):
-                        # 单头 depot 不匹配则明细大概率不匹配，但仍可取明细 depotId 兜底
-                        pass
-                    try:
-                        det = self._req(f"/depotItem/getDetailList?headerId={b.get('id')}")
-                        rows = (det.get("data") or {}).get("rows") or []
-                    except Exception:
-                        rows = []
-                    for r in rows:
-                        bc = str(r.get("barCode") or "")
-                        if target_bc and bc != target_bc:
-                            continue
-                        if depot_id and str(r.get("depotId")) != str(depot_id):
-                            continue
-                        try:
-                            net += sign * float(r.get("operNumber") or 0)
-                        except Exception:
-                            pass
-        return net
 
     # ---------- 建单 ----------
     def build_number(self, sub_type):
@@ -482,33 +547,37 @@ class JshERP:
         """查单据。
         ⚠️ subType 必传！后端 getBillCategory() 对 subType 直接 .equals()，
         为 null 时抛 NullPointerException → 返回 code:300 数据查询异常。
-        不指定 sub_type 时自动遍历该 type 下所有子类型。"""
+        不指定 sub_type 时自动遍历该 type 下所有子类型（并行请求）。"""
         search = dict(extra)
         if btype:
             search["type"] = btype
         if sub_type:
             search["subType"] = sub_type
             return self.list("/depotHead/list", search, page_size=page_size, use_cache=False)
-        # 未指定 subType：遍历全部子类型合并
+        # 未指定 subType：并行遍历全部子类型合并
         subs = SUB_TYPES_OF.get(btype) if btype else ALL_SUB_TYPES
+        results = parallel([
+            lambda st=st: self.list("/depotHead/list", dict(search, subType=st),
+                                    page_size=page_size, use_cache=False)
+            for st in (subs or ALL_SUB_TYPES)
+        ])
         out = []
-        for st in (subs or ALL_SUB_TYPES):
-            s = dict(search, subType=st)
-            try:
-                out.extend(self.list("/depotHead/list", s, page_size=page_size, use_cache=False))
-            except Exception:
-                continue
+        for rows in results:
+            if rows:
+                out.extend(rows)
         return out
 
     def all_bills(self, page_size=200, **extra):
-        """全部单据（遍历所有 type/subType 组合）。"""
+        """全部单据（并行遍历所有 type/subType 组合）。"""
+        results = parallel([
+            lambda st=st: self.list("/depotHead/list", dict(extra, subType=st),
+                                    page_size=page_size, use_cache=False)
+            for st in ALL_SUB_TYPES
+        ], workers=8)
         out = []
-        for st in ALL_SUB_TYPES:
-            try:
-                out.extend(self.list("/depotHead/list", dict(extra, subType=st),
-                                     page_size=page_size, use_cache=False))
-            except Exception:
-                continue
+        for rows in results:
+            if rows:
+                out.extend(rows)
         seen, uniq = set(), []
         for b in out:
             if b.get("id") not in seen:

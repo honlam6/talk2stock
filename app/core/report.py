@@ -4,11 +4,12 @@
 单据字段（实测）：type/subType/number/operTime/organName/totalPrice/
 changeAmount/debt/status/materialsList/materialCount/accountName
 """
+import threading
 import time
 import urllib.parse
 from collections import defaultdict
 
-from .erp import get_client
+from .erp import get_client, parallel
 
 # 计入"采购/销售"口径的子类型
 BUY_SUBS = {"采购"}
@@ -102,10 +103,11 @@ def summary(erp=None, bills=None):
     }
 
 
-def recent_bills(erp=None, limit=12):
-    """最近单据流水。"""
+def recent_bills(erp=None, limit=12, bills=None):
+    """最近单据流水。bills 可传入已取好的单据列表（避免重复拉全量）。"""
     erp = erp or get_client()
-    bills = [b for b in erp.all_bills() if str(b.get("deleteFlag")) != "1"]
+    bills = bills if bills is not None else erp.all_bills()
+    bills = [b for b in bills if str(b.get("deleteFlag")) != "1"]
     bills.sort(key=lambda b: str(b.get("operTime") or ""), reverse=True)
     out = []
     for b in bills[:limit]:
@@ -171,8 +173,8 @@ def official_stats(erp=None):
     """用 jshERP 官方统计接口取金额，比自己遍历单据更权威。
     实测可用：/depotItem/buyIn（采购）/saleOut（销售）/buyOrSalePrice（月趋势）
              /depotItem/getInOutStockCountMoney（库存货值）/account/getStatistics
+    13 个请求互相独立，一次并行发出（原先串行，随接口数线性变慢）。
     """
-    import urllib.parse
     erp = erp or get_client()
 
     def q(path, params):
@@ -193,10 +195,27 @@ def official_stats(erp=None):
         return {"beginTime": b + " 00:00:00", "endTime": end,
                 "currentPage": 1, "pageSize": 1, "materialParam": "", "organId": ""}
 
-    out = {}
+    jobs = []
     for scope, begin in (("today", today), ("month", m0), ("year", y0)):
-        buy = q("/depotItem/buyIn", rng(begin)) or {}
-        sell = q("/depotItem/saleOut", rng(begin)) or {}
+        jobs.append((scope + "|buy", "/depotItem/buyIn", rng(begin)))
+        jobs.append((scope + "|sell", "/depotItem/saleOut", rng(begin)))
+    jobs.append(("trend", "/depotItem/buyOrSalePrice", {}))
+    jobs.append(("stock_money", "/depotItem/getInOutStockCountMoney",
+                 {"beginTime": y0 + " 00:00:00", "endTime": end,
+                  "materialParam": "", "depotId": ""}))
+    jobs.append(("account", "/account/getStatistics", {"name": "", "serialNo": ""}))
+    jobs.append(("wait", "/depotHead/waitBillCount", {}))
+    jobs.append(("need_recv", "/depotHead/getNeedCount", {"type": "收款"}))
+    jobs.append(("need_pay", "/depotHead/getNeedCount", {"type": "付款"}))
+
+    results = parallel([lambda p=path, pa=params: q(p, pa) for _, path, params in jobs],
+                       workers=8)
+    d = {jobs[i][0]: results[i] for i in range(len(jobs))}
+
+    out = {}
+    for scope in ("today", "month", "year"):
+        buy = d[scope + "|buy"] or {}
+        sell = d[scope + "|sell"] or {}
         out[scope] = {
             "buy": _f(buy.get("realityPriceTotal")),
             "sell": _f(sell.get("realityPriceTotal")),
@@ -205,32 +224,29 @@ def official_stats(erp=None):
         }
         out[scope]["profit"] = round(out[scope]["sell"] - out[scope]["buy"], 2)
 
-    trend = q("/depotItem/buyOrSalePrice", {}) or {}
+    trend = d["trend"] or {}
     out["trend"] = {
         "buy": trend.get("buyPriceList") or [],
         "sell": trend.get("salePriceList") or [],
     }
 
-    stock_money = q("/depotItem/getInOutStockCountMoney",
-                    {"beginTime": y0 + " 00:00:00", "endTime": end,
-                     "materialParam": "", "depotId": ""}) or {}
+    stock_money = d["stock_money"] or {}
     out["stock_money"] = {
         "total_stock": _f(stock_money.get("totalStock")),
         "total_value": _f(stock_money.get("totalCount")),
     }
 
-    accs = q("/account/getStatistics", {"name": "", "serialNo": ""}) or {}
+    accs = d["account"] or {}
     out["account"] = {
         "current": _f(accs.get("allCurrentAmount")),
         "month": _f(accs.get("allMonthAmount")),
     }
 
-    wait = q("/depotHead/waitBillCount", {}) or {}
+    wait = d["wait"] or {}
     out["wait_bills"] = int(wait.get("total") or 0)
 
-    for t in ("收款", "付款"):
-        d = q("/depotHead/getNeedCount", {"type": t}) or {}
-        out["need_" + ("recv" if t == "收款" else "pay")] = int(d.get("needCount") or 0)
+    out["need_recv"] = int((d["need_recv"] or {}).get("needCount") or 0)
+    out["need_pay"] = int((d["need_pay"] or {}).get("needCount") or 0)
 
     return out
 
@@ -390,9 +406,8 @@ def account_breakdown(erp=None):
     return out
 
 
-def dashboard(erp=None):
-    """看板一次性数据。"""
-    erp = erp or get_client()
+def _dashboard_full(erp):
+    """完整看板数据（原 dashboard 逻辑）。"""
     try:
         bills = [b for b in erp.all_bills() if str(b.get("deleteFlag")) != "1"]
     except Exception as e:
@@ -406,7 +421,7 @@ def dashboard(erp=None):
     except Exception:
         s["official"] = {}
     try:
-        s["recent"] = recent_bills(erp)
+        s["recent"] = recent_bills(erp, bills=bills)   # 复用已取好的单据，不再全量重拉
     except Exception:
         s["recent"] = []
     try:
@@ -443,6 +458,60 @@ def dashboard(erp=None):
     except Exception:
         s["master"] = {}
     return s
+
+
+def _dashboard_lite(erp):
+    """工作台 KPI 精简版：核心指标 + 最近单据 + 预警计数，
+    不跑趋势/账龄/货值等图表数据，接口数约为完整版的一半。"""
+    try:
+        bills = [b for b in erp.all_bills() if str(b.get("deleteFlag")) != "1"]
+    except Exception as e:
+        return {"ok": False, "message": "统计失败：%s" % e}
+    out = {"ok": True}
+    try:
+        s = summary(erp, bills=bills)
+        for k in ("date", "month", "today", "month_stat", "all", "bill_count",
+                  "debt_pay", "debt_recv", "debt_pay_total", "debt_recv_total"):
+            out[k] = s.get(k)
+    except Exception:
+        pass
+    try:
+        out["recent"] = recent_bills(erp, limit=6, bills=bills)
+    except Exception:
+        out["recent"] = []
+    try:
+        ov = stock_overview(erp)
+        out["stock"] = {k: ov.get(k) for k in ("kinds", "negative", "low")}
+        out["stock"]["warn_list"] = (ov.get("warn_list") or [])[:5]
+    except Exception:
+        out["stock"] = {"kinds": 0, "negative": 0, "low": 0, "warn_list": []}
+    return out
+
+
+_DASH_TTL = 30
+_dash_cache = {"full": None, "lite": None}
+_dash_lock = threading.Lock()
+
+
+def invalidate():
+    """写入后清看板聚合缓存（server 在 commit 成功后调用）。"""
+    with _dash_lock:
+        _dash_cache["full"] = None
+        _dash_cache["lite"] = None
+
+
+def dashboard(erp=None, lite=False):
+    """看板数据（带 30s TTL 缓存；lite=True 回工作台 KPI 精简版）。"""
+    erp = erp or get_client()
+    key = "lite" if lite else "full"
+    with _dash_lock:
+        hit = _dash_cache[key]
+        if hit and time.time() - hit["at"] < _DASH_TTL:
+            return hit["data"]
+    data = _dashboard_lite(erp) if lite else _dashboard_full(erp)
+    with _dash_lock:
+        _dash_cache[key] = {"at": time.time(), "data": data}
+    return data
 
 
 if __name__ == "__main__":
