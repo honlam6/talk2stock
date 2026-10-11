@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>设置 · Talk2Stock</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap" style="max-width:780px">
+  <div id="ph"></div>
+
+  <!-- ERP 连接 -->
+  <div class="card">
+    <h2><span class="bar"></span>ERP 连接
+      <span style="flex:1"></span>
+      <span id="erpBadge"></span>
+    </h2>
+    <div class="hint" style="margin:-6px 0 14px">本系统只连你自己部署的 jshERP；密码只存在本机服务端，不会外发。</div>
+    <div class="grid" style="grid-template-columns:1fr">
+      <div class="field">
+        <label>ERP 地址</label>
+        <input id="e_base" type="text" placeholder="http://localhost:9999/jshERP-boot">
+      </div>
+    </div>
+    <div class="grid">
+      <div class="field">
+        <label>用户名</label>
+        <input id="e_user" type="text" placeholder="jsh">
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <input id="e_pass" type="password" placeholder="留空表示不修改">
+      </div>
+    </div>
+    <div class="row-btns">
+      <button class="btn btn-primary" id="erpSave">保存并测试连接</button>
+      <a class="btn btn-ghost" href="http://localhost:8080" target="_blank" rel="noopener">打开原版 ERP ↗</a>
+      <span class="hint" id="erpMsg" style="flex:1"></span>
+    </div>
+    <div id="masterStat" class="hint" style="margin-top:10px"></div>
+  </div>
+
+  <!-- LLM 档案 -->
+  <div class="card">
+    <h2><span class="bar"></span>AI 模型档案</h2>
+    <div class="hint" style="margin:-6px 0 14px">支持任何 OpenAI 兼容接口（DeepSeek / 通义 / Moonshot / 本地 Ollama / 自建网关）。密钥只存本机服务端。</div>
+
+    <div id="profList"></div>
+
+    <details class="fold" id="addFold">
+      <summary>＋ 添加 / 编辑模型</summary>
+      <div class="fold-body">
+        <div class="grid">
+          <div class="field"><label>显示名</label><input id="p_name" placeholder="例如 DeepSeek"></div>
+          <div class="field"><label>模型名</label><input id="p_model" placeholder="deepseek-chat"></div>
+        </div>
+        <div class="grid" style="grid-template-columns:1fr">
+          <div class="field"><label>Base URL</label><input id="p_base" placeholder="https://api.deepseek.com/v1"></div>
+        </div>
+        <div class="grid">
+          <div class="field"><label>API Key</label><input id="p_key" type="password" placeholder="sk-…（编辑时留空表示不修改）"></div>
+          <div class="field"><label>temperature</label><input id="p_temp" type="number" step="0.1" value="0"></div>
+        </div>
+        <div class="row-btns">
+          <button class="btn btn-ghost" id="p_test">测试连接</button>
+          <button class="btn btn-primary" id="p_save">保存</button>
+          <span class="hint" id="p_msg"></span>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <div class="foot-note">Talk2Stock · 对话式进销存智能体 ｜ 数据全部留在本地与自有 ERP</div>
+</div>
+
+<script src="/common.js"></script>
+<script>
+shell('/settings');
+$('#ph').innerHTML = pageHead('SETTINGS', '设置', 'ERP 连接 · AI 模型档案');
+
+let CFG = null, editKey = null;
+
+// ---------- ERP 连接 ----------
+async function loadCfg() {
+  const r = await api('/api/config');
+  CFG = r.config || r;
+  const erp = CFG.erp || {};
+  $('#e_base').value = erp.base || '';
+  $('#e_user').value = erp.user || '';
+  $('#e_pass').value = '';
+  renderProfs();
+  return CFG;
+}
+
+$('#erpSave').onclick = async () => {
+  const btn = $('#erpSave');
+  btn.disabled = true; btn.classList.add('loading');
+  $('#erpMsg').textContent = '保存并测试登录中…';
+  try {
+    const r = await api('/api/config/erp', { method: 'POST', body: {
+      base: $('#e_base').value.trim(),
+      user: $('#e_user').value.trim(),
+      pass: $('#e_pass').value,
+    }});
+    $('#erpMsg').innerHTML = r.ok
+      ? '<span class="hint ok" style="margin:0">✓ ' + esc(r.message) + '</span>'
+      : '<span class="hint new" style="margin:0">⚠ ' + esc(r.message) + '</span>';
+    toast(r.message, r.ok ? 'ok' : 'warn');
+    refreshMasterStat();
+  } catch (e) {
+    $('#erpMsg').textContent = e.message;
+    toast(e.message, 'bad');
+  } finally {
+    btn.disabled = false; btn.classList.remove('loading');
+  }
+};
+
+async function refreshMasterStat() {
+  const b = $('#erpBadge');
+  try {
+    const m = await loadMaster(true);
+    const c = m.counts || {};
+    b.innerHTML = '<span class="tag tag-ok">已连接</span>';
+    $('#masterStat').innerHTML =
+      `主数据：供应商 <b>${c.suppliers || 0}</b> · 客户 <b>${c.customers || 0}</b> · 商品 <b>${c.materials || 0}</b> · 仓库 <b>${c.depots || 0}</b> · 账户 <b>${c.accounts || 0}</b>`;
+  } catch (e) {
+    b.innerHTML = '<span class="tag t-red">未连接</span>';
+    $('#masterStat').textContent = '连接失败：' + e.message;
+  }
+}
+
+// ---------- LLM 档案 ----------
+function renderProfs() {
+  const llm = (CFG && CFG.llm) || { profiles: {} };
+  const ps = llm.profiles || {};
+  const keys = Object.keys(ps);
+  $('#profList').innerHTML = keys.length ? keys.map(k => {
+    const p = ps[k], on = llm.active === k;
+    return `<div class="prof-item${on ? ' active' : ''}">
+      <div class="info">
+        <div class="nm">${esc(p.name || k)} ${on ? '<span class="tag tag-ok">使用中</span>' : ''}</div>
+        <div class="dt">${esc(p.model || '')} · ${esc(p.base_url || '')} · Key ${esc(p.api_key || '未设置')}</div>
+      </div>
+      <div class="row-btns" style="margin:0">
+        ${on ? '' : `<button class="btn btn-sm" data-use="${esc(k)}">启用</button>`}
+        <button class="btn btn-sm btn-ghost" data-edit="${esc(k)}">编辑</button>
+        <button class="btn btn-sm btn-danger" data-del="${esc(k)}">删除</button>
+      </div>
+    </div>`;
+  }).join('') : '<div class="muted" style="padding:6px 0 12px">还没有模型档案，展开下面「添加」新建一个。</div>';
+}
+
+$('#profList').onclick = async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  try {
+    if (b.dataset.use) {
+      const r = await api('/api/config/llm', { method: 'POST', body: { action: 'activate', key: b.dataset.use } });
+      if (!r.ok) { toast(r.message || '切换失败', 'bad'); return; }
+      await loadCfg(); toast('已切换');
+    } else if (b.dataset.del) {
+      if (!confirm('确定删除这个模型档案？')) return;
+      const r = await api('/api/config/llm?key=' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
+      if (!r.ok) { toast(r.message || '删除失败', 'bad'); return; }
+      await loadCfg(); toast('已删除');
+    } else if (b.dataset.edit) {
+      const p = (CFG.llm.profiles || {})[b.dataset.edit] || {};
+      editKey = b.dataset.edit;
+      $('#p_name').value = p.name || ''; $('#p_base').value = p.base_url || '';
+      $('#p_model').value = p.model || ''; $('#p_temp').value = p.temperature || 0;
+      $('#p_key').value = '';
+      $('#addFold').open = true;
+      $('#p_msg').textContent = '正在编辑：' + (p.name || editKey) + '（Key 留空表示不修改）';
+    }
+  } catch (err) { toast(err.message, 'bad'); }
+};
+
+function formProf() {
+  return {
+    name: $('#p_name').value.trim(),
+    base_url: $('#p_base').value.trim(),
+    api_key: $('#p_key').value.trim(),
+    model: $('#p_model').value.trim(),
+    temperature: num($('#p_temp').value),
+  };
+}
+
+$('#p_test').onclick = async () => {
+  const p = formProf();
+  if (!p.base_url || !p.model) { toast('请填 Base URL 和模型名', 'warn'); return; }
+  $('#p_msg').textContent = '测试中…';
+  try {
+    const r = await api('/api/config/llm/test', { method: 'POST', body: Object.assign({ key: editKey }, p) });
+    $('#p_msg').innerHTML = r.ok
+      ? '<span style="color:var(--jade)">✓ ' + esc(r.message || '连接成功') + '</span>'
+      : '<span style="color:var(--rust)">✗ ' + esc(r.message || '连接失败') + '</span>';
+  } catch (e) { $('#p_msg').textContent = e.message; }
+};
+
+$('#p_save').onclick = async () => {
+  const p = formProf();
+  if (!p.base_url || !p.model) { toast('请填 Base URL 和模型名', 'warn'); return; }
+  const key = editKey || (p.name || p.model).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24) || 'model';
+  try {
+    await api('/api/config/llm', { method: 'POST', body: { key, profile: p } });
+    editKey = null;
+    ['p_name', 'p_base', 'p_key', 'p_model'].forEach(i => { $('#' + i).value = ''; });
+    $('#p_temp').value = 0;
+    $('#p_msg').textContent = '';
+    $('#addFold').open = false;
+    await loadCfg();
+    toast('已保存');
+  } catch (e) { toast(e.message, 'bad'); }
+};
+
+// ---------- 初始化 ----------
+(async () => {
+  try { await loadCfg(); } catch (e) { toast(e.message, 'bad'); }
+  refreshMasterStat();
+})();
+</script>
+</body>
+</html>
