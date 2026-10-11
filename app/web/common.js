@@ -65,7 +65,7 @@ function toast(msg, kind) {
   t.style.cssText = 'position:fixed;left:50%;top:24px;transform:translateX(-50%);z-index:9999;' +
     'padding:12px 24px;border-radius:8px;font-size:16px;box-shadow:0 4px 16px rgba(0,0,0,.2);' +
     'color:#fff;max-width:88vw;text-align:center;' +
-    'background:' + (kind === 'bad' ? '#ff4d4f' : kind === 'warn' ? '#fa8c16' : '#52c41a');
+    'background:' + (kind === 'bad' ? '#b5532f' : kind === 'warn' ? '#a87f26' : '#1e7d5a');
   clearTimeout(t._h);
   t._h = setTimeout(() => t.remove(), kind === 'bad' ? 5000 : 2600);
 }
@@ -149,6 +149,7 @@ function autocomplete(input, getPool, onPick, onType) {
       if (onPick) onPick(it);
     }
     close();
+    input.blur();          // 选定后收起焦点，避免焦点回归时列表再次弹出
     if (onType) onType(input.value, !!findExact(getPool() || [], input.value));
   });
 
@@ -647,20 +648,67 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
   render();
 }
 
-// ---------- 顶栏导航 ----------
-function topbar(active, title, sub) {
-  const tabs = [['/', '首页'], ['/ai', '对话录单'], ['/form', '表单录单'], ['/ask', '问一问'], ['/dashboard', '经营看板']];
-  return `
-  <div class="topbar">
-    <div class="logo">T2S</div>
-    <div>
-      <h1>${esc(title)}</h1>
-      <div class="sub">${esc(sub || '')}</div>
+// ---------- 侧边导航骨架 ----------
+const NAV_ITEMS = [
+  ['/', '工作台', '⌂'],
+  ['/new', '录单', '✎'],
+  ['/ask', '问一问', '❝'],
+  ['/dashboard', '经营看板', '◫'],
+  ['/settings', '设置', '⚙'],
+];
+const ERP_URL = 'http://localhost:8080';
+
+function shell(active) {
+  document.body.classList.add('has-shell');
+  const nav = document.createElement('nav');
+  nav.className = 'shell-nav';
+  nav.innerHTML = `
+    <div class="shell-brand">
+      <div class="seal">账</div>
+      <div><div class="t1">Talk2Stock</div><div class="t2">ERP AGENT</div></div>
     </div>
-    <div class="spacer"></div>
-    <div class="brand-mark">Talk2Stock<span>ERP Agent</span></div>
-    <div class="navtabs">
-      ${tabs.map(([h, t]) => `<a href="${h}" class="${h === active ? 'on' : ''}">${t}</a>`).join('')}
-    </div>
+    <div class="nav-sec">主菜单</div>
+    ${NAV_ITEMS.map(([h, t, i]) =>
+      `<a class="nav-item${h === active ? ' on' : ''}" href="${h}"><span class="ico">${i}</span>${t}</a>`).join('')}
+    <div class="nav-sec">系统</div>
+    <a class="nav-item" href="${ERP_URL}" target="_blank" rel="noopener"><span class="ico">▦</span>原版 ERP<\/a>
+    <div class="nav-foot">
+      <div><span class="nav-dot" id="__navDot"></span><span id="__navStat">连接检查中…</span></div>
+      <div>说一句话 · 变成一张 <b>ERP 单据</b></div>
+    </div>`;
+  document.body.prepend(nav);
+
+  const main = document.createElement('div');
+  main.className = 'shell-main';
+  while (document.body.children.length > 1) main.appendChild(document.body.children[1]);
+  document.body.appendChild(main);
+
+  // 手机底部 Tab
+  const tab = document.createElement('div');
+  tab.className = 'tabbar';
+  tab.innerHTML = NAV_ITEMS.slice(0, 5).map(([h, t, i]) =>
+    `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="ico">${i}</span>${t}</a>`).join('');
+  document.body.appendChild(tab);
+
+  // ERP 连接状态（静默）
+  api('/api/master').then(() => {
+    const d = $('#__navDot'), s = $('#__navStat');
+    if (d) d.className = 'nav-dot ok';
+    if (s) s.textContent = 'ERP 已连接';
+  }).catch(() => {
+    const d = $('#__navDot'), s = $('#__navStat');
+    if (d) d.className = 'nav-dot bad';
+    if (s) s.textContent = 'ERP 未连接';
+  });
+
+  return main;
+}
+
+// 页面头（各页可选调用）
+function pageHead(crumb, title, sub) {
+  return `<div class="page-head">
+    <div class="crumb">${esc(crumb)}</div>
+    <h1>${esc(title)}</h1>
+    ${sub ? `<div class="sub">${esc(sub)}</div>` : ''}
   </div>`;
 }
