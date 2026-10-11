@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>录单 · Talk2Stock</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="mode-tabs" id="modeTabs">
+    <button data-mode="ai"><span class="ico">✎</span>对话录入</button>
+    <button data-mode="form"><span class="ico">▤</span>表单录入</button>
+  </div>
+
+  <div class="bill-grid">
+    <div class="bill-main">
+
+      <!-- ============ AI 模式 ============ -->
+      <div id="paneAI">
+        <div class="card">
+          <h2><span class="bar"></span>说一句话，自动建单</h2>
+
+          <div id="noModel" class="alert alert-warn" style="display:none">
+            还没配置 AI 模型。到 <a href="/settings" style="color:var(--gold-strong);font-weight:600">设置</a> 填入任意 OpenAI 兼容接口即可；
+            或者切到「表单录入」（不需要 AI）。
+          </div>
+
+          <div class="say-row">
+            <textarea id="text" rows="3"
+              placeholder="例如：向美宜佳采购可乐 30瓶，单价3块5，入原料仓（⌘/Ctrl+Enter 快速解析）"></textarea>
+            <button class="mic-btn" id="micBtn" title="语音输入（再点一次结束）" style="display:none">🎤</button>
+          </div>
+
+          <div id="correctChip" class="correct-chip hidden"></div>
+
+          <div class="field" style="margin-top:10px">
+            <div id="attachZone" class="attach-zone"></div>
+          </div>
+
+          <div class="hint" style="margin-top:12px">示例（点一下填入，确认后再解析；库里没有的单位 / 商品会自动新建档案）</div>
+          <div class="examples" id="examples"></div>
+
+          <div class="row-btns" style="margin-top:14px">
+            <button class="btn btn-primary btn-lg" id="parseBtn">解析并预览 →</button>
+            <span class="hint" id="modelTip"></span>
+          </div>
+        </div>
+
+        <div class="card" id="recentCard" style="display:none">
+          <h2><span class="bar"></span>最近录单
+            <span style="flex:1"></span>
+            <button class="btn btn-sm btn-ghost" id="recentRefresh">↻ 刷新</button>
+          </h2>
+          <div id="recentList"></div>
+        </div>
+      </div>
+
+      <!-- ============ 表单模式 ============ -->
+      <div id="paneForm" style="display:none">
+        <div class="card">
+          <h2><span class="bar"></span>业务类型</h2>
+          <div class="biztabs" id="bizTabs"></div>
+        </div>
+
+        <div class="card">
+          <h2><span class="bar"></span>单据明细</h2>
+
+          <div class="field">
+            <label id="partyLabel">供应商</label>
+            <div class="ac-wrap">
+              <input id="party" type="text" placeholder="输入名称，没有的会自动新建" autocomplete="off">
+            </div>
+            <div id="partyHint" class="hint"></div>
+          </div>
+
+          <div class="tbl-wrap" style="margin-top:14px">
+            <table class="xtable" id="tbl">
+              <thead>
+                <tr>
+                  <th style="min-width:180px">商品名称</th>
+                  <th style="width:96px" class="num">数量</th>
+                  <th style="width:84px">单位</th>
+                  <th style="width:110px" class="num">单价</th>
+                  <th style="width:115px" class="num">金额</th>
+                  <th style="width:46px"></th>
+                </tr>
+              </thead>
+              <tbody id="tbody"></tbody>
+            </table>
+          </div>
+
+          <div style="margin-top:8px">
+            <button class="btn btn-sm btn-ghost" id="addRow">＋ 添加一行</button>
+            <span class="hint" style="display:inline-block;margin-left:10px">最后一行按 Enter 或 Tab 自动加新行</span>
+          </div>
+
+          <div class="total-row">合计：<span class="amount big" id="total">￥0.00</span></div>
+
+          <div class="field" style="margin-top:12px">
+            <label>附件（可选 · 原发票 / 单据扫描件 / 合同）</label>
+            <div id="attachZoneF" class="attach-zone"></div>
+          </div>
+
+          <details class="fold">
+            <summary>更多选项（仓库 / 日期 / 账户 / 备注 / 实付）</summary>
+            <div class="fold-body">
+              <div class="grid">
+                <div class="field"><label>仓库</label><select id="depot"></select></div>
+                <div class="field"><label>单据日期</label><input id="operDate" type="date"></div>
+                <div class="field"><label>结算账户</label><select id="account"></select></div>
+                <div class="field">
+                  <label id="payLabel">付款方式</label>
+                  <select id="payType">
+                    <option value="现付">现付</option>
+                    <option value="预付款">预付款</option>
+                    <option value="记账">记账（挂账）</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>本次实付金额</label>
+                  <input id="payAmount" type="number" step="0.01" placeholder="留空 = 全款结清">
+                  <div class="hint">填了且小于合计，差额自动记为欠款</div>
+                </div>
+                <div class="field"><label>备注</label><input id="remark" type="text" placeholder="选填"></div>
+              </div>
+            </div>
+          </details>
+
+          <div class="row-btns" style="margin-top:18px">
+            <button class="btn btn-ghost" id="clearBtn">清空</button>
+            <button class="btn btn-primary btn-lg" id="previewBtn">预览并确认 →</button>
+          </div>
+        </div>
+
+        <div class="card" id="histCard" style="display:none">
+          <h2><span class="bar"></span>本次已录入</h2>
+          <div id="hist"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 会话流侧栏 -->
+    <div class="card bill-side" id="convCard">
+      <h2><span class="bar"></span><span id="convTitle">本次会话</span>
+        <span style="flex:1"></span>
+        <button class="btn btn-sm btn-ghost" id="convClear">清空</button>
+      </h2>
+      <div class="conv-list" id="conv"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/common.js"></script>
+<script>
+shell('/new');
+
+/* ================= 模式切换 ================= */
+let mode = 'ai';
+const params = new URLSearchParams(location.search);
+if (params.get('mode') === 'form') mode = 'form';
+
+function setMode(m, push) {
+  mode = m;
+  $$('#modeTabs button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+  $('#paneAI').style.display = m === 'ai' ? '' : 'none';
+  $('#paneForm').style.display = m === 'form' ? '' : 'none';
+  $('#convCard').style.display = m === 'ai' ? '' : 'none';
+  $('#convTitle').textContent = '本次会话';
+  if (push !== false) history.replaceState(null, '', '/new?mode=' + m);
+  if (m === 'ai') $('#text').focus();
+}
+$('#modeTabs').onclick = e => {
+  const b = e.target.closest('button');
+  if (b) setMode(b.dataset.mode);
+};
+
+/* ================= 附件（两个模式各一个实例） ================= */
+let attachMgr = null, attachMgrF = null;
+if (typeof AttachmentManager === 'function') {
+  attachMgr = AttachmentManager($('#attachZone'), { biz: 'bill', max: 4 });
+  attachMgrF = AttachmentManager($('#attachZoneF'), { biz: 'bill', max: 4 });
+}
+
+/* ================= AI 模式 ================= */
+const EXAMPLES = [
+  ['采购入库', '向美宜佳采购可乐 30瓶，单价3块5，入原料仓'],
+  ['销售出库', '卖给永辉超市 纸箱 200个，单价5块，从成品仓出'],
+  ['多商品采购', '向美宜佳采购 可乐30瓶单价3块5、纸箱200个单价5块，入原料仓'],
+  ['多商品销售', '卖给张记便利店 方便面20箱单价45元、矿泉水50瓶单价2元，从成品仓出'],
+  ['采购退货', '把美宜佳那批可乐退5瓶，单价3块5，从原料仓出'],
+  ['复用+新建', '向供应商1采购牛皮纸 10卷，单价80元，入仓库1'],
+];
+$('#examples').innerHTML = EXAMPLES.map(([tag, t]) =>
+  `<span class="chip" data-t="${esc(t)}">${esc(tag)}｜${esc(t)}</span>`).join(' ');
+$('#examples').onclick = e => {
+  const el = e.target.closest('[data-t]');
+  if (!el) return;
+  $('#text').value = el.dataset.t;
+  $('#text').focus();
+};
+
+// ---------- 会话流 ----------
+let turns = [];
+let pendingParse = false;
+let stageTimers = [];
+
+const CONV_KEY = 't2s_conv_v1';
+function saveConv() {
+  try {
+    sessionStorage.setItem(CONV_KEY, JSON.stringify(turns
+      .filter(t => t.type !== 'pending')
+      .map(t => t.type === 'draft'
+        ? { type: 'draft', draft: t.draft, rawText: t.rawText, attach: t.attach,
+            state: t.state === 'open' ? 'cancelled' : t.state, revision: t.revision }
+        : t)));
+  } catch (e) {}
+}
+function loadConv() {
+  try {
+    turns = JSON.parse(sessionStorage.getItem(CONV_KEY) || '[]');
+    if (!Array.isArray(turns)) turns = [];
+  } catch (e) { turns = []; }
+}
+
+function draftSummary(d) {
+  const bl = (BIZ[d.biz] || {}).label || d.biz || '';
+  const its = (d.items || []).map(it => `${it.name || '?'}×${num(it.qty) || '?'}${it.unit || ''}`).join('、');
+  return `${bl} · ${d.party || '？'} · ${its}`;
+}
+
+const STATE_TAG = {
+  open:      '<span class="tag tag-blue">预览中</span>',
+  cancelled: '<span class="tag t-gray">已取消</span>',
+  committed: '<span class="tag tag-ok">已写入</span>',
+};
+
+function renderConv() {
+  const el = $('#conv');
+  if (!turns.length) {
+    el.innerHTML = '<div class="conv-empty">说一句业务（或点示例），<br>解析出的草稿和写入结果会在这里按轮次展开。<br><br>✎ 支持「改成 50 瓶」这样的多轮修正</div>';
+    saveConv();
+    return;
+  }
+  el.innerHTML = turns.map((t, i) => {
+    if (t.type === 'user') {
+      return `<div class="turn-user">${t.revision ? '<span class="rev-tag">修正</span>' : ''}${esc(t.text)}</div>`;
+    }
+    if (t.type === 'pending') {
+      return `<div class="turn-thinking" id="__think">
+        <span class="spinner spinner-dark"></span>
+        <span class="stage">理解语义</span>
+        <span class="stage-sep">→</span>
+        <span class="stage">匹配档案</span>
+        <span class="stage-sep">→</span>
+        <span class="stage">生成预览</span>
+      </div>`;
+    }
+    if (t.type === 'draft') {
+      const d = t.draft || {};
+      const items = (d.items || []).map(it =>
+        `<div class="ln-item">${esc(it.name || '（未命名）')}　×${num(it.qty)} ${esc(it.unit || '')}　@￥${money(it.price)}</div>`).join('');
+      const total = (d.items || []).reduce((s, it) => s + num(it.qty) * num(it.price), 0);
+      const reopen = t.state === 'cancelled'
+        ? `<div class="row-btns" style="margin-top:8px"><button class="btn btn-sm" data-reopen="${i}">↻ 重新预览</button>
+           <button class="btn btn-sm btn-ghost" data-correct="${i}">继续修正</button></div>` : '';
+      return `<div class="turn-card" data-turn="${i}">
+        <div class="turn-hd">${esc((BIZ[d.biz] || {}).label || d.biz || '草稿')} ${STATE_TAG[t.state] || ''}</div>
+        <div class="ln"><span class="k">${esc((BIZ[d.biz] || {}).party || '往来单位')}</span>${esc(d.party || '—')}${t.revision ? ' <span class="tag tag-fuzzy">多轮修正</span>' : ''}</div>
+        <div class="ln"><span class="k">仓库</span>${esc(d.depot || '默认仓')}</div>
+        <div class="ln-items">${items || '<span class="muted">无明细</span>'}</div>
+        <div class="ln ln-total">合计 <b>￥${money(total)}</b></div>
+        ${reopen}
+      </div>`;
+    }
+    if (t.type === 'result') {
+      if (t.ok) {
+        const r = t.res || {};
+        return `<div class="turn-result ok">✓ <b>${esc(r.biz_label || '')} ${esc(r.number || '')}</b> 已写入，合计 ￥${money(r.total)}
+          ${(r.created && r.created.length) ? `<div class="hint">自动新建：${r.created.map(esc).join('、')}</div>` : ''}</div>`;
+      }
+      return `<div class="turn-result fail">✗ ${esc(t.msg || '失败')}</div>`;
+    }
+    return '';
+  }).join('');
+  el.scrollTop = el.scrollHeight;
+  saveConv();
+}
+
+function startStages() {
+  stageTimers.forEach(clearTimeout);
+  stageTimers = [];
+  $$('#conv .stage').forEach((s, i) => {
+    stageTimers.push(setTimeout(() => s.classList.add('on'), 200 + i * 900));
+  });
+}
+function stopStages() {
+  stageTimers.forEach(clearTimeout);
+  stageTimers = [];
+}
+
+// 修正模式
+let correcting = null;
+function enterCorrect(draft) {
+  correcting = { draft };
+  renderChip();
+  $('#text').focus();
+}
+function exitCorrect() { correcting = null; renderChip(); }
+function renderChip() {
+  const chip = $('#correctChip');
+  if (!correcting) { chip.classList.add('hidden'); chip.innerHTML = ''; return; }
+  chip.classList.remove('hidden');
+  chip.innerHTML = `✏ 修正模式 · 接着说改哪里（例：「改成50瓶」「换原料仓」）<span class="hint">基于：${esc(draftSummary(correcting.draft))}</span>
+    <span class="x" id="correctExit" title="退出修正模式，重新开一单">×</span>`;
+  $('#correctExit').onclick = exitCorrect;
+}
+
+// ---------- 预览 / 提交 ----------
+function openPreview(turn) {
+  showPreview(turn.preview, turn.draft, (res, finalDraft) => handleCommitted(turn, res, finalDraft), turn.attach, {
+    source: 'ai',
+    rawText: turn.rawText,
+    onCancel: d => {
+      turn.state = 'cancelled';
+      turn.draft = d;
+      renderConv();
+      enterCorrect(d);
+    },
+  });
+}
+
+function handleCommitted(turn, res, finalDraft) {
+  if (finalDraft) turn.draft = finalDraft;
+  if (!res.ok) {
+    turn.state = 'cancelled';
+    turns.push({ type: 'result', ok: false, msg: res.message || '写入失败' });
+    renderConv();
+    toast(res.message || '写入失败', 'bad');
+    return;
+  }
+  turn.state = 'committed';
+  turns.push({ type: 'result', ok: true, res });
+  renderConv();
+  toast('✓ ' + (res.message || '写入成功'));
+  $('#text').value = '';
+  exitCorrect();
+  loadHistory();
+}
+
+$('#conv').onclick = async e => {
+  const reopen = e.target.closest('[data-reopen]');
+  const correct = e.target.closest('[data-correct]');
+  if (reopen) {
+    const turn = turns[+reopen.dataset.reopen];
+    reopen.textContent = '预览中…';
+    reopen.disabled = true;
+    try {
+      const r = await api('/api/resolve', { method: 'POST', body: { draft: turn.draft, source: 'ai' } });
+      if (!r.ok) { toast(r.message || '重新预览失败', 'bad'); renderConv(); return; }
+      turn.preview = r.preview;
+      turn.state = 'open';
+      renderConv();
+      openPreview(turn);
+    } catch (err) { toast(err.message, 'bad'); renderConv(); }
+  } else if (correct) {
+    const turn = turns[+correct.dataset.correct];
+    enterCorrect(turn.draft);
+  }
+};
+
+$('#convClear').onclick = () => {
+  if (turns.length && !confirm('清空本次会话记录？（不影响已写入 ERP 的单据）')) return;
+  turns = [];
+  exitCorrect();
+  renderConv();
+};
+
+// ---------- 解析 ----------
+$('#parseBtn').onclick = () => doParse();
+$('#text').addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doParse(); }
+});
+
+async function doParse() {
+  if (pendingParse) return;
+  const text = $('#text').value.trim();
+  if (!text) { toast('请先说一句业务', 'warn'); $('#text').focus(); return; }
+  pendingParse = true;
+  const btn = $('#parseBtn');
+  btn.disabled = true; btn.textContent = 'AI 解析中…';
+
+  const wasRevision = !!correcting;
+  const prevDraft = wasRevision ? correcting.draft : null;
+  turns.push({ type: 'user', text, revision: wasRevision });
+  if (wasRevision) exitCorrect();
+  turns.push({ type: 'pending' });
+  renderConv();
+  startStages();
+
+  try {
+    const body = { text };
+    if (prevDraft) body.draft = prevDraft;
+    const r = await api('/api/parse', { method: 'POST', body });
+    turns = turns.filter(t => t.type !== 'pending');
+    if (!r.ok) {
+      turns.push({ type: 'result', ok: false, msg: r.message || '解析失败' });
+      renderConv();
+      if (r.need_config) location.href = '/settings';
+      return;
+    }
+    const att = (attachMgr && !attachMgr.isEmpty()) ? attachMgr.getPaths().map(p => ({ path: p, name: p.split('/').pop() })) : [];
+    const turn = {
+      type: 'draft', draft: r.draft, preview: r.preview,
+      rawText: text, attach: att, state: 'open', revision: wasRevision,
+    };
+    turns.push(turn);
+    renderConv();
+    openPreview(turn);
+  } catch (e) {
+    turns = turns.filter(t => t.type !== 'pending');
+    turns.push({ type: 'result', ok: false, msg: e.message });
+    renderConv();
+  } finally {
+    pendingParse = false;
+    stopStages();
+    btn.disabled = false; btn.textContent = '解析并预览 →';
+  }
+}
+
+// ---------- 最近录单 ----------
+function fieldZh(f) {
+  return String(f || '')
+    .replace(/^items\[(\d+)\]\.name$/, (m, i) => `第${+i + 1}行商品名`)
+    .replace(/^items\[(\d+)\]\.qty$/, (m, i) => `第${+i + 1}行数量`)
+    .replace(/^items\[(\d+)\]\.unit$/, (m, i) => `第${+i + 1}行单位`)
+    .replace(/^items\[(\d+)\]\.price$/, (m, i) => `第${+i + 1}行单价`)
+    .replace(/^pay_amount$/, '实付金额')
+    .replace(/^items\.length$/, '明细行数');
+}
+
+async function loadHistory() {
+  try {
+    const r = await api('/api/history?limit=15');
+    if (!r.ok) return;
+    const el = $('#recentList');
+    el.innerHTML = (r.items || []).length ? r.items.map(h => `
+      <div class="hist-row">
+        <div class="hist-main">
+          <span class="pill ${h.source === 'ai' ? 'pill-ai' : 'pill-form'}">${h.source === 'ai' ? 'AI' : '表单'}</span>
+          <b>${esc(h.biz_label || '')} ${esc(h.number || '')}</b>
+          <span class="amt">￥${money(h.total)}</span>
+        </div>
+        <div class="hist-sub" ${h.raw_text ? `title="原话：${esc(h.raw_text)}"` : ''}>
+          ${h.raw_text ? `「${esc(h.raw_text)}」 · ` : ''}${esc(h.ts || '')}${(h.changed && h.changed.length)
+            ? ` · 确认时改过：${h.changed.map(fieldZh).join('、')}` : ''}
+        </div>
+      </div>`).join('') : '<div class="muted center" style="padding:14px 0">还没有录过单，来说第一句吧</div>';
+    $('#recentCard').style.display = '';
+  } catch (e) { /* 审计读取失败不打断录单 */ }
+}
+$('#recentRefresh').onclick = loadHistory;
+
+// ---------- 语音输入 ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null, recOn = false, recBase = '';
+function setMic(on) {
+  recOn = on;
+  const b = $('#micBtn');
+  b.classList.toggle('rec', on);
+  b.textContent = on ? '■' : '🎤';
+  b.title = on ? '正在听，点一下结束' : '语音输入';
+  $('#text').classList.toggle('listening', on);
+}
+if (SR) {
+  recog = new SR();
+  recog.lang = 'zh-CN';
+  recog.interimResults = true;
+  recog.continuous = false;
+  recog.onresult = e => {
+    let s = '';
+    for (const r of e.results) s += r[0].transcript;
+    $('#text').value = (recBase + s).slice(0, 500);
+  };
+  recog.onend = () => { if (recOn) setMic(false); };
+  recog.onerror = ev => {
+    setMic(false);
+    if (ev.error !== 'aborted' && ev.error !== 'no-speech') toast('语音识别失败：' + ev.error, 'warn');
+  };
+  $('#micBtn').style.display = '';
+}
+$('#micBtn').onclick = () => {
+  if (!recog) return;
+  if (recOn) { recog.stop(); return; }
+  recBase = $('#text').value;
+  try { recog.start(); setMic(true); } catch (e) { toast('语音没启动起来：' + e.message, 'warn'); }
+};
+
+// ---------- 模型状态提示 ----------
+async function loadCfgTip() {
+  try {
+    const r = await api('/api/config');
+    const CFG = r.config || r;
+    const llm = (CFG && CFG.llm) || {};
+    const act = llm.profiles && llm.profiles[llm.active];
+    $('#noModel').style.display = act ? 'none' : '';
+    $('#modelTip').textContent = act ? ('当前模型：' + (act.name || llm.active) + ' / ' + act.model) : '';
+  } catch (e) {}
+}
+
+/* ================= 表单模式 ================= */
+let biz = 'purchase_in';
+
+$('#bizTabs').innerHTML = Object.entries(BIZ)
+  .map(([k, v]) => `<div class="biztab${k === biz ? ' on' : ''}" data-k="${k}">${v.label}</div>`).join('');
+
+$('#bizTabs').onclick = e => {
+  const el = e.target.closest('.biztab');
+  if (!el) return;
+  biz = el.dataset.k;
+  $$('.biztab').forEach(b => b.classList.toggle('on', b.dataset.k === biz));
+  syncBiz();
+};
+
+function syncBiz() {
+  const b = BIZ[biz];
+  $('#partyLabel').textContent = b.party;
+  $('#party').placeholder = `输入${b.party}名称，没有的会自动新建`;
+  $('#payLabel').textContent = b.dir === 'in' ? '付款方式' : '收款方式';
+  $('#payType').innerHTML = b.dir === 'in'
+    ? '<option value="现付">现付</option><option value="预付款">预付款</option><option value="记账">记账（挂账）</option>'
+    : '<option value="现收">现收</option><option value="预收款">预收款</option><option value="记账">记账（挂账）</option>';
+  checkParty();
+  const want = b.dir === 'in' ? '原料仓' : '成品仓';
+  const opt = Array.from($('#depot').options).find(o => o.value === want);
+  if (opt) $('#depot').value = want;
+}
+
+function checkParty() {
+  const v = $('#party').value.trim();
+  const h = $('#partyHint');
+  if (!v) { h.textContent = ''; h.className = 'hint'; return; }
+  const hit = findExact(partyPool(biz), v);
+  h.innerHTML = hit
+    ? '<span class="hint ok" style="margin:0">✓ 系统中已有</span>'
+    : `<span class="hint new" style="margin:0">⚠ 系统中无此${BIZ[biz].party}，提交时将自动新建</span>`;
+}
+
+// ---------- 明细表 ----------
+function rowHTML() {
+  return `<tr>
+    <td><div class="ac-wrap"><input class="c-name" type="text" placeholder="商品名称" autocomplete="off"></div></td>
+    <td><input class="c-qty num" type="number" step="any" placeholder="0"></td>
+    <td><input class="c-unit" type="text" placeholder="个"></td>
+    <td><input class="c-price num" type="number" step="any" placeholder="0.00"></td>
+    <td><input class="c-amt num" readonly tabindex="-1"></td>
+    <td><button class="xdel" title="删除该行">×</button></td>
+  </tr>`;
+}
+
+function bindRow(tr) {
+  const name = $('.c-name', tr), qty = $('.c-qty', tr), unit = $('.c-unit', tr), price = $('.c-price', tr);
+
+  autocomplete(name, () => MD.materials,
+    it => { if (it.unit && !unit.value) unit.value = it.unit; calc(); },
+    () => markNew(tr));
+
+  [qty, price].forEach(i => i.addEventListener('input', calc));
+  name.addEventListener('input', () => markNew(tr));
+
+  $('.xdel', tr).onclick = () => {
+    if ($$('#tbody tr').length > 1) tr.remove(); else clearRow(tr);
+    calc();
+  };
+
+  [name, qty, unit, price].forEach(inp => {
+    inp.addEventListener('keydown', e => {
+      const rows = $$('#tbody tr');
+      const isLast = rows[rows.length - 1] === tr;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (isLast && name.value.trim()) { addRow(); $$('#tbody tr').pop(); focusLast(); }
+        else { const n = tr.nextElementSibling; (n ? $('.c-name', n) : name).focus(); }
+      }
+      if (e.key === 'Tab' && !e.shiftKey && inp === price && isLast && name.value.trim()) {
+        e.preventDefault(); addRow(); focusLast();
+      }
+    });
+  });
+}
+
+function markNew(tr) {
+  const n = $('.c-name', tr);
+  const v = n.value.trim();
+  const isNew = v && !findExact(MD.materials, v);
+  n.closest('td').classList.toggle('cell-new', !!isNew);
+  n.title = isNew ? '系统中没有此商品，提交时将自动新建' : '';
+}
+
+function clearRow(tr) {
+  $$('input', tr).forEach(i => { i.value = ''; });
+  tr.querySelector('td').classList.remove('cell-new');
+}
+
+function addRow() {
+  $('#tbody').insertAdjacentHTML('beforeend', rowHTML());
+  bindRow($('#tbody').lastElementChild);
+}
+
+function focusLast() {
+  const rows = $$('#tbody tr');
+  $('.c-name', rows[rows.length - 1]).focus();
+}
+
+function calc() {
+  let t = 0;
+  $$('#tbody tr').forEach(tr => {
+    const a = num($('.c-qty', tr).value) * num($('.c-price', tr).value);
+    $('.c-amt', tr).value = a ? money(a) : '';
+    t += a;
+  });
+  $('#total').textContent = '￥' + money(t);
+  return t;
+}
+
+$('#addRow').onclick = () => { addRow(); focusLast(); };
+
+// ---------- 收集草稿 ----------
+function buildDraft() {
+  const items = [];
+  $$('#tbody tr').forEach(tr => {
+    const n = $('.c-name', tr).value.trim();
+    if (!n) return;
+    items.push({
+      name: n,
+      qty: num($('.c-qty', tr).value),
+      unit: $('.c-unit', tr).value.trim() || '个',
+      price: num($('.c-price', tr).value),
+    });
+  });
+  const d = {
+    biz,
+    party: $('#party').value.trim(),
+    depot: $('#depot').value,
+    items,
+    oper_time: ($('#operDate').value || today()) + ' ' + nowStamp().slice(11),
+    pay_type: $('#payType').value,
+    remark: $('#remark').value.trim(),
+  };
+  const acc = $('#account').value;
+  if (acc) d.account_id = parseInt(acc, 10);
+  const pa = $('#payAmount').value;
+  if (pa !== '') d.pay_amount = num(pa);
+  return d;
+}
+
+$('#previewBtn').onclick = async () => {
+  const d = buildDraft();
+  if (!d.party) { toast('请填写' + BIZ[biz].party, 'warn'); $('#party').focus(); return; }
+  if (!d.items.length) { toast('请至少填一行商品', 'warn'); focusLast(); return; }
+
+  const btn = $('#previewBtn');
+  btn.disabled = true; btn.textContent = '检查中…';
+  try {
+    const r = await api('/api/resolve', { method: 'POST', body: { draft: d, source: 'form' } });
+    if (!r.ok) { toast(r.message || '预览失败', 'bad'); return; }
+    const att = (attachMgrF && !attachMgrF.isEmpty()) ? attachMgrF.getPaths().map(p => ({ path: p, name: p.split('/').pop() })) : [];
+    showPreview(r.preview, d, onCommitted, att, { source: 'form', rawText: '' });
+  } catch (e) {
+    toast(e.message, 'bad');
+  } finally {
+    btn.disabled = false; btn.textContent = '预览并确认 →';
+  }
+};
+
+const hist = [];
+function onCommitted(res) {
+  if (!res.ok) { toast(res.message || '写入失败', 'bad'); return; }
+  toast('✓ ' + (res.message || '写入成功'));
+  hist.unshift(res);
+  renderHist();
+  $('#tbody').innerHTML = '';
+  addRow();
+  calc();
+  $('#remark').value = '';
+  $('#payAmount').value = '';
+  if (attachMgrF) attachMgrF.reset();
+  focusLast();
+  loadHistory();
+}
+
+function renderHist() {
+  $('#histCard').style.display = hist.length ? '' : 'none';
+  $('#hist').innerHTML = hist.map(r => `
+    <div class="history-item">
+      <b>${esc(r.biz_label || '')} ${esc(r.number || '')}</b>
+      　合计 ￥${money(r.total)}
+      ${(r.created && r.created.length)
+        ? `<div class="hint">自动新建：${r.created.map(esc).join('、')}</div>` : ''}
+    </div>`).join('');
+}
+
+$('#clearBtn').onclick = () => {
+  $('#party').value = '';
+  $('#remark').value = '';
+  $('#payAmount').value = '';
+  $('#tbody').innerHTML = '';
+  addRow();
+  calc();
+  checkParty();
+};
+
+/* ================= 初始化 ================= */
+(async () => {
+  $('#operDate').value = today();
+  try { await loadCfgTip(); } catch (e) {}
+  try {
+    await loadMaster();
+    $('#depot').innerHTML = MD.depots.map(d => `<option>${esc(d.name)}</option>`).join('');
+    $('#account').innerHTML = '<option value="">默认账户</option>' +
+      MD.accounts.map(a => `<option value="${a.id || ''}">${esc(a.name)}</option>`).join('');
+  } catch (e) {}
+  autocomplete($('#party'), () => partyPool(biz), null, checkParty);
+  addRow();
+  syncBiz();
+  calc();
+  loadConv();
+  renderConv();
+  loadHistory();
+  setMode(mode, false);
+})();
+</script>
+</body>
+</html>

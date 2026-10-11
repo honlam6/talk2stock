@@ -557,10 +557,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/":
             self._static("home.html")
-        elif path in ("/ai", "/index", "/index.html", "/ai.html"):
-            self._static("ai.html")
-        elif path in ("/form", "/form.html"):
-            self._static("form.html")
+        elif path in ("/new", "/bill", "/bill.html"):
+            self._static("bill.html")
+        elif path in ("/ai", "/index", "/index.html", "/ai.html", "/form", "/form.html"):
+            # 旧入口合并：对话录单 / 表单录单 → /new
+            self._redirect("/new")
+        elif path in ("/settings", "/settings.html", "/config"):
+            self._static("settings.html")
         elif path in ("/ask", "/ask.html"):
             self._static("ask.html")
         elif path in ("/dashboard", "/dashboard.html", "/board"):
