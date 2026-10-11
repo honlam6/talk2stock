@@ -548,6 +548,34 @@ hr.sep { border: none; border-top: 1px solid var(--bd-light); margin: 18px 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ==========================================================
+   工作台（首页聚合入口）：命令框 / KPI 顶条 / 最近录单
+   ========================================================== */
+.wb-suggest { font-size: 13.5px; color: var(--text-3); margin-top: 8px; min-height: 20px; }
+.wb-suggest b { color: var(--brand-1); }
+.wb-actions { display: flex; gap: 12px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+.wb-actions .hint { min-height: 0; }
+.wb-answer {
+  display: none; margin-top: 14px; padding: 12px 16px;
+  border-radius: 12px; background: #fff; border: 1px solid var(--bd-light);
+  box-shadow: 0 1px 2px rgba(16, 42, 100, .05);
+  font-size: 16.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+}
+.wb-answer.show { display: block; animation: modal-in .18s ease-out; }
+.wb-answer .src { display: block; margin-top: 8px; font-size: 12.5px; color: var(--text-3); }
+.wb-answer.err { background: var(--red-bg); border-color: var(--red-bd); }
+
+/* KPI 顶条：可点击跳看板 */
+.wb-kpis { margin-bottom: 18px; }
+.wb-kpis .kpi { display: block; text-decoration: none; color: inherit; padding: 15px 16px; }
+.wb-kpis .kpi .val { font-size: 24px; }
+.wb-kpis .kpi-grid { margin-bottom: 0; }
+
+@media (max-width: 640px) {
+  .wb-actions .btn { flex: 1 1 auto; }
+  .wb-actions .hint { flex-basis: 100%; text-align: left; }
+}
+
+/* ==========================================================
    对话录单 2.0：会话流 / 就地改数确认卡 / 修正模式 / 语音 / 最近录单
    ========================================================== */
 
