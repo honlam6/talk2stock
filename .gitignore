@@ -5,6 +5,9 @@
 
 # ---- 密钥 / 本地配置（最重要，绝不提交）----
 app/.env
+# config.json 含本机网关地址等环境相关信息，且保存页面配置的本地改动：
+# 已从 git 跟踪移除（git rm --cached），本地保留，公开仓库只带 app/config.example.json
+app/config.json
 app/config.json.tmp
 *.local.env
 .env.local

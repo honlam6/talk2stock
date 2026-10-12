@@ -25,8 +25,23 @@ import threading
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+CONFIG_EXAMPLE_PATH = os.path.join(APP_DIR, "config.example.json")
 ENV_PATH = os.path.join(APP_DIR, ".env")
 DATA_DIR = os.path.join(APP_DIR, "data")
+
+
+def _seed_config():
+    """config.json 已不入库（含本机网关地址）。首次启动若缺失，从 config.example.json 复制一份，
+    让克隆仓库的组员开箱即用；密钥继续走 app/.env。"""
+    try:
+        if os.path.exists(CONFIG_PATH) or not os.path.exists(CONFIG_EXAMPLE_PATH):
+            return
+        with open(CONFIG_EXAMPLE_PATH, "r", encoding="utf-8") as f:
+            data = f.read()
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            f.write(data)
+    except Exception:
+        pass  # 没模板也能跑：load() 会用 DEFAULTS 兜底
 
 _lock = threading.Lock()
 
@@ -186,6 +201,7 @@ def _apply_env(cfg):
 
 def load():
     """读取配置，缺失字段用默认值补齐，再叠加环境变量密钥。"""
+    _seed_config()
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             raw = json.load(f)

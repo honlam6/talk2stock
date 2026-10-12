@@ -1,4 +1,5 @@
 {
+  "_comment": "config.json 已被 .gitignore 排除（含本机网关地址）。本模板是组员克隆仓库后的初始配置：复制为 config.json 后按需修改；密钥一律不写这里，放 app/.env 的 T2S_KEY_<档案名大写>。真实网关地址写 .env 的 T2S_BASE_<档案名大写>。",
   "erp": {
     "base": "http://localhost:9999/jshERP-boot",
     "user": "jsh",
@@ -7,27 +8,6 @@
   "llm": {
     "active": "workbuddy",
     "profiles": {
-      "deepseek": {
-        "name": "DeepSeek",
-        "base_url": "https://api.deepseek.com/v1",
-        "api_key": "",
-        "model": "deepseek-chat",
-        "temperature": 0.2
-      },
-      "openai": {
-        "name": "OpenAI",
-        "base_url": "https://api.openai.com/v1",
-        "api_key": "",
-        "model": "gpt-4o-mini",
-        "temperature": 0.2
-      },
-      "qwen": {
-        "name": "通义千问（阿里云百炼）",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "api_key": "",
-        "model": "qwen-plus",
-        "temperature": 0.2
-      },
       "workbuddy": {
         "name": "本地 DeepSeek V4.1 Flash",
         "base_url": "https://your-llm-gateway.example/v1",
