@@ -12,6 +12,7 @@
 结构化数据，模板句和 LLM 润色都不引入数据里没有的数字。
 """
 import json
+import re
 
 from . import config as cfgmod
 from . import llm as llmmod
@@ -47,13 +48,35 @@ ANSWER_PROMPT = """根据工具返回的数据回答用户问题，用中文口�
 1. 只能引用数据 JSON 里出现的数字和名称，绝对不能编造或心算新数字。
 2. 先直接回答问题，再补充关键数字；最多三句话。
 3. 数字带单位（元/瓶/箱），金额保留两位小数。
-4. 数据为空就直说"系统里没有查到相关数据"。
+4. 数据为空才回答"系统里没有查到相关数据"；只要 JSON 里有条目/数字，
+   就必须引用它们作答，即使问的具体对象不在列表里——按"该对象没有记录，
+   但有这些：…"来说，绝不能回答"没有数据"。
+5. 绝对不要输出 JSON、数组或字段名，只输出给人看的一句话。
 
 用户问题：{q}
 使用工具：{tool}
 数据：{data}
 
 只输出回答文本，不要 JSON，不要解释。"""
+
+
+def _numbers_in(text):
+    """抽出文本里所有数字（含千分位/小数），按数值归一化——100.00 与 100.0 视为同一个数。"""
+    out = set()
+    for raw in re.findall(r"-?\d[\d,]*(?:\.\d+)?", text or ""):
+        try:
+            out.add(round(float(raw.replace(",", "")), 2))
+        except ValueError:
+            pass
+    return out
+
+
+def _numeric_grounded(ans, data, tpl=""):
+    """答案里的每个数字都必须能在数据/模板里找到，否则视为不可信（防第二跳编数）。"""
+    if not ans:
+        return False
+    allow = _numbers_in(json.dumps(data, ensure_ascii=False)) | _numbers_in(tpl)
+    return _numbers_in(ans) <= allow
 
 
 def _names_block(erp):
@@ -190,17 +213,21 @@ def ask(text, erp=None):
             head = txt.lstrip()[:1]
             if head == "{":                       # {"answer": "..."} → 取字段
                 txt = str(llmmod._extract_json(txt).get("answer") or "").strip()
-            elif head == "[":                     # [{"text": "..."}] 之类的数组壳 → 摘出来
+            elif head == "[":                     # JSON 数组包装 → 摘纯文本；不是纯文本就整体作废
                 try:
                     arr = llmmod._extract_json(txt)
                     if isinstance(arr, list) and arr and isinstance(arr[0], dict):
                         txt = str(arr[0].get("text") or arr[0].get("answer") or "").strip()
+                    elif isinstance(arr, list) and arr and isinstance(arr[0], str):
+                        txt = arr[0].strip()
                     else:
-                        txt = ""
+                        txt = ""                  # [{"name":...}] 这类内容不是自然语言回答
                 except Exception:
                     txt = ""
             if txt:
-                answer = txt.strip()
+                txt = txt.strip()
+                # 一致性兜底：模型文本里出现数据/模板中都没有的数字 → 弃用，退回模板句
+                answer = txt if _numeric_grounded(txt, data, tpl) else answer
     except Exception:
         pass
     return {"ok": True, "tool": tool, "answer": answer, "data": data, "meta": meta}
