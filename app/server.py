@@ -7,8 +7,11 @@
     PORT=8099 python3 app/server.py
 
 路由：
-    GET    /                      → 302 跳转 /ai
-    GET    /ai                    → AI 录入页面
+    GET    /                      → 工作台（home.html）
+    GET    /new                   → 录单页（对话/表单双模式；/ai /form 跳转到这里）
+    GET    /ask                   → 问一问（只读问答）
+    GET    /dashboard             → 经营看板
+    GET    /settings              → 设置（ERP 连接 + 模型档案）
     GET    /static/*              → 静态文件（app/web/ 下）
     GET    /api/config            → 读配置（脱敏）
     POST   /api/config/erp        → 保存 ERP 连接
@@ -22,6 +25,8 @@
     GET    /api/master            → 主数据（供应商/客户/商品/仓库/账户/单位）
     GET    /api/dashboard         → 经营看板全量数据（?lite=1 为工作台 KPI 精简版）
     GET    /api/history           → 最近录单（审计日志 commit_ok 的只读视图）
+    POST   /api/ask               → 只读问答（选工具 → 查数 → 依数据作答）
+    POST   /api/upload            → 附件上传代理
 
 所有 /api 响应均为 UTF-8 JSON；任何异常都被捕获成
 {"ok": false, "message": "中文提示"}，不会向客户端抛栈。

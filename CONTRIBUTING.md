@@ -27,10 +27,11 @@ git push origin --delete feat/voice-input
 ## 规矩
 
 1. **密钥永远不进仓库**：API Key、ERP 密码、真实网关地址只写 `app/.env`（已 gitignore）。
-   `config.json` 里的模型地址是占位符；自己配置时用环境变量 `T2S_KEY_<档案>` / `T2S_BASE_<档案>` 覆盖。
+   `app/config.json` 整个文件都不入库（它装本机配置，可能带真实网关地址），公开仓库只有 `app/config.example.json` 模板；
+   要覆盖某档案的密钥或地址，用环境变量 `T2S_KEY_<档案>` / `T2S_BASE_<档案>`（写进 `.env` 即可，首次启动会自动生成 config.json）。
 2. **不动 `jshERP-latest/` 上游源码**：我们只做加法，全部通过官方 REST API。
 3. **改提示词必须**：更新 `app/core/llm.py` 的 `PROMPT_VERSION` + 变更记录注释，并跑一遍
-   `python3 ../eval/run.py --tag <你的名字>-<改动>`，把结果文件一起提交——这就是课程的"迭代留痕"。
+   `python3 eval/run.py --tag <你的名字>-<改动>`，把结果文件一起提交——这就是课程的"迭代留痕"。
 4. **改写入逻辑必须**：保持「无确认不写入」不变量（`core/gate.py`），并在 PR 里说明怎么验证的。
 5. 提交信息用中文，格式 `<类型>(<范围>): <做了什么>`，类型：feat / fix / docs / eval / refactor。
 

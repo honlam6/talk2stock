@@ -44,21 +44,23 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 | 主数据候选点选 | 名字没对上时给 top3 相似候选，确认卡上点一下即重新预览，不用重新解析 |
 | 可复现评测 | `eval/` 60 条冻结语料 + 打分脚本（整单全对率 / 字段级准确率 / 幻觉字段数 / 延迟），一条命令跑分 |
 | 多模型档案 | 任意 OpenAI 兼容接口都能配（OpenAI / DeepSeek / 通义 / Kimi / 本地 Ollama…），页面即可配置、切换、测试；支持自签证书网关（`insecure`）与丢弃 system 角色的网关（`merge_system`） |
-| 密钥不进仓库 | 密钥只存 `app/.env`（已 `.gitignore`），`config.json` 永远不含密钥 |
+| 密钥不进仓库 | 密钥只存 `app/.env`（已 `.gitignore`）；`config.json` 也在忽略列表里，公开仓库只带 `config.example.json` 模板 |
 
 ---
 
-## 四个入口
+## 五个入口
 
-四个入口共用同一套后端（`app/core/draft.py` 的 `resolve / commit`），预览确认层行为完全一致。
+五个入口共用同一套后端（`app/core/draft.py` 的 `resolve / commit`），预览确认层行为完全一致。
 
 | 页面 | 地址 | 适合谁 | 依赖 |
 |---|---|---|---|
-| 表单快速录入 | `http://localhost:8090/form` | 日常录单员 | 无（纯预设匹配，不需要 AI） |
-| AI 智能录入 | `http://localhost:8090/ai` | 想省事的人 / 手机端 | 需配置一个 LLM 模型 |
+| 工作台（首页） | `http://localhost:8090/` | 一页看 KPI、发指令、录单、提问 | 无（AI 指令需配置模型） |
+| 录入（/new） | `http://localhost:8090/new` | 日常录单员 / 想省事的人 / 手机端 | 对话模式需 LLM，表单模式纯预设匹配 |
 | 问一问（只读问答） | `http://localhost:8090/ask` | 随口查库存/采销/欠款 | 需配置一个 LLM 模型 |
 | 经营看板 | `http://localhost:8090/dashboard` | 老板（只读） | 无 |
+| 设置 | `http://localhost:8090/settings` | 改 ERP 连接、配/切/测模型档案 | 无 |
 
+录单页把原来的「AI 录入 `/ai`」和「表单录入 `/form`」合并成了一页双模式，旧地址自动跳转 `/new`。
 外加原版 ERP 本身：`http://localhost:8080`（报表、权限、盘点、财务等高级功能仍回原系统）。
 
 ---
@@ -104,8 +106,8 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 │   │   ├── llm.py           #   LLM 解析层：口语 → 严格 JSON 草稿
 │   │   ├── draft.py         #   主数据匹配 + 建单（两段式 resolve/commit）
 │   │   └── report.py        #   经营看板数据
-│   ├── web/                 #   前端页面（home / ai / form / dashboard）
-│   ├── config.json          #   非敏感配置（不含任何密钥）
+│   ├── web/                 #   前端页面（home / new / ask / dashboard / settings）
+│   ├── config.example.json  #   配置模板；首启自动复制为 config.json（config.json 已被忽略）
 │   └── .env.example         #   密钥模板；复制成 .env 后填真实值（.env 已被忽略）
 ├── jshERP-latest/           # 上游 jshERP 源码副本（Apache-2.0，含 deploy/ 编排）
 │   └── deploy/              #   docker-compose.yml + Dockerfile + nginx.conf
@@ -167,9 +169,9 @@ AI 录入需要**任意一个 OpenAI 兼容接口**。两种配置方式，任�
 
 ### 方式 A：在页面里配置（推荐，无需改文件）
 
-1. 打开 http://localhost:8090/ai
-2. 点右上角 **「⚙ 模型设置」**
-3. 展开 **「＋ 添加 / 编辑模型」**，填：
+1. 打开 http://localhost:8090/settings
+2. 进 **「模型档案」** 区
+3. 点 **「＋ 添加 / 编辑模型」**，填：
 
    | 字段 | 说明 | 示例 |
    |---|---|---|
@@ -201,7 +203,7 @@ cp app/.env.example app/.env
 # 编辑 app/.env，填 T2S_KEY_DEEPSEEK=sk-xxxx 等
 ```
 
-`app/config.json` 里已经预置了 `deepseek / openai / qwen` 三个档案的 `base_url` 和 `model`（**不含密钥**）；只要在 `.env` 里补上对应密钥，重启即可生效。也可以完全不管 `.env`，直接用**方式 A** 在页面里配。
+`app/config.example.json` 是配置模板，首次启动会自动复制成 `app/config.json`（**config.json 已被 `.gitignore` 排除**——它可能带本机网关地址，不进仓库），里面预置了模型档案的 `base_url` 和 `model`（不含密钥）；只要在 `.env` 里补上对应密钥，重启即可生效。也可以完全不管 `.env`，直接用**方式 A** 在页面里配。
 
 > 解析层对推理类端点的兼容：优先用流式 + `response_format=json_object`，失败自动降级（去掉 `response_format`、再退非流式）；若网关会丢弃 `system` 角色，可在档案里打开 `merge_system`（见 `app/core/llm.py`）。
 
@@ -209,7 +211,7 @@ cp app/.env.example app/.env
 
 ## 环境变量
 
-配置来源优先级：`DEFAULTS`（代码内）→ `app/config.json` → 环境变量 / `app/.env`（最高）。
+配置来源优先级：`DEFAULTS`（代码内）→ `app/config.json`（本机文件，不入库）→ 环境变量 / `app/.env`（最高）。
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
@@ -217,7 +219,7 @@ cp app/.env.example app/.env
 | `T2S_ERP_USER` | ERP 登录账号 | `jsh` |
 | `T2S_ERP_PASS` | ERP 登录密码（明文，服务端会做 MD5） | 空（需填） |
 | `T2S_KEY_<档案名大写>` | 某个模型档案的 API Key，如 `T2S_KEY_DEEPSEEK` | 空 |
-| `T2S_BASE_<档案名大写>` | 覆盖某档案的网关地址（公开仓库 config.json 只放占位，真实地址写这里） | 空 |
+| `T2S_BASE_<档案名大写>` | 覆盖某档案的网关地址（config.json 不入库，真实地址写这里） | 空 |
 | `T2S_REQUIRE_AUTH` | 设为 `1` 后所有 `/api` 接口需带访问口令 | `0`（关闭） |
 | `T2S_DEMO_PASS` | 访问口令 | `talk2stock` |
 | `PORT` / `HOST` | Talk2Stock 监听端口 / 地址 | `8090` / `0.0.0.0` |
@@ -280,7 +282,7 @@ cd jshERP-latest/deploy && docker compose logs --tail=80 erp-backend
 
 ## 安全说明
 
-- **密钥管理**：所有 API Key、ERP 密码只存 `app/.env`（已 `.gitignore`）。页面里配置的 Key 也会落到这里，`config.json` 永远不含密钥。**不要把填好密钥的 `.env` 提交或截图外发。**
+- **密钥管理**：所有 API Key、ERP 密码只存 `app/.env`（已 `.gitignore`）。页面里配置的 Key 也会落到这里。**不要把填好密钥的 `.env` 提交或截图外发**；本机网关地址请配 `T2S_BASE_<档案名>` 环境变量，不要写回 `config.json`。
 - **写库闸门**：写入路径是「自然语言 → 草稿 → 确认卡 → 人工点确认 → commit」，UI 上不存在静默写入；但请注意，当前 `/api/commit` 只在 UI 层要求先确认，**服务端未强制校验一次性确认令牌**（见路线图）。
 - **接口鉴权**：`/api/*` **默认不鉴权**（方便本地开发）。若把 8090 暴露到公网，请务必：
   - 设 `T2S_REQUIRE_AUTH=1` 并改掉默认 `T2S_DEMO_PASS`；或
@@ -302,26 +304,27 @@ cd jshERP-latest/deploy && docker compose logs --tail=80 erp-backend
 ## 评测（可复现跑分）
 
 ```bash
-cd app
-python3 ../eval/run.py                 # 全量 60 条冻结语料（只调解析，绝不写库）
-python3 ../eval/run.py --type adversarial   # 只跑 12 条对抗样本
-python3 ../eval/run.py --limit 8 --tag smoke # 冒烟
+python3 eval/run.py                    # 全量 60 条冻结语料（只调解析，绝不写库）
+python3 eval/run.py --type adversarial # 只跑 12 条对抗样本
+python3 eval/run.py --limit 8 --tag smoke  # 冒烟
 ```
 
 - 语料 `eval/cases.jsonl`（**v1-20261010 冻结**：48 条常规 + 12 条对抗，gold 人工标注）；
   打分口径：整单关键字段全对率（供应商/商品/数量×单位/单价/仓库/业务类型全对才算对）、
   字段级准确率、幻觉字段数（原话没提却被填进草稿）、p95 延迟。
-- **首跑结果（2026-10-10）与提示词迭代证据**：
+- **跑分结果与提示词迭代证据**（历次原始数据在 `eval/results/`）：
 
-  | 模型 | 提示词 | 整单全对率 | 幻觉字段 | 解析报错 | 延迟 均值/p95 |
-  |---|---|---|---|---|---|
-  | DeepSeek V4.1 Flash（本地） | v1 | 78.3%（另 9 次网关 502） | **0** | 9 | 3.7s / 11.7s |
-  | DeepSeek V4.1 Flash（本地） | **v2** | **98.3%**（59/60） | **0** | 0 | 2.6s / 4.4s |
-  | Qwen3.8-Flash-Next（ModelScope） | v1 | 86.7%（52/60） | **0** | 0 | 7.5s / 19.8s |
-  | Qwen3.8-Flash-Next（ModelScope） | **v2** | 96.7%（58/60） | **0** | 0 | 7.7s / 19.1s |
+  | 模型 | 提示词 | 整单全对率 | 幻觉字段 | 解析报错 | 延迟 均值/p95 | 结果文件 |
+  |---|---|---|---|---|---|---|
+  | DeepSeek V4.1 Flash（本地） | v1 | 78.3%（另 9 次网关 502） | **0** | 9 | 3.7s / 11.7s | `run_20261010-*` |
+  | DeepSeek V4.1 Flash（本地） | **v2** | **98.3%**（59/60） | **0** | 0 | 2.6s / 4.4s | `run_20261010-235627-workbuddy-promptv2.md` |
+  | Qwen3.8-Flash-Next（ModelScope） | **v2** | **96.7%**（58/60） | **0** | 0 | 7.7s / 19.1s | `run_20261010-235336-moda-promptv2.md` |
+  | DeepSeek V4.1 Flash（本地） | v3 复跑 | 96.7%（58/60） | **0** | 0 | 3.6s / 6.5s | `run_20261012-135109-workbuddy-promptv3-rerun.md` |
 
   v1→v2 的唯一改动：注入当前日期、要求相对日期换算成绝对日期——两模型的日期类失分全部消除。
-  剩余唯一失败用例 `a12`（"客户1那里拿点衣服"，业务类型+数量双模糊）进 failure analysis。
+  v3 复跑（本地网关在线波动）为 96.7%，比 v2 少 1 条对抗用例 a03：同一模型同一提示词存在 ±1 条的网络侧波动，
+  这本身就是"为什么最终交付按 95%+ 口径、并按失败用例做分析"的依据。固定失败用例 `a12`
+  （"客户1那里拿点衣服"，业务类型+数量双模糊）进 failure analysis。
 - 基线对比实验（原生界面人工录单 vs Talk2Stock，两场景设计）见
   [`docs/基线对比实验手册.md`](docs/基线对比实验手册.md)，记录表模板 `eval/baseline_timing.csv`。
 - 历次结果在 `eval/results/`（JSON + Markdown）。
