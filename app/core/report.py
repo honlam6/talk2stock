@@ -4,6 +4,7 @@
 单据字段（实测）：type/subType/number/operTime/organName/totalPrice/
 changeAmount/debt/status/materialsList/materialCount/accountName
 """
+import re
 import threading
 import time
 import urllib.parse
@@ -104,23 +105,62 @@ def summary(erp=None, bills=None):
 
 
 def recent_bills(erp=None, limit=12, bills=None):
-    """最近单据流水。bills 可传入已取好的单据列表（避免重复拉全量）。"""
+    """最近单据流水。bills 可传入已取好的单据列表（避免重复拉全量）。
+
+    除列表展示用的摘要字段外，额外带齐详情弹层要用的字段（实付/优惠/账户/
+    备注/联系人/经手人/附件等），让前端点开单条即可看全，无需再请求一次。
+    """
     erp = erp or get_client()
     bills = bills if bills is not None else erp.all_bills()
     bills = [b for b in bills if str(b.get("deleteFlag")) != "1"]
     bills.sort(key=lambda b: str(b.get("operTime") or ""), reverse=True)
     out = []
     for b in bills[:limit]:
+        def _s(v):
+            # ERP 有些字段空值返回字面量 "null"/"None"，一律当空串
+            t = str(v or "").strip()
+            return "" if t.lower() in ("null", "none") else t
+        # 结算账户：ERP 的 accountName 形如「账户名(金额元)」，账户名缺失时是
+        # 字面量 null。括号内金额是本次该账户的收付额，比 changeAmount 更细，
+        # 单账户场景下就取它作为实付；名称取不到则回退到 accountIdList 个数表述。
+        accts = [x for x in str(b.get("accountIdList") or "").split(",") if x]
+        acct_name, acct_money = "", 0.0
+        m = re.match(r"^\s*([^(]+)\(([\d.]+)元\)", _s(b.get("accountName")))
+        if m:
+            nm, amt = m.group(1).strip(), _f(m.group(2))
+            if nm.lower() not in ("null", "none"):
+                acct_name, acct_money = nm, amt
+        account = acct_name or (("多账户 × %d" % len(accts)) if len(accts) > 1 else "")
         out.append({
             "number": b.get("number"),
             "type": (b.get("type") or "") + "·" + (b.get("subType") or ""),
             "party": b.get("organName") or "—",
             "goods": (b.get("materialsList") or "").strip()[:40],
+            # materialCount 是商品总数量（件/瓶/箱），不是明细行数
             "count": b.get("materialCount"),
             "total": _f(b.get("totalPrice")),
             "debt": _f(b.get("debt")),
             "time": _day(b),
             "status": "已审核" if str(b.get("status")) == "1" else "草稿",
+            # ---- 以下为详情弹层补充字段 ----
+            "oper_time": (b.get("operTimeStr") or str(b.get("operTime") or ""))[:19].replace("T", " "),
+            "create_time": (b.get("createTime") or "")[:19].replace("T", " "),
+            "pay_type": _s(b.get("payType")),
+            "paid": _f(b.get("changeAmount")),
+            # 账户括号里的金额（无则回退 changeAmount），用于「这笔钱从哪出」
+            "account_money": acct_money or _f(b.get("changeAmount")),
+            "discount": _f(b.get("discount")),
+            # ERP 的 discountLastMoney 是「折后最终金额」，非优惠额；无折扣时等于合计
+            "discount_money": _f(b.get("discountLastMoney")) or _f(b.get("discountMoney")),
+            "tax_rate": _f(b.get("taxNum")),
+            "other_money": _f(b.get("otherMoney")),
+            "account": account,
+            "remark": _s(b.get("remark")),
+            "contacts": _s(b.get("contacts")),
+            "phone": _s(b.get("phoneNum")) or _s(b.get("telephone")),
+            "salesman": _s(b.get("salesManStr")) or _s(b.get("salesMan")),
+            "creator": _s(b.get("creatorName")),
+            "attachments": _s(b.get("fileName")),
         })
     return out
 
