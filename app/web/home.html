@@ -33,45 +33,52 @@
       <div class="ico">✎</div>
       <h3>对话录单</h3>
       <p id="aiDesc">说一句话建单，多轮修正、语音输入、附件随单。</p>
+      <div class="qc-peek"><div><div class="peek-in">向美宜佳采购可乐 30瓶，单价3块5<span class="caret"></span></div></div></div>
     </a>
     <a class="quick-card" href="/new?mode=form">
       <span class="go">↗</span>
       <div class="ico">▤</div>
       <h3>表单录单</h3>
       <p>逐字段精确控制，自动补全 + 键盘连录，不依赖 AI。</p>
+      <div class="qc-peek"><div><div class="peek-in">采购入库 · 美宜佳 · 可乐×30 · ￥175.00<span class="caret"></span></div></div></div>
     </a>
     <a class="quick-card" href="/ask">
       <span class="go">↗</span>
       <div class="ico">❝</div>
       <h3>问一问</h3>
       <p>「可乐还有多少」「谁欠我钱」——只读查询，不改数据。</p>
+      <div class="qc-peek"><div><div class="peek-in">可乐还有多少库存？<span class="caret"></span></div></div></div>
     </a>
     <a class="quick-card" href="/dashboard">
       <span class="go">↗</span>
       <div class="ico">◫</div>
       <h3>经营看板</h3>
       <p>采销毛利、欠款、库存预警、趋势图，老板视角一页看完。</p>
+      <div class="qc-peek"><div><div class="peek-in">本月销售 ￥12,480 · 毛利 +8.4%<span class="caret"></span></div></div></div>
     </a>
   </div>
 
-  <!-- KPI 顶条 -->
-  <div style="margin-top:20px" class="kpi-grid" id="kpis">
-    <div class="kpi b"><div class="lbl">加载中</div><div class="val">—</div></div>
+  <!-- KPI 顶条（加载中显示骨架屏） -->
+  <div class="mt-5 kpi-grid" id="kpis"></div>
+
+  <!-- 信息跑马灯 -->
+  <div class="marquee mt-3" id="marquee" hidden>
+    <div class="marquee-track" id="marqueeTrack"></div>
   </div>
 
   <!-- 最近录单 + 系统状态 -->
-  <div class="two-col" style="margin-top:20px">
-    <div class="card" id="recentCard" style="display:none;margin-bottom:0">
+  <div class="two-col mt-4">
+    <div class="card mb-0" id="recentCard" hidden>
       <h2><span class="bar"></span>最近录单
-        <span style="flex:1"></span>
+        <span class="flex-1"></span>
         <button class="btn btn-sm btn-ghost" id="recentRefresh">↻ 刷新</button>
       </h2>
       <div id="recentList"></div>
     </div>
-    <div class="card" style="margin-bottom:0">
+    <div class="card mb-0">
       <h2><span class="bar"></span>系统状态</h2>
       <div id="stat" class="muted">检查中…</div>
-      <div id="llmStat" class="muted" style="margin-top:8px"></div>
+      <div id="llmStat" class="muted mt-2"></div>
     </div>
   </div>
 
@@ -97,6 +104,18 @@ shell('/');
 })();
 
 // ---------- KPI（lite 接口） ----------
+const KPI_SLOTS = [
+  ['b', '今日采购'], ['g', '今日销售'], ['o', '今日差额'],
+  ['r', '应收欠款'], ['b', '库存预警'],
+];
+function renderKPISkeleton() {
+  $('#kpis').innerHTML = KPI_SLOTS.map(([c, l]) => `
+    <div class="kpi skeleton-card ${c}">
+      <div class="lbl">${l}</div>
+      <div class="val skel skel-val"></div>
+      <div class="sub skel skel-text w-60"></div>
+    </div>`).join('');
+}
 function renderKPI(d) {
   if (!d || d.ok === false) {
     $('#kpis').innerHTML = '<div class="kpi r"><div class="lbl">看板数据</div><div class="val">—</div><div class="sub">' +
@@ -128,10 +147,15 @@ function fieldZh(s) {
     .replace(/^pay_amount$/, '实付金额');
 }
 async function refreshHistory() {
+  // 加载中：先铺骨架，避免空白+「加载中」文字
+  const showSkel = () => {
+    $('#recentCard').hidden = false;
+    $('#recentList').innerHTML = '<div class="skel skel-row"></div><div class="skel skel-row"></div><div class="skel skel-row"></div>';
+  };
   try {
     const r = await api('/api/history?limit=8');
-    if (!r.ok) return;
-    $('#recentCard').style.display = '';
+    if (!r.ok) { showSkel(); return; }
+    $('#recentCard').hidden = false;
     $('#recentList').innerHTML = (r.items || []).length ? r.items.map(h => `
       <div class="hist-row">
         <div class="hist-main">
@@ -143,14 +167,45 @@ async function refreshHistory() {
           ${h.raw_text ? `「${esc(h.raw_text)}」 · ` : ''}${esc(h.ts || '')}${(h.changed && h.changed.length)
             ? ` · 确认时改过：${h.changed.map(fieldZh).join('、')}` : ''}
         </div>
-      </div>`).join('') : '<div class="muted center" style="padding:14px 0">还没有录过单，去「录单」说第一句吧</div>';
+      </div>`).join('') : `<div class="empty">
+        <div class="e-ico">🧾</div>
+        <div class="e-t">还没有录过单</div>
+        <div class="e-d">去「对话录单」说一句话，智能体会拆成草稿等你确认；确认后才写入真实 ERP。</div>
+        <div class="e-act">
+          <a class="btn btn-primary" href="/new?mode=ai">说一句话开单 →</a>
+          <a class="btn" href="/new?mode=form">改用表单</a>
+        </div>
+      </div>`;
   } catch (e) { /* 审计读取失败不打断首页 */ }
 }
 $('#recentRefresh').onclick = () => { refreshHistory(); refreshKPI(); };
 
+// ---------- 信息跑马灯 ----------
+async function loadMarquee() {
+  try {
+    const d = await api('/api/dashboard?lite=1');
+    if (!d || d.ok === false) return;
+    const t = d.today || {}, st = d.stock || {};
+    const items = [
+      ['', `今日采购 <b>￥${money(t.buy)}</b> · ${t.buy_n || 0} 张单`],
+      ['', `今日销售 <b>￥${money(t.sell)}</b> · ${t.sell_n || 0} 张单`],
+      ['', `差额 <b>￥${money(t.profit)}</b>`],
+      ['', `应收欠款 <b>￥${money(d.debt_recv_total)}</b>`],
+      [(st.negative || 0) + (st.low || 0) > 0 ? 'down' : 'up', `库存预警 <b>${(st.negative || 0) + (st.low || 0)}</b> 种`],
+      ['up', '写入闸门 · 令牌校验 · 全程审计'],
+      ['up', '数字实时取自 ERP 官方统计接口'],
+    ];
+    const one = items.map(([c, x]) => `<span class="marquee-item ${c}"><span class="dot"></span>${x}</span>`).join('');
+    // 两份内容首尾相接，配合 translateX(-50%) 实现无缝滚动
+    $('#marqueeTrack').innerHTML = one + one;
+    $('#marquee').hidden = false;
+  } catch (e) { /* 静默：跑马灯只是装饰 */ }
+}
+
 // ---------- 状态 ----------
 (async () => {
-  refreshKPI(); refreshHistory();
+  renderKPISkeleton();      // KPI 先出骨架，数据到了再替换
+  refreshKPI(); refreshHistory(); loadMarquee();
   try {
     const r = await api('/api/config');
     const cfg = r.config || r;
