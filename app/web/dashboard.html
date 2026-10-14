@@ -75,7 +75,7 @@
 
   <div class="card">
     <h2><span class="bar"></span>最近单据 <span class="muted" id="recentCnt" style="font-size:13px;font-weight:400"></span></h2>
-    <div class="tbl-wrap tbl-sticky">
+    <div class="tbl-wrap tbl-sticky db-recent-table">
       <table class="dtable" id="recentTbl">
         <thead><tr>
           <th>日期</th><th>类型</th><th>单号</th><th>往来单位</th><th>商品</th>
@@ -84,6 +84,8 @@
         <tbody></tbody>
       </table>
     </div>
+    <!-- 窄屏（<=640px）改用卡片列表，宽度不够时表格整体隐藏，见 style.css -->
+    <div class="db-recent-cards" id="recentCards"></div>
   </div>
   <div class="db-foot" id="footBox"></div>
 
@@ -329,8 +331,15 @@ function renderSkeletons() {
     '<div class="skel skel-bar"></div><div class="skel skel-bar w-60"></div>';
   $('#debtBox').innerHTML = '<div class="skel skel-title"></div>' +
     '<div class="skel skel-bar"></div><div class="skel skel-bar w-40"></div>';
-  $('#recentTbl tbody').innerHTML = ['', '', '', ''].map(() =>
-    `<tr>${['', '', '', '', '', '', ''].map(() => '<td><div class="skel skel-text" style="margin:4px 0"></div></td>').join('')}</tr>`).join('');
+  if (window.matchMedia('(max-width: 640px)').matches) {
+    $('#recentCards').innerHTML = ['', '', ''].map(() =>
+      '<div class="bill-card"><div class="skel skel-bar"></div><div class="skel skel-text w-60"></div></div>').join('');
+    $('#recentTbl tbody').innerHTML = '';
+  } else {
+    $('#recentCards').innerHTML = '';
+    $('#recentTbl tbody').innerHTML = ['', '', '', ''].map(() =>
+      `<tr>${['', '', '', '', '', '', ''].map(() => '<td><div class="skel skel-text" style="margin:4px 0"></div></td>').join('')}</tr>`).join('');
+  }
   $('#updAt').textContent = '加载中…';
 }
 
@@ -486,10 +495,22 @@ const RECENT_COLS = [
   { key: 'status', type: 's' },
 ];
 let recentSort = { col: 0, desc: true };
+let recentNarrow = null;   // 当前是否为窄屏卡片模式（跨 640px 断点时重渲染）
+let recentFilter = 'all';  // 窄屏卡片筛选：all / in / out / draft
+const RECENT_FILTERS = [
+  ['all', '全部'],
+  ['in', '入库'],
+  ['out', '出库'],
+  ['draft', '草稿'],
+];
 
 function renderRecent() {
   let rows = (D && D.recent) || [];
-  $('#recentCnt').textContent = rows.length ? `（最近 ${rows.length} 张 / 共 ${D.bill_count || rows.length} 张 · 点表头排序）` : '';
+  const narrow = window.matchMedia('(max-width: 640px)').matches;
+  recentNarrow = narrow;
+  $('#recentCnt').textContent = rows.length
+    ? `（最近 ${rows.length} 张 / 共 ${D.bill_count || rows.length} 张${narrow ? '' : ' · 点表头排序'}）`
+    : '';
   const c = RECENT_COLS[recentSort.col];
   rows = rows.slice().sort((a, b) => {
     const x = a[c.key], y = b[c.key];
@@ -497,14 +518,28 @@ function renderRecent() {
       : String(x || '').localeCompare(String(y || ''), 'zh-CN');
     return recentSort.desc ? -r : r;
   });
+
+  const emptyHtml = '<div class="empty"><div class="e-ico">📄</div><div class="e-t">还没有单据</div>' +
+    '<div class="e-d">去「对话录单」说一句话就能开单，写入后会出现在这里。</div>' +
+    '<div class="e-act"><a class="btn btn-primary" href="/new?mode=ai">去录第一单 →</a></div></div>';
+
+  // 筛选 chips 桌面和窄屏都渲染（功能不因设备割裂），只有"折叠"是窄屏专属：
+  // 桌面表格本身有吸顶表头 + 460px 内部滚动，一屏能扫完，不需要折叠。
+  const chips = renderFilterChips(rows);
+  if (narrow) { renderRecentCards(rows, emptyHtml, chips); return; }
+
+  $('#recentCards').innerHTML = chips;
+  bindFilterChips();
+  bindBillDetail();
+  const trows = filterRows(rows);
   $('#recentTbl thead').innerHTML = `<tr>${['日期', '类型', '单号', '往来单位', '商品', '金额', '状态']
     .map((h, i) => `<th class="sortable${i === recentSort.col ? ' sorted' : ''}${i === recentSort.col && recentSort.desc ? ' desc' : ''}" data-c="${i}">${h}</th>`).join('')}</tr>`;
-  $('#recentTbl tbody').innerHTML = rows.length
-    ? rows.map(r => {
+  $('#recentTbl tbody').innerHTML = trows.length
+    ? trows.map((r, i) => {
         const sub = (r.type || '').split('·')[1] || r.type;
         const isIn = (r.type || '').indexOf('入库') === 0;
         const cls = SUB_CLS[sub] || (isIn ? 't-blue' : 't-green');
-        return `<tr>
+        return `<tr data-idx="${i}">
           <td class="muted" style="white-space:nowrap">${esc(r.time)}</td>
           <td><span class="typ-pill ${cls}">${esc(r.type)}</span></td>
           <td style="font-family:ui-monospace,Menlo,monospace;font-size:13.5px">${esc(r.number)}</td>
@@ -514,17 +549,197 @@ function renderRecent() {
           <td>${r.status === '已审核' ? '<span class="typ-pill t-green">已审核</span>' : '<span class="typ-pill t-orange">草稿</span>'}</td>
         </tr>`;
       }).join('')
-    : '<tr><td colspan="7"><div class="empty"><div class="e-ico">📄</div><div class="e-t">还没有单据</div>' +
-      '<div class="e-d">去「对话录单」说一句话就能开单，写入后会出现在这里。</div>' +
-      '<div class="e-act"><a class="btn btn-primary" href="/new?mode=ai">去录第一单 →</a></div></div></td></tr>';
+    : `<tr><td colspan="7">${emptyHtml}</td></tr>`;
+}
+
+/* 窄屏：卡片列表 + 筛选 chips + 默认只显示前 6 张（其余折叠）
+   目的是数据多了不「大海捞针」，也不让一屏全被单据占满。
+   注：filterRows / renderFilterChips 已在上方定义，桌面表格同样复用。 */
+const RECENT_PAGE = 6;
+let recentExpanded = false;
+
+/* 按当前筛选键过滤单据行 */
+function filterRows(rows) {
+  if (recentFilter === 'in') return rows.filter(r => (r.type || '').indexOf('入库') === 0);
+  if (recentFilter === 'out') return rows.filter(r => (r.type || '').indexOf('出库') === 0);
+  if (recentFilter === 'draft') return rows.filter(r => r.status !== '已审核');
+  return rows;
+}
+
+/* 筛选 chips（桌面 + 窄屏共用，功能不割裂） */
+function renderFilterChips(rows) {
+  const counts = { all: rows.length, in: 0, out: 0, draft: 0 };
+  rows.forEach(r => {
+    if ((r.type || '').indexOf('入库') === 0) counts.in++;
+    if ((r.type || '').indexOf('出库') === 0) counts.out++;
+    if (r.status !== '已审核') counts.draft++;
+  });
+  return `<div class="fchips" id="recentFilters">${RECENT_FILTERS.map(([k, label]) =>
+    `<button class="fchip${recentFilter === k ? ' on' : ''}" data-f="${k}">${label}${counts[k] ? ' ' + counts[k] : ''}</button>`).join('')}</div>`;
+}
+
+function renderRecentCards(rows, emptyHtml, chips) {
+  const shown = filterRows(rows);
+  const head = chips || renderFilterChips(rows);
+
+  if (!shown.length) {
+    $('#recentCards').innerHTML = head + emptyHtml;
+    bindFilterChips();
+    return;
+  }
+  const limit = recentExpanded ? shown.length : RECENT_PAGE;
+  const list = shown.map((r, i) => {
+    if (i >= limit) return '';
+    const sub = (r.type || '').split('·')[1] || r.type;
+    const isIn = (r.type || '').indexOf('入库') === 0;
+    const cls = SUB_CLS[sub] || (isIn ? 't-blue' : 't-green');
+    return `<div class="bill-card${isIn ? ' bc-in' : ''}" data-idx="${i}">
+      <div class="bc-top">
+        <span class="typ-pill ${cls}">${esc(r.type)}</span>
+        <span class="bc-no">${esc(r.number)}</span>
+        <span class="bc-amt">￥${money(r.total)}</span>
+      </div>
+      <div class="bc-mid">
+        <span class="bc-party">${esc(r.party)}</span>
+        <span class="bc-goods">${esc(r.goods)}</span>
+      </div>
+      <div class="bc-bot">
+        <span class="muted">${esc(r.time)}</span>
+        ${r.debt > 0 ? `<span class="bc-debt">未结 ￥${money(r.debt)}</span>` : ''}
+        <span class="typ-pill ${r.status === '已审核' ? 't-green' : 't-orange'}" style="margin-left:auto">${esc(r.status)}</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  const more = shown.length > limit
+    ? `<button class="btn btn-sm btn-ghost bc-more" id="recentMore">展开其余 ${shown.length - limit} 张 ↓</button>`
+    : (recentExpanded && shown.length > RECENT_PAGE
+      ? '<button class="btn btn-sm btn-ghost bc-more" id="recentMore">收起 ↑</button>' : '');
+
+  $('#recentCards').innerHTML = head + list + more;
+  bindFilterChips();
+  bindBillDetail();          // 窄屏点卡片也要能看详情（和桌面表格行同一弹层）
+  const btn = $('#recentMore');
+  if (btn) btn.onclick = () => { recentExpanded = !recentExpanded; renderRecent(); };
+}
+
+function bindFilterChips() {
+  const box = $('#recentFilters');
+  if (!box) return;
+  box.querySelectorAll('.fchip').forEach(c => c.onclick = () => {
+    recentFilter = c.dataset.f;
+    recentExpanded = false;
+    renderRecent();
+  });
+}
+
+/* ---------- 单据详情弹层（点卡片 / 点表格行都能看全量信息） ----------
+   数据直接来自 recent 已带齐的详情字段，不再发一次请求。
+   字段表：[键, 中文名, 取值函数, 是否独占一行]。中文名必填，杜绝英文 key 漏出。 */
+const BILL_DETAIL_FIELDS = [
+  ['number',     '单号',       r => r.number],
+  ['type',       '类型',       r => r.type],
+  ['party',      '往来单位',   r => r.party || '—'],
+  ['goods',      '商品',       r => r.goods || '—', true],
+  ['count',      '商品数量',   r => (r.count != null ? r.count + ' 件' : '—')],
+  ['total',      '合计',       r => '￥' + money(r.total)],
+  ['oper_time',  '单据日期',   r => r.oper_time || r.time],
+  ['status',     '状态',       r => r.status],
+  ['pay_type',   '收付方式',   r => r.pay_type || '—'],
+  ['paid',       '实付/实收',  r => (r.paid ? '￥' + money(r.paid) : '—')],
+  ['account_money', '账户发生额', r => (r.account_money ? '￥' + money(r.account_money) : '—')],
+  ['account',    '结算账户',   r => r.account || '—'],
+  ['discount',   '折扣率',     r => (r.discount ? r.discount + ' %' : '—')],
+  // ERP 的 discountLastMoney 是「折后最终金额」而非优惠额，无折扣时等于合计，
+  // 所以只在确有折扣率时才列这一行
+  ['discount_money', '折后金额', r => (r.discount && r.discount_money ? '￥' + money(r.discount_money) : '—')],
+  ['tax_rate',   '税率',       r => (r.tax_rate ? r.tax_rate + ' %' : '—')],
+  ['other_money','其他费用',   r => (r.other_money ? '￥' + money(r.other_money) : '—')],
+  ['debt',       '未结金额',   r => (r.debt ? '￥' + money(r.debt) : '已结清')],
+  ['create_time','创建时间',   r => r.create_time || '—'],
+  ['creator',    '创建人',     r => r.creator || '—'],
+  ['salesman',   '业务员',     r => r.salesman || '—'],
+  ['contacts',   '联系人',     r => r.contacts || '—'],
+  ['phone',      '联系电话',   r => r.phone || '—'],
+  ['remark',     '备注',       r => r.remark || '—', true],
+  ['attachments','附件',       r => r.attachments || '无', true],
+];
+
+// 这些字段有值才显示，避免满屏「—」
+const BILL_DETAIL_OPTIONAL = new Set(
+  ['discount', 'discount_money', 'tax_rate', 'other_money', 'creator', 'salesman',
+   'contacts', 'phone', 'account_money', 'remark', 'create_time', 'account']);
+// 折后金额只在真有折扣时才出现（无折扣时它等于合计，列出来是冗余）
+const BILL_DETAIL_HIDE_WHEN = { discount_money: () => !row0.discount };
+let row0 = null;
+
+function showBillDetail(row) {
+  if (!row) return;
+  row0 = row;
+  const old = $('#__billMask');
+  if (old) old.remove();
+
+  const rows = BILL_DETAIL_FIELDS
+    .filter(([k, , get]) =>
+      (BILL_DETAIL_OPTIONAL.has(k) ? (row[k] !== '' && row[k] != null && row[k] !== 0) : true) &&
+      (!BILL_DETAIL_HIDE_WHEN[k] || !BILL_DETAIL_HIDE_WHEN[k]()))
+    .map(([, label, , wide]) =>
+      `<div class="bd-row${wide ? ' wide' : ''}"><span class="bd-k">${esc(label)}</span><span class="bd-v">${esc(get(row))}</span></div>`)
+    .join('');
+
+  const mask = document.createElement('div');
+  mask.id = '__billMask';
+  mask.className = 'mask show';
+  mask.setAttribute('role', 'dialog');
+  mask.setAttribute('aria-modal', 'true');
+  mask.innerHTML = `
+    <div class="modal" style="max-width:520px">
+      <button class="modal-x" aria-label="关闭">×</button>
+      <h3 style="margin-bottom:2px">${esc(row.type)} <span class="bd-no">${esc(row.number)}</span></h3>
+      <div class="bd-sub">${row.status === '已审核' ? '<span class="typ-pill t-green">已审核</span>' : '<span class="typ-pill t-orange">草稿</span>'}
+        <span class="muted" style="margin-left:8px">${esc(row.time)}</span></div>
+      <div class="bd-grid">${rows}</div>
+    </div>`;
+  document.body.appendChild(mask);
+  const close = () => {
+    if (detachBd) detachBd();
+    mask.remove();
+  };
+  const detachBd = trapFocus(mask, close);
+  mask.querySelector('.modal-x').onclick = close;
+  mask.addEventListener('mousedown', e => { if (e.target === mask) close(); });
+}
+
+// 绑定：窄屏点卡片、宽屏点表格行（表头点击仍是排序，不弹详情）
+function bindBillDetail() {
+  const cards = $('#recentCards');
+  if (cards) cards.onclick = e => {
+    if (e.target.closest('.fchip') || e.target.closest('#recentMore')) return;
+    const card = e.target.closest('.bill-card');
+    if (!card) return;
+    showBillDetail(filterRows((D && D.recent) || [])[+card.dataset.idx]);
+  };
 }
 
 $('#recentTbl').addEventListener('click', e => {
   const th = e.target.closest('th.sortable');
-  if (!th) return;
-  const i = +th.dataset.c;
-  recentSort = (recentSort.col === i) ? { col: i, desc: !recentSort.desc } : { col: i, desc: true };
-  renderRecent();
+  if (th) {
+    const i = +th.dataset.c;
+    recentSort = (recentSort.col === i) ? { col: i, desc: !recentSort.desc } : { col: i, desc: true };
+    renderRecent();
+    return;
+  }
+  // 点数据行 → 弹单据详情（与窄屏点卡片同一弹层，体验不割裂）
+  const tr = e.target.closest('tbody tr');
+  if (!tr || !D) return;
+  const trows = filterRows((D.recent || []).slice().sort((a, b) => {
+    const c = RECENT_COLS[recentSort.col];
+    const x = a[c.key], y = b[c.key];
+    const r = c.type === 'n' ? (Number(x) || 0) - (Number(y) || 0)
+      : String(x || '').localeCompare(String(y || ''), 'zh-CN');
+    return recentSort.desc ? -r : r;
+  }));
+  showBillDetail(trows[+tr.dataset.idx]);
 });
 
 /* ---------- 页脚 ---------- */
@@ -573,7 +788,12 @@ $('#trendToggle').addEventListener('click', e => {
 window.addEventListener('resize', () => {
   if (!D) return;
   clearTimeout(renderTmr);
-  renderTmr = setTimeout(renderCharts, 220);
+  renderTmr = setTimeout(() => {
+    renderCharts();
+    // 跨 640px 断点时表格 <-> 卡片切换要重渲染（窄屏卡片、宽屏可排序表）
+    const narrow = window.matchMedia('(max-width: 640px)').matches;
+    if (narrow !== recentNarrow) { recentNarrow = narrow; renderRecent(); }
+  }, 220);
 });
 load();
 </script>
