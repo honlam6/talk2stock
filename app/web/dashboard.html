@@ -17,6 +17,11 @@
     <button class="btn btn-sm" id="refresh">↻ 刷新</button>
   </div>
 
+  <!-- 月度数据跑马灯（与首页同一组件，滚动本月经营要点） -->
+  <div class="marquee mb-4" id="marquee" hidden>
+    <div class="marquee-track" id="marqueeTrack"></div>
+  </div>
+
   <div class="kpi-grid" id="kpiRow"></div>
 
   <div class="db-grid">
@@ -70,7 +75,7 @@
 
   <div class="card">
     <h2><span class="bar"></span>最近单据 <span class="muted" id="recentCnt" style="font-size:13px;font-weight:400"></span></h2>
-    <div class="tbl-wrap">
+    <div class="tbl-wrap tbl-sticky">
       <table class="dtable" id="recentTbl">
         <thead><tr>
           <th>日期</th><th>类型</th><th>单号</th><th>往来单位</th><th>商品</th>
@@ -271,6 +276,29 @@ function renderKPI() {
   sub(cards[2], deltaChip(m.profit, prevProfit, 'up-good'));
   if ((D.stock.negative || 0) > 0)
     sub(cards[3], `${cards[3].querySelector('.sub').textContent} · <span style="color:#b5532f;font-weight:600">负库存 ${D.stock.negative} 种</span>`);
+
+  renderMarquee(m, sm, t);
+}
+
+/* ---------- 月度跑马灯（复用首页 .marquee 组件） ---------- */
+function renderMarquee(m, sm, t) {
+  const O = D.official || {};
+  const recv = +(D.debt_recv_total || 0), pay = +(D.debt_pay_total || 0);
+  const items = [
+    ['', `本月采购 <b>￥${money(m.buy)}</b>`],
+    ['', `本月销售 <b>￥${money(m.sell)}</b>`],
+    [(m.profit || 0) >= 0 ? 'up' : 'down', `本月毛利 <b>￥${money(m.profit)}</b>`],
+    ['', `今日采购 <b>￥${money(t.buy)}</b> · 销售 <b>￥${money(t.sell)}</b>`],
+    ['', `库存货值 <b>￥${money(sm.total_value)}</b>`],
+    [recv > 0 ? 'down' : 'up', `应收 <b>￥${money(recv)}</b>`],
+    [pay > 0 ? 'down' : 'up', `应付 <b>￥${money(pay)}</b>`],
+    [(D.stock.negative || 0) > 0 ? 'down' : 'up', `库存预警 <b>${(D.stock.negative || 0) + (D.stock.low || 0)}</b> 种`],
+    ['', `待审核 <b>${O.wait_bills != null ? O.wait_bills : 0}</b> 张`],
+    ['up', '本页只读 · 数字实时取自 ERP 官方统计接口'],
+  ];
+  const one = items.map(([c, x]) => `<span class="marquee-item ${c}"><span class="dot"></span>${x}</span>`).join('');
+  $('#marqueeTrack').innerHTML = one + one;   // 两份拼接实现无缝滚动
+  $('#marquee').hidden = false;
 }
 
 function kpi(cls, label, val, subTxt) {
@@ -283,6 +311,7 @@ function kpi(cls, label, val, subTxt) {
 
 /* ---------- 加载骨架屏（首次进入/刷新时先铺占位） ---------- */
 function renderSkeletons() {
+  $('#marquee').hidden = true;
   $('#kpiRow').innerHTML = ['b', 'g', 'b', 'o'].map(c => `
     <div class="kpi skeleton-card ${c}">
       <div class="lbl skel" style="width:52%;height:11px"></div>

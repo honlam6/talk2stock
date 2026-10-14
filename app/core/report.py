@@ -421,7 +421,8 @@ def _dashboard_full(erp):
     except Exception:
         s["official"] = {}
     try:
-        s["recent"] = recent_bills(erp, bills=bills)   # 复用已取好的单据，不再全量重拉
+        # 复用已取好的单据，不再全量重拉；取 20 条配合看板表格吸顶表头使用
+        s["recent"] = recent_bills(erp, limit=20, bills=bills)
     except Exception:
         s["recent"] = []
     try:

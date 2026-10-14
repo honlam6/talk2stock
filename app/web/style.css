@@ -1063,13 +1063,16 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 .dtable th.sortable.sorted { color: var(--gold-strong); }
 .dtable th.sortable.sorted::after { content: '↑'; opacity: 1; }
 .dtable th.sortable.sorted.desc::after { content: '↓'; }
-/* 吸顶表头（滚动时列名不丢） */
-.tbl-sticky thead th {
+/* 吸顶表头（滚动时列名不丢）
+   tbl-sticky 加在 .tbl-wrap 容器上（不是 table 上），所以这里必须是
+   「.tbl-wrap.tbl-sticky thead th」。specificity 需要 >= (0,3,2) 才能压过
+   .dtable th.sortable 的 position:relative（其值为 (0,2,1)）。 */
+.tbl-wrap.tbl-sticky thead th, .tbl-wrap.tbl-sticky thead tr th {
   position: sticky; top: 0; z-index: 2;
   background: var(--card);
   box-shadow: 0 1px 0 var(--line), 0 6px 8px -8px rgba(34, 39, 31, .16);
 }
-.tbl-sticky { max-height: 460px; overflow-y: auto; }
+.tbl-wrap.tbl-sticky { max-height: 460px; overflow-y: auto; }
 .db-delta { font-size: 12.5px; font-weight: 700; }
 .db-delta.up { color: var(--jade); }
 .db-delta.down { color: var(--rust); }
