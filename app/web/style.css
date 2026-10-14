@@ -976,6 +976,8 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 
 /* ============================================================
    问一问
+   桌面：chat-log 撑开，输入框吸底
+   窄屏：整块压在一屏内（100dvh 避开地址栏/ tabbar），不让输入框被顶出视口
    ============================================================ */
 .chat-wrap { display: flex; flex-direction: column; min-height: calc(100vh - 230px); }
 .chat-log { flex: 1; display: flex; flex-direction: column; gap: 14px; padding: 6px 2px 18px; max-width: 860px; margin: 0 auto; width: 100%; }
@@ -999,6 +1001,45 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
   border: 1.5px solid var(--line); border-radius: 13px; font-family: inherit; resize: none;
 }
 .chat-input-row textarea:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(194, 154, 59, .15); }
+
+/* 矮版空状态：窄屏一屏要同时装下引导 + 输入框，砍掉大留白 */
+.empty.empty-compact { padding: 14px 6px 4px; }
+.empty.empty-compact .e-ico { font-size: 30px; margin-bottom: 8px; }
+.empty.empty-compact .e-t { font-size: 16.5px; margin-bottom: 4px; }
+.empty.empty-compact .e-d { font-size: 13px; line-height: 1.6; margin-bottom: 0; }
+
+/* 输入框上方的示例行（替代原先塞在空状态里的 chips，一屏可见） */
+.ask-samples {
+  display: flex; flex-wrap: wrap; gap: 7px; justify-content: center;
+  max-width: 860px; margin: 0 auto 10px; width: 100%;
+}
+.ask-samples .tag { cursor: pointer; transition: .15s; }
+.ask-samples .tag:hover { border-color: var(--gold); background: #fffaef; }
+
+/* ============================================================
+   问一问欢迎版式（全宽居中，刻意不用白色气泡）
+   理由：引导语不是"AI 的回复"，用气泡会和真实回答混淆。
+   ============================================================ */
+.ask-hello {
+  align-self: center; text-align: center;
+  max-width: 560px; margin: auto; padding: 18px 10px 10px;
+}
+.ask-hello .ah-ico {
+  font-size: 34px; line-height: 1; margin-bottom: 14px;
+  color: var(--gold); opacity: .75;
+}
+.ask-hello .ah-t {
+  font-family: var(--f-display); font-weight: 900;
+  font-size: 27px; letter-spacing: .5px; color: var(--ink-900);
+  margin-bottom: 10px;
+}
+.ask-hello .ah-d {
+  font-size: 14.5px; line-height: 1.85; color: var(--text-2);
+  margin-bottom: 14px;
+}
+.ask-hello .ah-note {
+  font-size: 12.5px; color: var(--text-3);
+}
 
 /* ============================================================
    看板
@@ -1073,6 +1114,96 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
   box-shadow: 0 1px 0 var(--line), 0 6px 8px -8px rgba(34, 39, 31, .16);
 }
 .tbl-wrap.tbl-sticky { max-height: 460px; overflow-y: auto; }
+
+/* ============================================================
+   窄屏单据卡（<=640px）：替代七列表格
+   桌面端 #recentCards 只承载筛选 chips 行（见下方媒体查询），不显示卡片本体
+   ============================================================ */
+.db-recent-cards { display: none; flex-direction: column; gap: 9px; }
+.bill-card {
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--gold);
+  border-radius: 10px;
+  background: #faf8f1;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.bill-card.bc-in { border-left-color: var(--blue); }
+.bill-card .bc-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bill-card .bc-no {
+  font-family: var(--f-mono); font-size: 12.5px; color: var(--blue); font-weight: 600;
+}
+.bill-card .bc-amt {
+  margin-left: auto; font-weight: 800; font-variant-numeric: tabular-nums;
+  font-size: 16px; color: var(--ink-900);
+}
+.bill-card .bc-mid {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-top: 5px;
+}
+.bill-card .bc-party { font-weight: 600; color: var(--text); }
+.bill-card .bc-goods {
+  color: var(--text-3); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.bill-card .bc-bot {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 5px; font-size: 12.5px;
+}
+.bill-card .bc-debt { color: var(--gold-strong); font-weight: 700; }
+
+/* 窄屏卡片可点（有详情弹层） */
+.bill-card { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.bill-card:hover { border-color: #e0cf9f; box-shadow: var(--shadow-1); }
+
+/* ============================================================
+   单据详情弹层（点卡片 / 点表格行）
+   ============================================================ */
+.bd-no { font-family: var(--f-mono); font-size: 14px; color: var(--blue); font-weight: 600; }
+.bd-sub { margin: 0 0 14px; }
+.bd-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+.bd-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 7px 0; border-bottom: 1px solid var(--line-soft);
+  font-size: 14.5px; min-width: 0;
+}
+.bd-row:last-child { border-bottom: none; }
+.bd-row .bd-k { flex: 0 0 68px; color: var(--text-3); font-size: 13px; }
+.bd-row .bd-v {
+  flex: 1; min-width: 0; text-align: right;
+  word-break: break-all; font-variant-numeric: tabular-nums;
+}
+/* 备注/附件等长文本独占一行 */
+.bd-row.wide { grid-column: 1 / -1; }
+.bd-row.wide .bd-v { text-align: left; }
+@media (max-width: 640px) {
+  .bd-grid { grid-template-columns: 1fr; }
+}
+
+/* 窄屏单据筛选 chips（全部 / 入库 / 出库 / 草稿），带计数 */
+.fchips {
+  display: flex; gap: 7px; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.fchip {
+  font-family: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums;
+  padding: 4px 12px; border-radius: 20px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card); color: var(--text-2);
+  transition: .15s;
+}
+.fchip:hover { border-color: var(--gold); color: var(--gold-strong); }
+.fchip.on {
+  background: linear-gradient(135deg, var(--ink-700), var(--ink-900));
+  border-color: var(--ink-800); color: var(--gold-soft); font-weight: 700;
+}
+.bc-more { align-self: center; margin-top: 4px; }
+
+@media (max-width: 640px) {
+  .db-recent-table { display: none; }
+  .db-recent-cards { display: flex; }
+}
+/* 桌面：#recentCards 只作为筛选 chips 行显示在表格上方（功能与窄屏一致） */
+#recentCards:not(:empty) { display: block; margin-bottom: 12px; }
 .db-delta { font-size: 12.5px; font-weight: 700; }
 .db-delta.up { color: var(--jade); }
 .db-delta.down { color: var(--rust); }
@@ -1085,6 +1216,15 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
    ============================================================ */
 @media (max-width: 640px) {
   body { font-size: 15.5px; }
+  /* 问一问窄屏：glass 房压到一屏内（100dvh - 头部 - tabbar），输入框不被顶出视口 */
+  .chat-wrap { min-height: 0; height: calc(100dvh - 262px); }
+  .chat-log { padding-bottom: 6px; }
+  .chat-input-row { padding: 8px 0 2px; }
+  .chat-input-row textarea { height: 46px; font-size: 16px; padding: 10px 13px; }
+  .chat-input-row .btn { padding: 10px 16px; font-size: 15px; }
+  .ask-samples { gap: 6px; margin-bottom: 8px; }
+  .ask-samples .tag { font-size: 12px; padding: 2px 9px; }
+  .marquee { display: none; }   /* 窄屏信息与 KPI 重复且滚动慢，直接不显示 */
   .card { padding: 16px 15px; border-radius: 12px; }
   .hero { padding: 30px 20px 28px; border-radius: 16px; }
   .hero-flow { gap: 6px; }

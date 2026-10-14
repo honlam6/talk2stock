@@ -12,17 +12,16 @@
 
   <div class="chat-wrap">
     <div class="chat-log" id="log"></div>
-    <div class="hint" style="max-width:860px;margin:4px auto 8px;width:100%">试试：
+    <div class="ask-samples" id="askSamples">
       <span class="tag tag-new" style="cursor:pointer" data-q="可乐还有多少库存？">可乐还有多少库存？</span>
       <span class="tag tag-new" style="cursor:pointer" data-q="今天卖了多少？">今天卖了多少？</span>
       <span class="tag tag-new" style="cursor:pointer" data-q="谁欠我钱？">谁欠我钱？</span>
       <span class="tag tag-new" style="cursor:pointer" data-q="什么货快没了？">什么货快没了？</span>
     </div>
     <div class="chat-input-row">
-      <textarea id="q" placeholder="问一句经营数据，例如「矿泉水还有货吗」"></textarea>
+      <textarea id="q" rows="1" placeholder="问一句经营数据…"></textarea>
       <button class="btn btn-primary" id="send">提问</button>
     </div>
-    <div class="hint center mt-1">只读问答：只查数据，不改任何单据。数字全部来自 ERP 实时接口。</div>
   </div>
 </div>
 
@@ -33,32 +32,25 @@ $('#ph').innerHTML = pageHead('ASK', '问一问', '库存 / 采销 / 欠款，�
 
 const log = $('#log');
 
-// 空状态引导（首问之后自动消失）
+// 空状态引导（首问之后自动消失）。
+// 不用白色气泡：引导不是"AI 回复"，做成全宽居中的欢迎版式，
+// 与真实回复（气泡）在视觉上区分开。窄屏刻意做矮，一屏要装下输入框。
 (function emptyState() {
   const d = document.createElement('div');
-  d.className = 'msg bot';
+  d.className = 'ask-hello';
   d.innerHTML = `
-    <div class="empty" style="padding:8px 0 2px">
-      <div class="e-ico">❝</div>
-      <div class="e-t">我在。想问哪本账？</div>
-      <div class="e-d">库存余量 · 今日 / 本月采销 · 谁欠谁钱 · 哪些货快没了 · 库存值多少钱</div>
-      <div class="e-chips">
-        <span class="tag tag-new" style="cursor:pointer" data-q="可乐还有多少库存？">可乐还有多少库存？</span>
-        <span class="tag tag-new" style="cursor:pointer" data-q="今天卖了多少？">今天卖了多少？</span>
-        <span class="tag tag-new" style="cursor:pointer" data-q="谁欠我钱？">谁欠我钱？</span>
-        <span class="tag tag-new" style="cursor:pointer" data-q="什么货快没了？">什么货快没了？</span>
-      </div>
-    </div>`;
-  const s = document.createElement('span');
-  s.className = 'src';
-  s.textContent = '所有回答只读，数字实时取自 ERP';
-  d.appendChild(s);
+    <div class="ah-ico">❝</div>
+    <div class="ah-t">问一句，就对账</div>
+    <div class="ah-d">库存余量 · 今日 / 本月采销 · 谁欠谁钱 · 哪些货快没了 · 库存值多少钱</div>
+    <div class="ah-note">所有回答只读 · 数字实时取自 ERP</div>`;
   log.appendChild(d);
 })();
 
-// 空状态里的示例 chip 也要能点
-document.querySelectorAll('.msg.bot [data-q]').forEach(el =>
-  el.onclick = () => doAsk(el.dataset.q));
+// 空状态里的示例 chip 现在放在输入框上方（ask-samples），提问后隐藏该行
+$('#askSamples').addEventListener('click', e => {
+  const el = e.target.closest('[data-q]');
+  if (el) doAsk(el.dataset.q);
+});
 
 function add(cls, text, src) {
   const d = document.createElement('div');
@@ -85,6 +77,7 @@ async function doAsk(q) {
   if (!q.trim()) return;
   add('user', q);
   $('#q').value = '';
+  $('#askSamples').style.display = 'none';     // 提问后收起示例行
   const empty = log.querySelector('.msg.bot .empty');
   if (empty) empty.closest('.msg.bot').remove();     // 首次提问后收起引导
   const pending = document.createElement('div');
