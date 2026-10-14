@@ -13,7 +13,7 @@
   <!-- ERP 连接 -->
   <div class="card">
     <h2><span class="bar"></span>ERP 连接
-      <span style="flex:1"></span>
+      <span class="flex-1"></span>
       <span id="erpBadge"></span>
     </h2>
     <div class="hint" style="margin:-6px 0 14px">本系统只连你自己部署的 jshERP；密码只存在本机服务端，不会外发。</div>
@@ -36,7 +36,7 @@
     <div class="row-btns">
       <button class="btn btn-primary" id="erpSave">保存并测试连接</button>
       <a class="btn btn-ghost" href="http://localhost:8080" target="_blank" rel="noopener">打开原版 ERP ↗</a>
-      <span class="hint" id="erpMsg" style="flex:1"></span>
+      <span class="hint flex-1" id="erpMsg"></span>
     </div>
     <div id="masterStat" class="hint" style="margin-top:10px"></div>
   </div>
@@ -118,6 +118,8 @@ $('#erpSave').onclick = async () => {
 
 async function refreshMasterStat() {
   const b = $('#erpBadge');
+  b.innerHTML = '<span class="skel skel-chip" style="width:64px;height:22px"></span>';
+  $('#masterStat').innerHTML = '<div class="skel skel-text w-40"></div>';
   try {
     const m = await loadMaster(true);
     const c = m.counts || {};

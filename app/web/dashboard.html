@@ -17,36 +17,36 @@
     <button class="btn btn-sm" id="refresh">↻ 刷新</button>
   </div>
 
-  <div class="kpi-grid" id="kpiRow"><div class="muted">加载中…</div></div>
+  <div class="kpi-grid" id="kpiRow"></div>
 
   <div class="db-grid">
     <div class="card">
       <h2><span class="bar"></span>经营趋势
-        <span style="flex:1"></span>
+        <span class="flex-1"></span>
         <span class="db-toggle" id="trendToggle">
           <button data-m="month" class="on">近 6 个月</button>
           <button data-m="daily">本月每日</button>
         </span>
       </h2>
       <div class="db-chart" id="trendChart">
-        <div class="db-legend" style="margin-bottom:8px">
+        <div class="db-legend mb-3">
           <span><i style="background:var(--gold)"></i>采购</span>
           <span><i style="background:var(--jade)"></i>销售</span>
         </div>
-        <div id="trendBox" class="muted center" style="padding:40px 0">加载中…</div>
+        <div id="trendBox"><div class="skel skel-block"></div></div>
       </div>
     </div>
 
     <div class="card">
       <h2><span class="bar"></span>资金与待办</h2>
-      <div id="fundBox"><div class="muted">加载中…</div></div>
+      <div id="fundBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div><div class="skel skel-bar w-60"></div></div>
     </div>
   </div>
 
   <div class="two-col">
     <div class="card">
       <h2><span class="bar"></span>商品进销榜 <span class="muted" style="font-size:13px;font-weight:400">累计 · 官方进销存统计</span></h2>
-      <div id="goodsBox"><div class="muted">加载中…</div></div>
+      <div id="goodsBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div><div class="skel skel-bar w-60"></div></div>
     </div>
 
     <div class="card">
@@ -59,12 +59,12 @@
   <div class="two-col">
     <div class="card">
       <h2><span class="bar"></span>往来排行 <span class="muted" style="font-size:13px;font-weight:400">累计发生额 TOP5</span></h2>
-      <div id="partyBox"><div class="muted">加载中…</div></div>
+      <div id="partyBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div></div>
     </div>
 
     <div class="card">
       <h2><span class="bar"></span>往来欠款</h2>
-      <div id="debtBox"><div class="muted">加载中…</div></div>
+      <div id="debtBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-40"></div></div>
     </div>
   </div>
 
@@ -80,7 +80,6 @@
       </table>
     </div>
   </div>
-
   <div class="db-foot" id="footBox"></div>
 
 </div>
@@ -123,7 +122,7 @@ function deltaChip(cur, prev, dir) {
 /* ---------- 折线 + 面积图（月趋势） ---------- */
 function trendSVG(buy, sell) {
   const box = $('#trendBox');
-  if (!buy || !buy.length) { box.innerHTML = '<div class="muted center" style="padding:40px 0">暂无趋势数据</div>'; return; }
+  if (!buy || !buy.length) { box.innerHTML = '<div class="empty"><div class="e-ico">📉</div><div class="e-t">暂无趋势数据</div><div class="e-d">录单后，近 6 个月的采购/销售曲线会自动出现在这里。</div></div>'; return; }
   const compact = $('#trendChart').clientWidth < 560;
   const W = compact ? 420 : 760, H = compact ? 250 : 300;
   const L = compact ? 44 : 58, R = 14, T = 18, B = compact ? 30 : 38;
@@ -204,7 +203,7 @@ function trendSVG(buy, sell) {
 /* ---------- 每日柱状图 ---------- */
 function dailySVG(daily, month) {
   const box = $('#trendBox');
-  if (!daily || !daily.length) { box.innerHTML = '<div class="muted center" style="padding:40px 0">暂无每日数据</div>'; return; }
+  if (!daily || !daily.length) { box.innerHTML = '<div class="empty"><div class="e-ico">🗓</div><div class="e-t">本月还没有每日数据</div><div class="e-d">切到「近 6 个月」看整体趋势，或先去录一单。</div></div>'; return; }
   const compact = $('#trendChart').clientWidth < 560;
   const W = compact ? 420 : 760, H = compact ? 250 : 300;
   const L = compact ? 44 : 58, R = 14, T = 18, B = compact ? 30 : 38;
@@ -282,6 +281,30 @@ function kpi(cls, label, val, subTxt) {
   </div>`;
 }
 
+/* ---------- 加载骨架屏（首次进入/刷新时先铺占位） ---------- */
+function renderSkeletons() {
+  $('#kpiRow').innerHTML = ['b', 'g', 'b', 'o'].map(c => `
+    <div class="kpi skeleton-card ${c}">
+      <div class="lbl skel" style="width:52%;height:11px"></div>
+      <div class="val skel skel-val"></div>
+      <div class="sub skel skel-text w-80"></div>
+    </div>`).join('');
+  $('#trendBox').innerHTML = '<div class="skel skel-block"></div>';
+  $('#fundBox').innerHTML = '<div class="skel skel-val" style="width:46%"></div>' +
+    '<div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div><div class="skel skel-bar w-60"></div>';
+  $('#goodsBox').innerHTML = '<div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div>' +
+    '<div class="skel skel-bar w-60"></div><div class="skel skel-bar w-40"></div>';
+  $('#stockSum').innerHTML = '<div class="skel" style="display:inline-block;width:180px;height:13px;vertical-align:middle"></div>';
+  $('#stockBox').innerHTML = '<div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div><div class="skel skel-bar w-60"></div>';
+  $('#partyBox').innerHTML = '<div class="skel skel-title"></div>' +
+    '<div class="skel skel-bar"></div><div class="skel skel-bar w-60"></div>';
+  $('#debtBox').innerHTML = '<div class="skel skel-title"></div>' +
+    '<div class="skel skel-bar"></div><div class="skel skel-bar w-40"></div>';
+  $('#recentTbl tbody').innerHTML = ['', '', '', ''].map(() =>
+    `<tr>${['', '', '', '', '', '', ''].map(() => '<td><div class="skel skel-text" style="margin:4px 0"></div></td>').join('')}</tr>`).join('');
+  $('#updAt').textContent = '加载中…';
+}
+
 /* ---------- 资金与待办 ---------- */
 function renderFund() {
   const O = D.official || {};
@@ -302,7 +325,7 @@ function renderFund() {
         <span class="track"><span class="fill" style="width:${(x.amount / max * 100).toFixed(1)}%"></span></span>
         <span class="amt">￥${money(x.amount)}</span>
       </div>`).join('')
-      : '<div class="muted" style="padding:8px 0">还没有资金账户</div>'}
+      : '<div class="muted mt-1">还没有资金账户</div>'}
     <div class="db-chips">
       ${chips.map(([l, v, c]) => `<div class="db-chip db-c-${c}"><b>${v}</b><span>${l}</span></div>`).join('')}
     </div>`;
@@ -313,7 +336,7 @@ function renderGoods() {
   const g = D.goods || {};
   const rows = g.rows || [];
   const box = $('#goodsBox');
-  if (!rows.length) { box.innerHTML = '<div class="muted center" style="padding:26px 0">还没有商品出入库记录</div>'; return; }
+  if (!rows.length) { box.innerHTML = '<div class="empty"><div class="e-ico">📦</div><div class="e-t">还没有商品出入库记录</div><div class="e-d">第一张单录入后，这里会出现商品进销榜。</div><div class="e-act"><a class="btn btn-primary" href="/new?mode=ai">去录单 →</a></div></div>'; return; }
   const maxV = Math.max(1, ...rows.map(r => r.value));
   box.innerHTML = `
     <div class="db-chips" style="margin-bottom:10px">
@@ -347,7 +370,7 @@ function renderStock() {
     `<span class="tag tag-new">低库存 ${s.low || 0}</span>` +
     ((s.negative || 0) > 0 ? `　<span class="tag" style="background:var(--rust-bg);color:#b5532f">负库存 ${s.negative}</span>` : '');
   const box = $('#stockBox');
-  if (!list.length) { box.innerHTML = '<div class="muted center" style="padding:26px 0">库存都很充足 👍</div>'; return; }
+  if (!list.length) { box.innerHTML = '<div class="empty"><div class="e-ico">✅</div><div class="e-t">库存都很充足</div><div class="e-d">没有低库存或负库存商品，不需要补货。</div></div>'; return; }
   box.innerHTML = list.slice(0, 9).map(r => {
     const ratio = Math.max(0, Math.min(100, r.stock / Math.max(r.threshold, 1) * 100));
     const color = r.stock < 0 ? '#b5532f' : (r.stock === 0 ? '#a87f26' : '#e8c97a');
@@ -418,15 +441,35 @@ function renderDebt() {
     sec('我欠供应商（应付）', D.aging.pay || [], D.debt_pay_total, D.debt_pay || [], AGING_COLORS2, '没有未结清的应付款 🎉');
 }
 
-/* ---------- 最近单据 ---------- */
+/* ---------- 最近单据（可排序 + 点击表头切换升降序） ---------- */
 const SUB_CLS = {
   '采购': 't-blue', '其它': 't-gray', '盘点录入': 't-gray', '组装单': 't-gray', '拆卸单': 't-gray',
   '销售': 't-green', '零售': 't-green', '调拨': 't-gray',
   '采购退货': 't-red', '销售退货': 't-red', '零售退货': 't-red',
 };
+const RECENT_COLS = [
+  { key: 'time',   type: 's' },
+  { key: 'type',   type: 's' },
+  { key: 'number', type: 's' },
+  { key: 'party',  type: 's' },
+  { key: 'goods',  type: 's' },
+  { key: 'total',  type: 'n' },
+  { key: 'status', type: 's' },
+];
+let recentSort = { col: 0, desc: true };
+
 function renderRecent() {
-  const rows = D.recent || [];
-  $('#recentCnt').textContent = rows.length ? `（最近 ${rows.length} 张 / 共 ${D.bill_count || rows.length} 张）` : '';
+  let rows = (D && D.recent) || [];
+  $('#recentCnt').textContent = rows.length ? `（最近 ${rows.length} 张 / 共 ${D.bill_count || rows.length} 张 · 点表头排序）` : '';
+  const c = RECENT_COLS[recentSort.col];
+  rows = rows.slice().sort((a, b) => {
+    const x = a[c.key], y = b[c.key];
+    const r = c.type === 'n' ? (Number(x) || 0) - (Number(y) || 0)
+      : String(x || '').localeCompare(String(y || ''), 'zh-CN');
+    return recentSort.desc ? -r : r;
+  });
+  $('#recentTbl thead').innerHTML = `<tr>${['日期', '类型', '单号', '往来单位', '商品', '金额', '状态']
+    .map((h, i) => `<th class="sortable${i === recentSort.col ? ' sorted' : ''}${i === recentSort.col && recentSort.desc ? ' desc' : ''}" data-c="${i}">${h}</th>`).join('')}</tr>`;
   $('#recentTbl tbody').innerHTML = rows.length
     ? rows.map(r => {
         const sub = (r.type || '').split('·')[1] || r.type;
@@ -442,8 +485,18 @@ function renderRecent() {
           <td>${r.status === '已审核' ? '<span class="typ-pill t-green">已审核</span>' : '<span class="typ-pill t-orange">草稿</span>'}</td>
         </tr>`;
       }).join('')
-    : '<tr><td colspan="7" class="muted center">还没有单据，去「对话录单」说一句话就能开单</td></tr>';
+    : '<tr><td colspan="7"><div class="empty"><div class="e-ico">📄</div><div class="e-t">还没有单据</div>' +
+      '<div class="e-d">去「对话录单」说一句话就能开单，写入后会出现在这里。</div>' +
+      '<div class="e-act"><a class="btn btn-primary" href="/new?mode=ai">去录第一单 →</a></div></div></td></tr>';
 }
+
+$('#recentTbl').addEventListener('click', e => {
+  const th = e.target.closest('th.sortable');
+  if (!th) return;
+  const i = +th.dataset.c;
+  recentSort = (recentSort.col === i) ? { col: i, desc: !recentSort.desc } : { col: i, desc: true };
+  renderRecent();
+});
 
 /* ---------- 页脚 ---------- */
 function renderFoot() {
@@ -466,6 +519,7 @@ function renderAll() {
 async function load() {
   const btn = $('#refresh');
   btn.disabled = true; btn.textContent = '刷新中…';
+  if (!D) renderSkeletons();     // 首次进入铺骨架；刷新时保留旧数据（避免闪空）
   try {
     const d = await api('/api/dashboard');
     if (!d.ok) { toast(d.message || '加载失败', 'bad'); return; }
@@ -474,6 +528,7 @@ async function load() {
     renderAll();
   } catch (e) {
     toast(e.message, 'bad');
+    if (!D) $('#trendBox').innerHTML = `<div class="empty"><div class="e-ico">📡</div><div class="e-t">看板没连上</div><div class="e-d">${esc(e.message)}</div><div class="e-act"><button class="btn btn-primary" onclick="load()">重试</button></div></div>`;
   } finally {
     btn.disabled = false; btn.textContent = '↻ 刷新';
   }
