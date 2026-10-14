@@ -52,22 +52,42 @@ function nowStamp() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-// ---------- 提示条 ----------
-function toast(msg, kind) {
-  let t = $('#__toast');
-  if (!t) {
-    t = document.createElement('div');
-    t.id = '__toast';
-    t.className = 'toast';
-    document.body.appendChild(t);
+/* ---------- 通知（右下角堆叠 · 可关闭 · 令牌着色） ----------
+   替代旧版顶部单条 toast；旧调用签名 toast(msg, kind) 完全兼容。
+   kind: 'bad' | 'warn' | 'ok'（默认 ok）。 */
+const TOAST_ICON = { ok: '✓', warn: '⚠', bad: '✕' };
+function toastBox() {
+  let b = $('.toasts');
+  if (!b) {
+    b = document.createElement('div');
+    b.className = 'toasts';
+    b.setAttribute('role', 'status');
+    b.setAttribute('aria-live', 'polite');
+    document.body.appendChild(b);
   }
-  t.textContent = msg;
-  t.style.cssText = 'position:fixed;left:50%;top:24px;transform:translateX(-50%);z-index:9999;' +
-    'padding:12px 24px;border-radius:8px;font-size:16px;box-shadow:0 4px 16px rgba(0,0,0,.2);' +
-    'color:#fff;max-width:88vw;text-align:center;' +
-    'background:' + (kind === 'bad' ? '#b5532f' : kind === 'warn' ? '#a87f26' : '#1e7d5a');
-  clearTimeout(t._h);
-  t._h = setTimeout(() => t.remove(), kind === 'bad' ? 5000 : 2600);
+  return b;
+}
+function toast(msg, kind) {
+  const k = kind === 'bad' ? 'bad' : kind === 'warn' ? 'warn' : 'ok';
+  const box = toastBox();
+  const el = document.createElement('div');
+  el.className = 'toast-n ' + k;
+  el.innerHTML = `<span class="t-ico">${TOAST_ICON[k]}</span><span class="t-body"></span>
+    <button class="t-x" aria-label="关闭这条通知">×</button>`;
+  el.querySelector('.t-body').textContent = msg;
+  const close = () => {
+    if (el._gone) return;
+    el._gone = true;
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 220);
+  };
+  el.querySelector('.t-x').onclick = close;
+  box.appendChild(el);
+  // 同时最多 4 条，超出从最旧的开始收
+  while (box.children.length > 4) box.firstElementChild.remove();
+  clearTimeout(el._h);
+  el._h = setTimeout(close, k === 'bad' ? 6000 : 3400);
+  return el;
 }
 
 // ---------- 主数据 ----------
@@ -291,9 +311,10 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
     done: false,               // 确认流程已走完，关闭时不再触发 onCancel
   };
   let detachKey = null;        // 当前弹层的键盘监听卸载器（重渲染时先卸旧的，防残留）
+  let detachTrap = null;       // 焦点陷阱卸载器
 
   const candChips = (cands, pick) => (cands || []).length
-    ? `<div style="margin-top:6px"><span class="hint">是指：</span>${cands.map(c =>
+    ? `<div class="mt-1"><span class="hint">是指：</span>${cands.map(c =>
         `<span class="tag tag-blue" style="cursor:pointer" data-pick="${esc(pick)}" data-cand="${esc(c)}">${esc(c)}</span>`).join(' ')}</div>`
     : '';
 
@@ -380,7 +401,7 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
         <div class="alert alert-warn">
           <b>⚠ 以下资料系统里还没有，写入时会自动帮你建好：</b>
           <ul style="margin:8px 0 0 20px;padding:0">${toCreate.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-          <div class="hint" style="margin-top:8px">不用先去「基础资料」里新增，确认后一并创建。</div>
+          <div class="hint mt-2">不用先去「基础资料」里新增，确认后一并创建。</div>
         </div>` : ''}
 
         ${warns.length ? `<div class="alert alert-info"><b>提醒：</b><br>${warns.map(esc).join('<br>')}</div>` : ''}
@@ -407,27 +428,27 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
           </div>
         </div>
 
-        <div class="tbl-wrap" style="margin-top:12px">
+        <div class="tbl-wrap mt-3">
           <table class="xtable">
             <thead><tr><th>商品</th><th class="num" style="width:86px">数量</th><th style="width:76px">单位</th><th class="num" style="width:110px">单价</th><th class="num" style="width:100px">金额</th><th style="width:40px"></th></tr></thead>
             <tbody id="__pvBody">${rows || '<tr><td colspan="6" class="muted center">没有明细</td></tr>'}</tbody>
           </table>
         </div>
-        <button class="btn btn-sm btn-ghost" id="__addRow" style="margin-top:6px">＋ 加一行</button>
+        <button class="btn btn-sm btn-ghost mt-1" id="__addRow">＋ 加一行</button>
 
         <div class="total-row">合计：<span class="amount" id="__pvTotal">￥${money(curTotal())}</span></div>
 
         <div class="pv-dirty hidden" id="__dirtyBar">✏ 内容已修改：先「刷新预览」重新校验档案匹配 / 库存 / 合计，再确认写入。</div>
 
         ${(st.attach && st.attach.length) ? `
-        <div class="field" style="margin-top:14px">
+        <div class="field mt-3">
           <label>附件（${st.attach.length} 份，已上传到 ERP）</label>
-          <div class="attach-list" style="margin-top:6px">
+          <div class="attach-list mt-1">
             ${st.attach.map(x => `<div class="attach-item"><span class="ok">✓</span><span class="nm">${esc(x.name)}</span></div>`).join('')}
           </div>
         </div>` : ''}
 
-        <div class="row-btns" style="margin-top:18px">
+        <div class="row-btns mt-4">
           <button class="btn btn-ghost" id="__cancel">再改改</button>
           <span class="hint" style="flex:1">Esc 关闭 · ⌘/Ctrl+Enter 确认 · 表格里可直接改数</span>
           <button class="btn btn-primary btn-lg" id="__ok" ${errs.length ? 'disabled' : ''}>确认写入 ERP</button>
@@ -505,9 +526,15 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
     const close = () => {
       if (detachKey) detachKey();
       detachKey = null;
+      if (detachTrap) detachTrap();
+      detachTrap = null;
       mask.remove();
       if (!st.done && extra.onCancel) extra.onCancel(st.draft);
     };
+
+    // 焦点陷阱：Tab 只在弹层内循环；Esc 复用 close
+    if (detachTrap) detachTrap();
+    detachTrap = trapFocus(mask, close);
 
     // 就地编辑：字段输入 → 写回草稿（先改数，提交前统一刷新预览重签令牌）
     $('#__pvBody').addEventListener('input', e => {
@@ -648,6 +675,162 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
   render();
 }
 
+// ---------- 焦点陷阱（21st.dev Dialog 模式核心） ----------
+/** 打开 mask 时调用，返回卸载函数。Tab 只在容器内循环，Esc 由调用方自行处理。 */
+function trapFocus(container, onEscape) {
+  const SEL = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const first = container.querySelector('.modal-x') || container.querySelector(SEL);
+  if (first) first.focus();
+  const onKey = e => {
+    if (e.key === 'Escape') { if (onEscape) { e.preventDefault(); onEscape(); } return; }
+    if (e.key !== 'Tab') return;
+    const items = Array.from(container.querySelectorAll(SEL)).filter(el => el.offsetParent !== null);
+    if (!items.length) return;
+    const f = items[0], l = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === f) { e.preventDefault(); l.focus(); }
+    else if (!e.shiftKey && document.activeElement === l) { e.preventDefault(); f.focus(); }
+  };
+  container.addEventListener('keydown', onKey);
+  return () => container.removeEventListener('keydown', onKey);
+}
+
+// ---------- 命令面板（⌘K / Ctrl+K） ----------
+/** 只做导航与填入输入框，绝不触发解析/提交（沿用用户「少一步」偏好）。 */
+const CMD_ITEMS = [
+  { sec: '录单', ico: '✎', t: '对话录单', d: '说一句话，AI 拆成草稿', go: () => '/new?mode=ai' },
+  { sec: '录单', ico: '▤', t: '表单录单', d: '逐字段精确控制，不依赖 AI', go: () => '/new?mode=form' },
+  { sec: '经营', ico: '❝', t: '问一问', d: '库存 / 采销 / 欠款，随口问', go: () => '/ask' },
+  { sec: '经营', ico: '◫', t: '经营看板', d: '趋势 / 账龄 / 预警，一页看完', go: () => '/dashboard' },
+  { sec: '系统', ico: '⚙', t: '设置', d: 'ERP 连接与 AI 模型档案', go: () => '/settings' },
+  { sec: '系统', ico: '▦', t: '原版 ERP', d: '新标签页打开 jshERP 本体', go: () => { window.open(ERP_URL, '_blank', 'noopener'); return null; } },
+];
+
+function commandPalette() {
+  const old = $('#__cmdk');
+  if (old) { old.remove(); return; }
+
+  const mask = document.createElement('div');
+  mask.id = '__cmdk';
+  mask.className = 'cmdk-mask';
+  mask.setAttribute('role', 'dialog');
+  mask.setAttribute('aria-modal', 'true');
+  mask.setAttribute('aria-label', '命令面板');
+  mask.innerHTML = `
+    <div class="cmdk">
+      <div class="cmdk-input-row">
+        <span class="k-ico">⌘</span>
+        <input id="__cmdkQ" placeholder="跳转到页面、或执行命令…" autocomplete="off" spellcheck="false">
+        <kbd>ESC</kbd>
+      </div>
+      <div class="cmdk-list" id="__cmdkList" role="listbox"></div>
+      <div class="cmdk-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 移动</span>
+        <span><kbd>↵</kbd> 执行</span>
+        <span><kbd>Tab</kbd> 在面板内循环</span>
+        <span style="margin-left:auto">Talk2Stock 命令面板</span>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+
+  const input = $('#__cmdkQ', mask), list = $('#__cmdkList', mask);
+  let shown = CMD_ITEMS.map(it => Object.assign({}, it));
+  let sel = 0;
+
+  const fuzzy = (q, item) => {
+    if (!q) return true;
+    return (item.t + ' ' + item.d + ' ' + item.sec).toLowerCase().includes(q.toLowerCase());
+  };
+
+  function render(resetSel) {
+    const q = input.value.trim();
+    shown = CMD_ITEMS.map(it => Object.assign({}, it)).filter(it => fuzzy(q, it));
+    if (resetSel !== false) sel = 0;
+    if (sel >= shown.length) sel = Math.max(0, shown.length - 1);
+    if (!shown.length) {
+      list.innerHTML = '<div class="cmdk-empty">没有匹配的命令<br><span style="font-size:12.5px">试试「看板」「录单」「问一问」</span></div>';
+      return;
+    }
+    let html = '', lastSec = '';
+    shown.forEach((it, i) => {
+      if (it.sec !== lastSec) { html += `<div class="cmdk-sec">${esc(it.sec)}</div>`; lastSec = it.sec; }
+      html += `<div class="cmdk-item" role="option" aria-selected="${i === sel}" data-i="${i}">
+        <span class="k-ico">${it.ico}</span>
+        <span class="k-body"><span class="k-t">${esc(it.t)}</span><span class="k-d">${esc(it.d)}</span></span>
+        <span class="k-hint">↵</span>
+      </div>`;
+    });
+    list.innerHTML = html;
+    const on = list.querySelector('[aria-selected="true"]');
+    if (on) on.scrollIntoView({ block: 'nearest' });
+  }
+
+  function run(i) {
+    const it = shown[i];
+    if (!it) return;
+    close();
+    const r = it.go();
+    if (r) location.href = r;
+  }
+
+  function close() {
+    if (untrap) untrap();
+    document.removeEventListener('keydown', onGlobal, true);
+    mask.remove();
+  }
+
+  const onGlobal = e => {
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); close(); }
+  };
+
+  input.addEventListener('input', render);          // 输入变化 → 选中项回到第一项
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || (e.key === 'n' && e.ctrlKey)) {
+      e.preventDefault(); if (shown.length) { sel = (sel + 1) % shown.length; render(false); }
+    } else if (e.key === 'ArrowUp' || (e.key === 'p' && e.ctrlKey)) {
+      e.preventDefault(); if (shown.length) { sel = (sel - 1 + shown.length) % shown.length; render(false); }
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); run(sel);
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); close();
+    }
+  });
+  list.addEventListener('click', e => {
+    const el = e.target.closest('.cmdk-item');
+    if (el) run(+el.dataset.i);
+  });
+  mask.addEventListener('mousedown', e => { if (e.target === mask) close(); });
+
+  const untrap = trapFocus(mask.querySelector('.cmdk'), close);
+  document.addEventListener('keydown', onGlobal, true);
+  render();
+  input.focus();
+}
+
+// 全局快捷键：⌘K / Ctrl+K。输入框内不抢（textarea/input 里 Ctrl+K 仍生效，便于随时唤起）
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K') && !$('#__cmdk')) {
+    e.preventDefault();
+    commandPalette();
+  }
+});
+
+// 首次访问给一次轻提示，4.5s 后自动消失（sessionStorage 记住，不重复骚扰）
+(function cmdkTip() {
+  try {
+    if (sessionStorage.getItem('t2s_cmdk_tip')) return;
+    sessionStorage.setItem('t2s_cmdk_tip', '1');
+  } catch (e) { return; }
+  setTimeout(() => {
+    if ($('#__cmdk')) return;
+    const isMac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+    const t = document.createElement('div');
+    t.className = 'cmdk-tip';
+    t.innerHTML = `按 <kbd>${isMac ? '⌘' : 'Ctrl'}</kbd><kbd>K</kbd> 打开命令面板，快速跳转`;
+    document.body.appendChild(t);
+    setTimeout(() => { t.classList.add('leaving'); setTimeout(() => t.remove(), 500); }, 4500);
+  }, 1200);
+})();
+
 // ---------- 侧边导航骨架 ----------
 const NAV_ITEMS = [
   ['/', '工作台', '⌂'],
@@ -671,7 +854,8 @@ function shell(active) {
     ${NAV_ITEMS.map(([h, t, i]) =>
       `<a class="nav-item${h === active ? ' on' : ''}" href="${h}"><span class="ico">${i}</span>${t}</a>`).join('')}
     <div class="nav-sec">系统</div>
-    <a class="nav-item" href="${ERP_URL}" target="_blank" rel="noopener"><span class="ico">▦</span>原版 ERP<\/a>
+    <a class="nav-item" href="${ERP_URL}" target="_blank" rel="noopener"><span class="ico">▦</span>原版 ERP</a>
+    <a class="nav-item" id="__navCmd" href="javascript:void 0" title="快捷键 Ctrl/⌘ + K"><span class="ico">⌘</span>命令面板</a>
     <div class="nav-foot">
       <div><span class="nav-dot" id="__navDot"></span><span id="__navStat">连接检查中…</span></div>
       <div>说一句话 · 变成一张 <b>ERP 单据</b></div>
@@ -689,6 +873,9 @@ function shell(active) {
   tab.innerHTML = NAV_ITEMS.slice(0, 5).map(([h, t, i]) =>
     `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="ico">${i}</span>${t}</a>`).join('');
   document.body.appendChild(tab);
+
+  const navCmd = $('#__navCmd');
+  if (navCmd) navCmd.onclick = () => commandPalette();
 
   // ERP 连接状态（静默）
   api('/api/master').then(() => {
