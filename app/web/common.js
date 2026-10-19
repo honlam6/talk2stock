@@ -12,6 +12,64 @@ const BIZ = {
   other_out:       { label: '其他出库', party: '往来单位', dir: 'out' },
 };
 
+// ---------- 就地输入弹框（替代 prompt） ----------
+/** WebView/部分内嵌浏览器不支持 prompt()，导致公网部署下取口令/操作人直接卡死。
+    统一用自绘 modal：Enter 确认、Esc 取消、输入框自动聚焦。返回 string 或 null（取消）。 */
+function askInline(opt) {
+  const o = Object.assign({ title: '请输入', hint: '', value: '', okText: '确定', cancelText: '取消', password: false, maxlen: 60 }, opt || {});
+  return new Promise(resolve => {
+    const old = document.getElementById('__askInline');
+    if (old) old.remove();
+    const mask = document.createElement('div');
+    mask.id = '__askInline';
+    mask.className = 'mask show';
+    mask.setAttribute('role', 'dialog');
+    mask.setAttribute('aria-modal', 'true');
+    mask.innerHTML = `
+      <div class="modal" style="max-width:440px">
+        <button class="modal-x" aria-label="关闭">×</button>
+        <h3>${esc(o.title)}</h3>
+        ${o.hint ? `<div class="hint" style="margin-top:6px">${esc(o.hint)}</div>` : ''}
+        <div class="pv-form">
+          <div class="pv-line">
+            <input id="__askInlineInput" type="${o.password ? 'password' : 'text'}" maxlength="${o.maxlen}"
+              value="${esc(o.value)}" autocomplete="off" spellcheck="false"
+              style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:15px">
+          </div>
+        </div>
+        <div class="row-btns mt-4">
+          <button class="btn btn-ghost" id="__askInlineCancel">${esc(o.cancelText)}</button>
+          <span class="hint flex-1">Enter 确认 · Esc 取消</span>
+          <button class="btn btn-primary" id="__askInlineOk">${esc(o.okText)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    const input = mask.querySelector('#__askInlineInput');
+    const done = v => { if (mask._done) return; mask._done = true; if (untrap) untrap(); mask.remove(); resolve(v); };
+    const ok = () => done(input.value);
+    mask.querySelector('#__askInlineOk').onclick = ok;
+    mask.querySelector('#__askInlineCancel').onclick = () => done(null);
+    mask.querySelector('.modal-x').onclick = () => done(null);
+    mask.addEventListener('mousedown', e => { if (e.target === mask) done(null); });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); ok(); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      e.stopPropagation();
+    });
+    const untrap = trapFocus(mask.querySelector('.modal'), () => done(null));
+    input.focus();
+    input.select();
+  });
+}
+async function askPass() {
+  const p = await askInline({
+    title: '需要访问口令',
+    hint: '该服务开启了访问口令（T2S_DEMO_PASS）。输入后只存在本机浏览器。',
+    okText: '验证并继续', password: true,
+  });
+  return p;
+}
+
 // ---------- 网络 ----------
 async function api(path, opts) {
   const o = Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {});
@@ -26,7 +84,7 @@ async function api(path, opts) {
     throw new Error('连接不上本地服务，请确认 server.py 还在运行');
   }
   if (r.status === 401) {
-    const p = prompt('该服务已开启访问口令（T2S_DEMO_PASS），请输入：', '');
+    const p = await askPass();
     if (p) { localStorage.setItem('t2s_pass', p); return api(path, opts); }
     throw new Error('需要访问口令');
   }
@@ -38,10 +96,14 @@ async function api(path, opts) {
 }
 
 // 操作人标识：只存本地，用于基线实验归因（写进 audit.jsonl 的 operator 字段）
-function ensureOperator() {
+async function ensureOperator() {
   let op = localStorage.getItem('t2s_operator');
   if (!op) {
-    const v = prompt('请输入你的名字或编号（只存本机，用于实验记录归因）：', '');
+    const v = await askInline({
+      title: '你的名字或编号',
+      hint: '只存本机，用于实验记录归因（写入审计）。可留空。',
+      okText: '保存', maxlen: 40,
+    });
     op = (v || '').trim().slice(0, 40);
     if (op) localStorage.setItem('t2s_operator', op);
   }
@@ -279,10 +341,17 @@ function AttachmentManager(zoneEl, opts) {
       const list = $('#__attList', zoneEl);
       if (list) list.appendChild(item);
       try {
-        const h = {};
+        let h = {};
         const p2 = localStorage.getItem('t2s_pass');
         if (p2) h['X-T2S-Pass'] = p2;
-        const r = await fetch('/api/upload', { method: 'POST', body: fd, headers: h });
+        let r = await fetch('/api/upload', { method: 'POST', body: fd, headers: h });
+        if (r.status === 401) {
+          const p = await askPass();
+          if (!p) { item.querySelector('.sz').textContent = '失败'; item.querySelector('.up').textContent = '✗'; continue; }
+          localStorage.setItem('t2s_pass', p);
+          h = { 'X-T2S-Pass': p };
+          r = await fetch('/api/upload', { method: 'POST', body: fd, headers: h });
+        }
         const j = await r.json();
         if (!j.ok) { item.querySelector('.sz').textContent = '失败'; item.querySelector('.up').textContent = '✗'; toast(j.message || '上传失败', 'bad'); continue; }
         paths.push(j.path); names.push(j.name || f.name);
@@ -668,7 +737,7 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
           confirm_token: st.preview.confirm_token || '',
           source: extra.source || '',
           raw_text: extra.rawText || '',
-          operator: ensureOperator(),
+          operator: await ensureOperator(),
         } });
         st.done = true;
         close();
