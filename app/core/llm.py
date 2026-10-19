@@ -68,7 +68,8 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 - party：只写单位名称本身，不要带"供应商"、"客户"、"从"、"给"等字。
 - items[].name：只写商品名，绝不能包含数字、数量、单位、价格。"3瓶可乐"→ name是"可乐"，qty是3，unit是"瓶"。
 - qty / price：纯数字，不带单位不带"元"。price 是单价不是总价；若用户只说了总价，用 总价÷数量 算单价。
-- unit：中文量词，如 个/瓶/箱/kg/卷/台。没说就填"个"。
+- unit：中文量词，如 个/瓶/箱/kg/卷/台。没说就填"个"。箱/盒这类副单位要原样保留，系统会按单位组自动折算基本数量。
+- items[].tax_rate：税率百分比数字。"含税13%"→13，"13个点"→13，"不含税"或没提→0。不要自己算税额。
 - depot：用户明确说了仓库才填，否则留空字符串（系统会用默认仓）。
 - oper_time：用户明确说了日期才填，格式 "YYYY-MM-DD HH:MM:SS"，否则留空。
 - pay_amount：用户明确提到"只付了X"、"付一半"、"欠款"时填实付数字；全款或没提就填 null。
@@ -83,6 +84,9 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 
 输入：玖龙纸业那批牛皮纸有问题，退10卷回去，每卷80
 输出：{"biz":"purchase_return","party":"玖龙纸业","items":[{"name":"牛皮纸","qty":10,"unit":"卷","price":80}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
+
+输入：从美宜佳进2箱可乐，一箱含税120，13个点
+输出：{"biz":"purchase_in","party":"美宜佳","items":[{"name":"可乐","qty":2,"unit":"箱","price":120,"tax_rate":13}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
 
 只输出 JSON，不要 markdown 代码块，不要解释。"""
 
@@ -331,7 +335,11 @@ def normalize(raw):
             continue
         if qty <= 0:
             problems.append(f"商品「{name}」数量缺失或为 0")
-        items.append({"name": name, "qty": qty, "unit": unit, "price": price})
+        tax_rate = _to_num(it.get("tax_rate"), 0)
+        if tax_rate < 0:
+            tax_rate = 0
+        items.append({"name": name, "qty": qty, "unit": unit, "price": price,
+                      "tax_rate": tax_rate})
 
     if not items:
         problems.append("没有解析出任何商品明细")

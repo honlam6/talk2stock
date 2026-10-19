@@ -278,10 +278,11 @@ def api_commit(_q, body):
     token = (body.get("confirm_token") or "").strip()
     source = (body.get("source") or "").strip()
     raw_text = (body.get("raw_text") or "").strip()
+    operator = (body.get("_operator") or body.get("operator") or "").strip()[:40]
     ok, meta, reason = gatemod.check(token, d)
     if not ok:
         # 闸门拒绝：不写库，记录审计（这正是「未经确认写入为 0」的取证位置）
-        gatemod.log_rejected(reason, d, source=source, raw_text=raw_text)
+        gatemod.log_rejected(reason, d, source=source, raw_text=raw_text, operator=operator)
         return {"ok": False, "need_confirm": True, "message": reason}
     erp = _erp()
     res = draftmod.commit(d, erp)
@@ -289,7 +290,7 @@ def api_commit(_q, body):
         res["message"] = "写入失败，请检查数据后重试"
     if res.get("ok"):
         diff = gatemod.diff_drafts(meta.get("draft_resolved") or {}, d)
-        gatemod.log_write(meta, d, res, diff=diff, source=source, raw_text=raw_text)
+        gatemod.log_write(meta, d, res, diff=diff, source=source, raw_text=raw_text, operator=operator)
     # 写库后主数据/单据可能变了，清缓存让下次预览和看板拿到最新
     try:
         erp.invalidate("")
@@ -550,6 +551,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "message": str(e)}, 400)
                 return
             try:
+                # 操作人标识（基线实验归因用）：请求头优先，其次 body
+                op = (self.headers.get("X-Operator") or "").strip()[:40]
+                if op and isinstance(body, dict):
+                    body.setdefault("_operator", op)
                 self._json(fn(q, body))
             except Exception as e:
                 sys.stderr.write(traceback.format_exc())

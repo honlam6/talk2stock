@@ -116,13 +116,25 @@ def resolve(draft, erp=None):
     # 商品明细
     items = []
     total = 0.0
+    tax_inclusive = erp.price_tax_flag()
     for idx, it in enumerate(draft.get("items") or [], 1):
         name = (it.get("name") or "").strip()
         unit = (it.get("unit") or "个").strip()
         qty = _num(it.get("qty"))
         price = _num(it.get("price"))
+        tax_rate = _num(it.get("tax_rate"))
         amount = round(qty * price, 2)
-        total += amount
+        # 含税/未税：line_total 是该行实际应付金额
+        if tax_rate > 0 and tax_inclusive:
+            tax_amount = round(amount / (1 + tax_rate / 100.0) * tax_rate / 100.0, 2)
+            line_total = amount
+        elif tax_rate > 0:
+            tax_amount = round(amount * tax_rate / 100.0, 2)
+            line_total = round(amount + tax_amount, 2)
+        else:
+            tax_amount = 0.0
+            line_total = amount
+        total += line_total
         mrow, mkind = erp.find_material(name) if name else (None, "none")
         will_create = bool(name) and not mrow
         if will_create:
@@ -132,8 +144,20 @@ def resolve(draft, erp=None):
         price_missing = qty > 0 and price == 0
         if price_missing:
             warnings.append(f"第{idx}行「{name}」单价为 0：原话里可能没说价格，将按 0 元入账；若非赠品请先补单价")
+
+        # 单位换算：用户单位属于该商品的单位组时，按 ratio 折算基本数量
+        group = erp.unit_group_by_id(mrow.get("unitId") or mrow.get("unit_id")) if mrow else None
+        unit_ok = bool(group) and erp.unit_allowed(group, unit)
+        base_qty = round(qty * erp.unit_ratio(group, unit), 6) if unit_ok else None
+        if group and not unit_ok and mrow and mrow.get("unit") and erp._norm(unit) != erp._norm(mrow.get("unit")):
+            warnings.append(
+                f"「{name}」的单位组是「{group.get('name')}」，'{unit}' 不在其中，"
+                f"将按基本单位「{mrow.get('unit')}」计 {qty}，请确认")
+
         row = {
             "name": name, "qty": qty, "unit": unit, "price": price, "amount": amount,
+            "tax_rate": tax_rate, "tax_amount": tax_amount, "line_total": line_total,
+            "base_qty": base_qty,
             "material_id": mrow.get("id") if mrow else None,
             "matched": bool(mrow), "match_kind": mkind,
             "matched_name": mrow.get("name") if mrow else None,
@@ -142,12 +166,13 @@ def resolve(draft, erp=None):
             "candidates": erp.material_candidates(name) if (name and not mrow) else [],
             "stock": None,
         }
-        # 出库业务：查库存给出负库存提醒
+        # 出库业务：查库存给出负库存提醒（按基本数量比较）
         if direction == "out" and mrow and drow:
             st = erp.stock(mrow["id"], drow["id"])
             row["stock"] = st
-            if st is not None and _num(st) < qty:
-                warnings.append(f"「{name}」当前库存 {st}，本次出 {qty}，将产生负库存")
+            cmp_qty = base_qty if base_qty is not None else qty
+            if st is not None and _num(st) < cmp_qty:
+                warnings.append(f"「{name}」当前库存 {st}，本次出 {cmp_qty}，将产生负库存")
         items.append(row)
 
     return {
@@ -207,17 +232,26 @@ def commit(draft, erp=None, auto_create=True):
             mrow, was_new = erp.ensure_material(name, unit)
             if was_new:
                 created.append(f"商品「{name}」")
-            rows.append({
+            # 单位：用户单位属于该商品单位组时保留原样，后端按 ratio 自动折算 basicNumber
+            use_unit = mrow.get("unit") or unit
+            group = erp.unit_group_by_id(mrow.get("unitId") or mrow.get("unit_id"))
+            if group and erp.unit_allowed(group, unit):
+                use_unit = unit
+            tax_rate = _num(it.get("tax_rate"))
+            row = {
                 "materialId": mrow["id"],
                 "barCode": mrow["barCode"],
                 "name": mrow.get("name") or name,
                 "operNumber": qty,
-                "unit": mrow.get("unit") or unit,
+                "unit": use_unit,
                 "unitPrice": price,
                 "allPrice": round(qty * price, 2),
                 "depotId": drow["id"],
                 "remark": it.get("remark") or "",
-            })
+            }
+            if tax_rate > 0:
+                row["taxRate"] = tax_rate
+            rows.append(row)
 
         # 4. 建单
         acc = draft.get("account_id") or ui.get("default_account_id") or 25

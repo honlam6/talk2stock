@@ -37,6 +37,17 @@ async function api(path, opts) {
   return j;
 }
 
+// 操作人标识：只存本地，用于基线实验归因（写进 audit.jsonl 的 operator 字段）
+function ensureOperator() {
+  let op = localStorage.getItem('t2s_operator');
+  if (!op) {
+    const v = prompt('请输入你的名字或编号（只存本机，用于实验记录归因）：', '');
+    op = (v || '').trim().slice(0, 40);
+    if (op) localStorage.setItem('t2s_operator', op);
+  }
+  return op || '';
+}
+
 // ---------- 工具 ----------
 const money = n => (Number(n) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const num = n => { const v = parseFloat(n); return isNaN(v) ? 0 : v; };
@@ -657,6 +668,7 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
           confirm_token: st.preview.confirm_token || '',
           source: extra.source || '',
           raw_text: extra.rawText || '',
+          operator: ensureOperator(),
         } });
         st.done = true;
         close();
@@ -839,7 +851,7 @@ const NAV_ITEMS = [
   ['/dashboard', '经营看板', '◫'],
   ['/settings', '设置', '⚙'],
 ];
-const ERP_URL = 'http://localhost:8080';
+const ERP_URL = location.protocol + '//' + location.hostname + ':8080';
 
 function shell(active) {
   document.body.classList.add('has-shell');

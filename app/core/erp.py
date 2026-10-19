@@ -173,6 +173,68 @@ class JshERP:
     def units(self):
         return self.list("/unit/list", {})
 
+    def unit_group(self, unit_name):
+        """按单位名找到它所属的单位组。
+
+        两遍匹配：先认「名称 / 基本单位」，再认「副单位1-3」。
+        否则 "箱" 会先命中别人的副单位（如 瓶/(箱=12瓶)），
+        给新商品建错基本单位。
+        """
+        n = self._norm(unit_name)
+        if not n:
+            return None
+        rows = self.units()
+        for u in rows:
+            if self._norm(u.get("name")) == n or self._norm(u.get("basicUnit")) == n:
+                return u
+        for u in rows:
+            for k in ("otherUnit", "otherUnitTwo", "otherUnitThree"):
+                if self._norm(u.get(k)) == n:
+                    return u
+        return None
+
+    def unit_group_by_id(self, uid):
+        if not uid:
+            return None
+        for u in self.units():
+            if str(u.get("id")) == str(uid):
+                return u
+        return None
+
+    def unit_allowed(self, group, unit_name):
+        """该单位是否属于这个单位组（可参与换算）。"""
+        if not group:
+            return False
+        n = self._norm(unit_name)
+        return any(self._norm(group.get(k)) == n for k in
+                   ("basicUnit", "otherUnit", "otherUnitTwo", "otherUnitThree") if group.get(k))
+
+    def unit_ratio(self, group, unit_name):
+        """单位相对基本单位的换算系数（基本单位=1）。"""
+        if not group:
+            return 1.0
+        n = self._norm(unit_name)
+        for key, ratio_key in (("otherUnit", "ratio"), ("otherUnitTwo", "ratioTwo"),
+                               ("otherUnitThree", "ratioThree")):
+            if self._norm(group.get(key)) == n:
+                try:
+                    return float(group.get(ratio_key) or 1) or 1.0
+                except (TypeError, ValueError):
+                    return 1.0
+        return 1.0
+
+    def price_tax_flag(self):
+        """系统是否按含税价录入（materialPriceTaxFlag=1 表示含税）。"""
+        if getattr(self, "_tax_flag", None) is None:
+            flag = False
+            try:
+                j = self._req("/systemConfig/getCurrentInfo")
+                flag = str((j.get("data") or {}).get("materialPriceTaxFlag") or "0") == "1"
+            except Exception:
+                flag = False
+            self._tax_flag = flag
+        return self._tax_flag
+
     def categories(self):
         """商品分类列表（扁平）。getAllList 需要 parentId，从根 0 递归取两层。"""
         out = []
@@ -278,18 +340,15 @@ class JshERP:
     # ---------- 主数据创建（ensure_*） ----------
     def ensure_unit(self, name):
         name = (name or "个").strip()
-        for u in self.units():
-            if self._norm(u.get("name")) == self._norm(name) or self._norm(u.get("basicUnit")) == self._norm(name):
-                return u
+        u = self.unit_group(name)
+        if u:
+            return u
         self._req("/unit/add", "POST", {
             "basicUnit": name, "otherUnit": "", "ratio": 0,
             "name": name, "enabled": True,
         })
         self.invalidate("/unit/list")
-        for u in self.units():
-            if self._norm(u.get("basicUnit")) == self._norm(name) or self._norm(u.get("name")) == self._norm(name):
-                return u
-        return {"name": name}
+        return self.unit_group(name) or {"name": name, "basicUnit": name}
 
     def ensure_party(self, name, ptype):
         row, _ = self.find_party(name, ptype)
@@ -346,12 +405,16 @@ class JshERP:
         row, _ = self.find_material(name)
         created = False
         if not row:
-            self.ensure_unit(unit)
+            urow = self.ensure_unit(unit)
+            basic = urow.get("basicUnit") or unit
             body = {
                 "name": name, "model": model, "standard": standard,
-                "unit": unit, "enabled": 1,
+                "unit": basic, "enabled": 1,
                 "categoryId": category_id or self._default_category_id(),
             }
+            if urow.get("id"):
+                # 关键：带上 unitId，后端才能按单位组的 ratio 自动折算 basicNumber
+                body["unitId"] = urow["id"]
             res = self._req("/material/add", "POST", body)
             if res.get("code") != 200:
                 raise ErpError(f"新建商品「{name}」失败：{res}")
@@ -490,7 +553,34 @@ class JshERP:
         """
         self.ensure_login()
         btype, sub_type, _, _ = BILL_TYPES[biz]
-        total = round(sum(float(r.get("allPrice") or 0) for r in rows), 2)
+
+        # 含税/未税口径：以 ERP 的 materialPriceTaxFlag 为准
+        #  - 含税（True）：录入价即含税价，allPrice 为含税总额，taxMoney = allPrice/(1+r)*r
+        #  - 未税（False）：allPrice 为不含税金额，taxMoney = allPrice*r，taxLastMoney = allPrice+taxMoney
+        tax_inclusive = self.price_tax_flag()
+        for r in rows:
+            try:
+                rate = float(r.get("taxRate") or r.get("tax_rate") or 0) or 0.0
+            except (TypeError, ValueError):
+                rate = 0.0
+            if rate <= 0:
+                continue
+            all_price = round(float(r.get("allPrice") or 0), 2)
+            if tax_inclusive:
+                real = round(all_price / (1 + rate / 100.0), 2)
+                tax_money = round(real * rate / 100.0, 2)
+                tax_last = all_price
+            else:
+                tax_money = round(all_price * rate / 100.0, 2)
+                tax_last = round(all_price + tax_money, 2)
+            r["taxRate"] = rate
+            r["taxMoney"] = tax_money
+            r["taxLastMoney"] = tax_last
+
+        total = round(sum(
+            float(r["taxLastMoney"]) if r.get("taxLastMoney") is not None
+            else float(r.get("allPrice") or 0)
+            for r in rows), 2)
         # 本次实付：没填则视为全额结清
         change = round(float(pay_amount), 2) if pay_amount not in (None, "") else total
         info = {
