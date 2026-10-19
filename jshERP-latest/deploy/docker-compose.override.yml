@@ -1,0 +1,13 @@
+services:
+  erp-mysql:
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --performance-schema=OFF
+      - --innodb-buffer-pool-size=192M
+      - --innodb-log-file-size=64M
+      - --max-connections=150
+      - --table-open-cache=400
+  erp-backend:
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx512m -Xms256m -XX:+UseSerialGC -Djava.security.egd=file:/dev/./urandom"

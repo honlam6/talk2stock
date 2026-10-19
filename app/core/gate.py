@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 import threading
 import time
 
@@ -68,14 +69,44 @@ def check(token, draft):
 # --------------------------------------------------------------------------
 # 审计日志
 # --------------------------------------------------------------------------
+_AUDIT_MAX_BYTES = 10 * 1024 * 1024  # 单个审计文件上限 10MB，超过即轮转
+_AUDIT_KEEP = 5                       # 保留 5 份历史
+
+
+def _rotate_if_needed(full):
+    """审计文件按大小轮转：audit.jsonl -> .1 -> .2 ... 只保留最近 N 份。"""
+    try:
+        if os.path.getsize(full) <= _AUDIT_MAX_BYTES:
+            return
+    except OSError:
+        return
+    for i in range(_AUDIT_KEEP - 1, 0, -1):
+        src, dst = f"{full}.{i}", f"{full}.{i + 1}"
+        if os.path.exists(src):
+            try:
+                os.replace(src, dst)
+            except OSError:
+                pass
+    try:
+        os.replace(full, full + ".1")
+    except OSError:
+        pass
+
+
 def _append(path, record):
     try:
         d = cfgmod.data_dir()
+        full = os.path.join(d, path)
         with _lock:
-            with open(os.path.join(d, path), "a", encoding="utf-8") as f:
+            _rotate_if_needed(full)
+            with open(full, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except Exception:
-        pass  # 审计失败不阻断业务（但也意味着磁盘/权限有问题，应关注）
+    except Exception as e:
+        # 审计失败不阻断业务，但必须留痕到 stderr——静默丢失等于证据链断裂
+        try:
+            sys.stderr.write("[gate] 审计写入失败 %s: %s\n" % (path, e))
+        except Exception:
+            pass
 
 
 def diff_drafts(before, after):
@@ -107,11 +138,12 @@ def prompt_fingerprint():
     return {"prompt_version": getattr(llmmod, "PROMPT_VERSION", ""), "prompt_hash": h}
 
 
-def log_write(meta, draft, result, diff=None, source="", raw_text=""):
+def log_write(meta, draft, result, diff=None, source="", raw_text="", operator=""):
     """成功写入的审计记录。"""
     rec = {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "event": "commit_ok",
+        "operator": operator or meta.get("operator", ""),
         "source": source or meta.get("source", ""),
         "raw_text": raw_text if raw_text is not None else meta.get("raw_text", ""),
         "model": meta.get("model", ""),
@@ -132,11 +164,12 @@ def log_write(meta, draft, result, diff=None, source="", raw_text=""):
         })
 
 
-def log_rejected(reason, draft, source="", raw_text=""):
+def log_rejected(reason, draft, source="", raw_text="", operator=""):
     """被闸门拒绝的写入尝试（证据：未经确认的写入为 0）。"""
     _append("audit.jsonl", {
         "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
         "event": "commit_rejected",
+        "operator": operator or "",
         "reason": reason,
         "source": source,
         "raw_text": raw_text,
