@@ -656,7 +656,7 @@ const NAV_ITEMS = [
   ['/dashboard', '经营看板', '◫'],
   ['/settings', '设置', '⚙'],
 ];
-const ERP_URL = 'http://localhost:8080';
+const ERP_URL = location.protocol + '//' + location.hostname + ':8080';
 
 function shell(active) {
   document.body.classList.add('has-shell');

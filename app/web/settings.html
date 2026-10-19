@@ -35,7 +35,7 @@
     </div>
     <div class="row-btns">
       <button class="btn btn-primary" id="erpSave">保存并测试连接</button>
-      <a class="btn btn-ghost" href="http://localhost:8080" target="_blank" rel="noopener">打开原版 ERP ↗</a>
+      <a class="btn btn-ghost" id="erpLink" href="http://localhost:8080" target="_blank" rel="noopener">打开原版 ERP ↗</a>
       <span class="hint" id="erpMsg" style="flex:1"></span>
     </div>
     <div id="masterStat" class="hint" style="margin-top:10px"></div>
@@ -218,6 +218,8 @@ $('#p_save').onclick = async () => {
 (async () => {
   try { await loadCfg(); } catch (e) { toast(e.message, 'bad'); }
   refreshMasterStat();
+  const erpLink = document.getElementById('erpLink');
+  if (erpLink) erpLink.href = location.protocol + '//' + location.hostname + ':8080';
 })();
 </script>
 </body>
