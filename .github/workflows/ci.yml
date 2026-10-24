@@ -45,3 +45,24 @@ jobs:
                   failed = True
           sys.exit(1 if failed else 0)
           EOF
+
+  # main 分支 CI 全绿后自动部署到公网服务器：
+  # 服务器 authorized_keys 对部署密钥限定了 command="/opt/deploy.sh"（只能跑部署）
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 部署（拉取最新代码并重启服务）
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: root
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true
+          script: /opt/deploy.sh
+      - name: 部署后健康检查
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 http://${{ secrets.SSH_HOST }}:8090/ || true)
+          echo "Talk2Stock HTTP $code"
+          [ "$code" = "200" ] || { echo "::error::部署后健康检查失败"; exit 1; }
