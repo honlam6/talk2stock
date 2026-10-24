@@ -60,6 +60,7 @@ jobs:
           username: root
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
+          command_timeout: 3m
           script: /opt/deploy.sh
       - name: 部署后健康检查
         run: |
