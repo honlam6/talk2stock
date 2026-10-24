@@ -13,7 +13,9 @@
   时间、事件类型、来源入口、原话、模型、提示词版本、草稿、与签发时的 diff、结果。
 用户在确认卡上改过的字段同时沉淀到 app/data/regression.jsonl，作为回归测试集。
 """
+import base64
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -26,8 +28,7 @@ from . import llm as llmmod
 
 TOKEN_TTL = 1800  # 确认令牌有效期（秒）
 
-_lock = threading.Lock()
-_store = {}  # token -> {"exp": ts, "digest": hex, "meta": {...}}
+_lock = threading.Lock()   # 审计日志写入锁（_append 用）
 
 
 def digest_of(draft):
@@ -36,34 +37,126 @@ def digest_of(draft):
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
+# --------------------------------------------------------------------------
+# 无状态确认令牌：base64(payload).HMAC——服务重启不失效、多进程部署可用。
+# 「一次性」由 nonce 黑名单（data/used_tokens.jsonl 持久化）保证，重启不丢。
+# --------------------------------------------------------------------------
+def _hmac_key():
+    """签名密钥：首次生成存 data/.gatekey（0600），此后复用。"""
+    path = os.path.join(cfgmod.data_dir(), ".gatekey")
+    try:
+        with open(path, encoding="utf-8") as f:
+            k = f.read().strip()
+            if len(k) >= 32:
+                return k.encode()
+    except OSError:
+        pass
+    k = secrets.token_hex(32)
+    try:
+        os.makedirs(cfgmod.data_dir(), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(k)
+        os.chmod(path, 0o600)
+    except OSError:
+        pass   # 写不进（只读卷）则退化为进程级随机密钥——重启失效但不阻断业务
+    return k.encode()
+
+
+_USED_LOCK = threading.Lock()
+
+
+def _used_path():
+    return os.path.join(cfgmod.data_dir(), "used_tokens.jsonl")
+
+
+def _mark_used(nonce, exp):
+    """nonce 进黑名单（持久化），顺带清理已过期行，文件不无限增长。"""
+    with _USED_LOCK:
+        try:
+            os.makedirs(cfgmod.data_dir(), exist_ok=True)
+            with open(_used_path(), "a", encoding="utf-8") as f:
+                f.write("%s %d\n" % (nonce, exp))
+            _sweep_used()
+        except OSError:
+            pass
+
+
+def _sweep_used():
+    """黑名单只需覆盖 TTL 窗口：清掉已过期行。"""
+    try:
+        with open(_used_path(), encoding="utf-8") as f:
+            lines = [l for l in f if l.strip()]
+        now = time.time()
+        keep = []
+        for l in lines:
+            parts = l.split()
+            if len(parts) == 2:
+                try:
+                    if int(parts[1]) > now:
+                        keep.append(l)
+                except ValueError:
+                    continue
+        if len(keep) != len(lines):
+            with open(_used_path(), "w", encoding="utf-8") as f:
+                f.writelines(keep)
+    except OSError:
+        pass
+
+
+def _is_used(nonce):
+    try:
+        with open(_used_path(), encoding="utf-8") as f:
+            for l in f:
+                parts = l.split()
+                if len(parts) == 2 and parts[0] == nonce:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def issue(draft, meta=None):
-    """签发一次性确认令牌。meta 存签发时的上下文（原话、模型等），供审计用。"""
-    token = secrets.token_urlsafe(24)
-    now = time.time()
-    with _lock:
-        for t in [k for k, v in _store.items() if v["exp"] < now]:
-            _store.pop(t, None)
-        _store[token] = {
-            "exp": now + TOKEN_TTL,
-            "digest": digest_of(draft),
-            "meta": meta or {},
-        }
-    return token
+    """签发一次性确认令牌。meta 存签发上下文（原话、模型等），随令牌自描述。"""
+    payload = {"d": digest_of(draft), "e": int(time.time()) + TOKEN_TTL,
+               "n": secrets.token_hex(8)}
+    if meta:
+        payload["m"] = meta
+    body = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).decode().rstrip("=")
+    sig = hmac.new(_hmac_key(), body.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return body + "." + sig
+
+
+def _parse_token(token):
+    try:
+        body, sig = token.split(".", 1)
+        expect = hmac.new(_hmac_key(), body.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expect):
+            return None
+        pad = "=" * (-len(body) % 4)
+        return json.loads(base64.urlsafe_b64decode(body + pad).decode("utf-8"))
+    except Exception:
+        return None
 
 
 def check(token, draft):
     """校验令牌。返回 (ok, meta, reason)。有效令牌随即作废（一次性）。"""
     token = (token or "").strip()
-    now = time.time()
-    with _lock:
-        rec = _store.pop(token, None) if token else None
-    if rec is None:
+    if not token or "." not in token:
         return False, {}, "缺少有效确认令牌（请重新预览并勾选确认）"
-    if rec["exp"] < now:
-        return False, rec.get("meta", {}), "确认令牌已过期（超过 30 分钟），请重新预览确认"
-    if rec["digest"] != digest_of(draft):
-        return False, rec.get("meta", {}), "草稿在确认后被改动，请重新预览确认"
-    return True, rec.get("meta", {}), ""
+    payload = _parse_token(token)
+    if payload is None:
+        return False, {}, "确认令牌签名无效，请重新预览确认"
+    if int(payload.get("e") or 0) < time.time():
+        return False, payload.get("m") or {}, "确认令牌已过期（超过 30 分钟），请重新预览确认"
+    if payload.get("d") != digest_of(draft):
+        return False, payload.get("m") or {}, "草稿在确认后被改动，请重新预览确认"
+    nonce = str(payload.get("n") or "")
+    if not nonce or _is_used(nonce):
+        return False, payload.get("m") or {}, "该确认令牌已被使用，请重新预览确认"
+    _mark_used(nonce, int(payload.get("e") or 0))
+    return True, payload.get("m") or {}, ""
 
 
 # --------------------------------------------------------------------------

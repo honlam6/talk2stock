@@ -250,13 +250,21 @@ def upsert_profile(key, profile):
             pass
     else:
         api_key = old.get("api_key") or env(env_name, "")
-    profiles[key] = {
+    # merge_system / insecure 是网关行为开关（不在表单里），从旧档案继承，
+    # 否则 UI 每次保存都会把它们抹掉（实测踩过：保存后网关适配失效）
+    prof_new = {
         "name": profile.get("name") or key,
         "base_url": (profile.get("base_url") or "").rstrip("/"),
         "api_key": api_key,
         "model": profile.get("model") or "",
         "temperature": profile.get("temperature", 0),
     }
+    for opt in ("merge_system", "insecure"):
+        if opt in old:
+            prof_new[opt] = old[opt]
+        elif opt in profile:
+            prof_new[opt] = bool(profile[opt])
+    profiles[key] = prof_new
     if not cfg["llm"].get("active"):
         cfg["llm"]["active"] = key
     return save(cfg)

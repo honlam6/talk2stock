@@ -33,6 +33,7 @@
 """
 import json
 import os
+import re
 import sys
 import tempfile
 import traceback
@@ -358,7 +359,8 @@ def api_dashboard(q, _body):
 
 def api_history(q, _body):
     """最近录单：读审计日志里 commit_ok 的记录（只读），供「最近录单」卡片展示。
-    只回传白名单字段，不带草稿全量与提示词指纹。"""
+    只回传白名单字段，不带草稿全量与提示词指纹。
+    尾部块读：从文件末尾反向取块，读够 limit 条即停——审计文件增长后不再全量扫。"""
     try:
         limit = min(max(int((q.get("limit") or ["30"])[0]), 1), 100)
     except Exception:
@@ -367,22 +369,40 @@ def api_history(q, _body):
     if not os.path.isfile(path):
         return {"ok": True, "items": []}
     recs = []
+    CHUNK = 64 * 1024
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            pos = size
+            buf = b""
+            while pos > 0 and len(recs) <= limit:
+                step = min(CHUNK, pos)
+                pos -= step
+                f.seek(pos)
+                buf = f.read(step) + buf
+                # 只按完整行解析；最前面的残行留给下一轮拼接
+                nl = buf.rfind(b"\n")
+                if nl < 0:
                     continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                if rec.get("event") == "commit_ok":
-                    recs.append(rec)
+                block, buf = buf[:nl], buf[nl + 1:]
+                for line in reversed(block.decode("utf-8", "replace").splitlines()):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    if rec.get("event") == "commit_ok":
+                        recs.append(rec)
+                        if len(recs) > limit:
+                            break
     except Exception as e:
         return {"ok": False, "message": friendly(e)}
+    recs = recs[:limit]
     out = []
-    for rec in reversed(recs):                      # 最新在前
+    for rec in recs:                                  # 尾读天然新→旧，最新在前
         d = rec.get("draft") or {}
         r = rec.get("result") or {}
         out.append({
@@ -406,11 +426,49 @@ def api_history(q, _body):
     return {"ok": True, "items": out}
 
 
+def _parse_multipart(ctype, body):
+    """极简 multipart/form-data 解析——cgi 模块在 Python 3.13 已移除（PEP 594），
+    本机/新环境 /api/upload 必坏，改为纯手写。文件字段 → (文件名, bytes)，
+    普通字段 → str。二进制 payload 按字节精确截取（不 strip 内容本身）。"""
+    m = re.search(r'boundary="?([^";]+)"?', ctype or "")
+    if not m:
+        return {}
+    boundary = ("--" + m.group(1)).encode("utf-8")
+    out = {}
+    for part in body.split(boundary)[1:]:
+        if part.startswith(b"\r\n"):
+            part = part[2:]
+        elif part.startswith(b"\n"):
+            part = part[1:]
+        if part in (b"--", b"--\r\n", b"--\n"):
+            break   # 终止边界
+        if part.endswith(b"\r\n"):
+            part = part[:-2]
+        elif part.endswith(b"\n"):
+            part = part[:-1]
+        head, _, payload = part.partition(b"\r\n\r\n")
+        disp = ""
+        for line in head.decode("utf-8", "replace").split("\r\n"):
+            k, _, v = line.partition(":")
+            if k.strip().lower() == "content-disposition":
+                disp = v.strip()
+                break
+        name_m = re.search(r'name="([^"]*)"', disp)
+        if not name_m:
+            continue
+        name = name_m.group(1)
+        file_m = re.search(r'filename="([^"]*)"', disp)
+        if file_m:
+            out[name] = (file_m.group(1), payload)
+        else:
+            out[name] = payload.decode("utf-8", "replace").strip()
+    return out
+
+
 def api_upload(q, body):
     """代理 ERP 附件上传：接收 multipart 文件，暂存后调 erp.upload_file。
     请求体为 multipart/form-data（字段 file + 可选 biz），由 _handle 解析后传入。
     """
-    import cgi
     up = body.get("_upload") if isinstance(body, dict) else None
     if not up or not up.get("file_path"):
         return {"ok": False, "message": "没有收到文件"}
@@ -583,41 +641,32 @@ class Handler(BaseHTTPRequestHandler):
             if not fn:
                 self._json({"ok": False, "message": "接口不存在：%s %s" % (method, path)}, 404)
                 return
-            # 附件上传：multipart/form-data，单独解析
+            # 附件上传：multipart/form-data，单独解析（cgi 已移除，手写解析器）
             if method == "POST" and path == "/api/upload":
                 try:
                     ctype = self.headers.get("Content-Type") or ""
                     if "multipart/form-data" not in ctype:
                         self._json({"ok": False, "message": "请用 multipart/form-data 上传文件"}, 400)
                         return
-                    import cgi
-                    form = cgi.FieldStorage(
-                        fp=self.rfile,
-                        headers=self.headers,
-                        environ={
-                            "REQUEST_METHOD": "POST",
-                            "CONTENT_TYPE": ctype,
-                            "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
-                        },
-                    )
-                    if "file" not in form:
+                    try:
+                        n = int(self.headers.get("Content-Length") or 0)
+                    except ValueError:
+                        n = 0
+                    raw = self.rfile.read(n) if n > 0 else b""
+                    fields = _parse_multipart(ctype, raw)
+                    up = fields.get("file")
+                    if not up or not isinstance(up, tuple) or not up[0]:
                         self._json({"ok": False, "message": "没有收到文件（字段名应为 file）"}, 400)
                         return
-                    item = form["file"]
-                    fname0 = getattr(item, "filename", "") or ""
-                    if not fname0:
-                        self._json({"ok": False, "message": "没有收到文件（字段名应为 file）"}, 400)
-                        return
-                    # 暂存到临时文件
-                    fname0 = getattr(item, "filename", "") or "upload.bin"
+                    fname0, data = up
                     ext = os.path.splitext(fname0)[1] or ""
                     fd, tmp = tempfile.mkstemp(suffix=ext)
                     with os.fdopen(fd, "wb") as f:
-                        f.write(item.file.read())
-                    biz = (form.getvalue("biz") or "bill").strip()
+                        f.write(data)
+                    biz = str(fields.get("biz") or "bill").strip()
                     try:
                         self._json(fn(q, {"_upload": {
-                            "file_path": tmp, "filename": item.filename, "biz": biz, "tmp": True
+                            "file_path": tmp, "filename": fname0, "biz": biz, "tmp": True
                         }}))
                     except Exception as e:
                         sys.stderr.write(traceback.format_exc())
@@ -626,7 +675,7 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     sys.stderr.write(traceback.format_exc())
                     self._json({"ok": False, "message": friendly(e)}, 200)
-                    return
+                return
             try:
                 body = self._body() if method in ("POST", "PUT", "DELETE") else {}
             except ValueError as e:
