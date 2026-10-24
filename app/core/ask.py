@@ -1,233 +1,231 @@
 #!/usr/bin/env python3
-"""只读问答智能体（/api/ask）。
+"""只读问答智能体（/api/ask）—— 三层递进架构。
 
-编排方式是三段式"选工具 → 执行 → 依数据作答"，不依赖 OpenAI function-calling
-（自建网关/推理端点兼容性差），与录单链路同一套 _chat 降级机制：
+第 1 层 规则直答（0 token）：高频统计问句（今天买了多少 / 谁欠我钱 / 什么货快没了）
+        由确定性路由直连只读工具，模板句作答——LLM 不参与，零成本零幻觉零延迟。
+第 2 层 agent loop（多步取证）：自然语言 / 复合问题交给手写 function-calling
+        循环（core/agent.py：决策 {thought,tool,args} → 执行 → observation 回喂），
+        支持跨工具链式取证（「上月谁买得最多？他欠我多少？」）。
+第 3 层 确定性兜底：LLM 作答必须通过数字接地校验——答案里每个数字都要来自
+        某步观察 JSON，不通过退回模板句拼接，回答永远可追溯到 ERP 真实值。
 
-  1. LLM 第一跳：从工具目录里选一个（或 none），输出严格 JSON {tool, args}
-  2. 执行：全部是只读函数（库存/统计/欠款/流水），绝不写库
-  3. LLM 第二跳：只准引用返回数据里的数字组织中文回答；失败则退回模板句
-
-数据引用规则（提案承诺"答案能追溯到 ERP 真实值"）：回答必须基于第 2 步的
-结构化数据，模板句和 LLM 润色都不引入数据里没有的数字。
+所有工具只读、绝不写库。手写 JSON 动作循环是主动的架构选择：每步可审计
+（trace）、可预算（步数 + token 双约束）、可回放，且对任意 OpenAI 兼容端点
+行为一致。规则直答保守设计：只匹配无参数的整句统计意图，宁缺勿滥，长句
+一律交给 agent loop（参数抽取交给模型更可靠）。
 """
-import json
 import re
 
 from . import config as cfgmod
-from . import llm as llmmod
-from . import report as reportmod
+from .report import official_stats, recent_bills as _rb, stock_overview, summary
 from .erp import get_client
 
-PROMPT_VERSION = "ask-v1-20261010"
+PROMPT_VERSION = "ask-v2-20261024"
 
-SELECT_PROMPT = """你是进销存系统的只读问答助手。判断用户问题该用哪个数据工具，只输出 JSON。
-
-# 工具目录
-- stock_query   查某种商品的库存（哪个仓、还剩多少）。args: {"material":"商品名","depot":"仓库名，没说就空字符串"}
-- low_stock     哪些货快没了/缺货/该补货了。args: {}
-- today_stats   今天买了多少/卖了多少。args: {}
-- month_stats   本月采购、销售、差额。args: {}
-- debts         谁欠我钱、我欠谁钱（应收应付）。args: {}
-- recent_bills  最近录了哪些单。args: {}
-- stock_value   库存里的货总共值多少钱。args: {}
-- none          以上都不是（闲聊、或超出经营数据范围）。args: {}
-
-# 输出格式（严格 JSON，不要多余键）
-{"tool":"stock_query","args":{"material":"可乐","depot":""},"answer":""}
-tool 选 none 时才写 answer（一句话说明你只能答库存、采销、欠款这类经营问题）。
-
-# 可选规则
-用户说的商品/仓库名尽量对照下面列表里的写法：
-{names}
-"""
-
-ANSWER_PROMPT = """根据工具返回的数据回答用户问题，用中文口语。
-
-规则：
-1. 只能引用数据 JSON 里出现的数字和名称，绝对不能编造或心算新数字。
-2. 先直接回答问题，再补充关键数字；最多三句话。
-3. 数字带单位（元/瓶/箱），金额保留两位小数。
-4. 数据为空才回答"系统里没有查到相关数据"；只要 JSON 里有条目/数字，
-   就必须引用它们作答，即使问的具体对象不在列表里——按"该对象没有记录，
-   但有这些：…"来说，绝不能回答"没有数据"。
-5. 绝对不要输出 JSON、数组或字段名，只输出给人看的一句话。
-
-用户问题：{q}
-使用工具：{tool}
-数据：{data}
-
-只输出回答文本，不要 JSON，不要解释。"""
+# --------------------------------------------------------------------------
+# 第 1 层：规则直答（0 token）。只收录无参数的统计意图，带参数的查询
+# （如商品库存，需要抽商品名）一律走 agent loop。
+# --------------------------------------------------------------------------
+_RULES = [
+    (r"今天.*(买|卖|采购|销售|进货|出货|营收|流水).*(多少|几)", "today_stats"),
+    (r"(本月|这个月|当月).*(买|卖|采购|销售|营收|流水).*(多少|几)", "month_stats"),
+    (r"谁欠我|我欠谁|应收应付|欠款情况|欠了多少", "debts"),
+    (r"(最近|最新).{0,4}(的单|单据|录了哪些|账单|流水)", "recent_bills"),
+    (r"(什么|哪些)(货|商品|东西).{0,6}(快没|缺|不够|要补)", "low_stock"),
+    (r"(库存|货).{0,8}(值多少钱|总值|货值|价值多少)", "stock_value"),
+]
 
 
-def _numbers_in(text):
-    """抽出文本里所有数字（含千分位/小数），按数值归一化——100.00 与 100.0 视为同一个数。"""
-    out = set()
-    for raw in re.findall(r"-?\d[\d,]*(?:\.\d+)?", text or ""):
-        try:
-            out.add(round(float(raw.replace(",", "")), 2))
-        except ValueError:
-            pass
-    return out
+def _rule_route(text):
+    """命中返回 (tool, {})，未命中返回 None。
+
+    两道护栏：长句（>24 字）与复合意图（含「另外/还有/顺便」等连接词或多个
+    分句）一律交给 agent loop——规则直答只服务单一意图的统计问句，宁缺勿滥。
+    （实测教训：「今天卖了多少？另外库存值多少钱？」曾被截胡只答一半。）
+    """
+    t = (text or "").strip()
+    if not t or len(t) > 24:
+        return None
+    if re.search(r"另外|还有|以及|顺便|然后|同时|再问|还想知道", t):
+        return None
+    for pat, tool in _RULES:
+        if re.search(pat, t):
+            return tool, {}
+    return None
 
 
-def _numeric_grounded(ans, data, tpl=""):
-    """答案里的每个数字都必须能在数据/模板里找到，否则视为不可信（防第二跳编数）。"""
-    if not ans:
-        return False
-    allow = _numbers_in(json.dumps(data, ensure_ascii=False)) | _numbers_in(tpl)
-    return _numbers_in(ans) <= allow
-
-
-def _names_block(erp):
+def _context(erp):
+    """主数据名单作为 agent 的 context block，帮模型对齐系统里的真实名称。"""
     try:
         mats = [m.get("name") for m in erp.materials()][:80]
         deps = [d.get("name") for d in erp.depots()][:20]
-        return "商品：" + "、".join(filter(None, mats)) + "\n仓库：" + "、".join(filter(None, deps))
+        return ("# 系统主数据参考（工具参数尽量用这里的写法）\n商品："
+                + "、".join(filter(None, mats)) + "\n仓库：" + "、".join(filter(None, deps)))
     except Exception:
         return ""
 
 
 # --------------------------------------------------------------------------
-# 工具实现（全部只读）
+# 工具实现（全部只读，返回 (data, 模板句)——模板句是接地兜底，只用 data 里的数字）
 # --------------------------------------------------------------------------
-def _run_tool(tool, args, erp):
-    """执行只读工具。返回 (data_dict_or_list, 模板回答)。"""
-    args = args if isinstance(args, dict) else {}
-
-    if tool == "stock_query":
-        name = str(args.get("material") or "").strip()
-        mrow, kind = erp.find_material(name)
-        if not mrow:
-            cands = erp.material_candidates(name)
-            return {"material": name, "found": False, "candidates": cands}, \
-                f"系统里没有查到「{name}」的库存记录" + (f"，最接近的档案：{'、'.join(cands)}" if cands else "")
-        deps = erp.depots()
-        depot_filter = str(args.get("depot") or "").strip()
-        rows, total = [], 0.0
-        for d in deps:
-            if depot_filter and erp._norm(d.get("name")) != erp._norm(depot_filter):
-                continue
-            st = erp.stock(mrow["id"], d["id"])
-            if st is None:
-                continue
-            rows.append({"depot": d.get("name"), "stock": float(st)})
-            total += float(st)
-        unit = mrow.get("unit") or ""
-        data = {"material": mrow.get("name"), "unit": unit, "by_depot": rows,
-                "total": round(total, 2), "matched": kind or "exact"}
-        detail = "；".join(f"{r['depot']} {r['stock']:g}" for r in rows) if rows else "各仓均无库存记录"
-        return data, (f"「{mrow.get('name')}」当前库存 {total:g}{unit}。{detail}。"
-                      if rows else f"「{mrow.get('name')}」在系统里没有库存记录。")
-
-    if tool == "low_stock":
-        ov = reportmod.stock_overview(erp)
-        warn = ov.get("warn_list") or []
-        data = {"kinds": ov.get("kinds"), "negative": ov.get("negative"),
-                "low": ov.get("low"), "threshold": ov.get("threshold"),
-                "warn_list": warn[:12]}
-        head = f"共 {ov.get('kinds')} 种商品，其中 {ov.get('negative')} 种负库存、{ov.get('low')} 种低于 {ov.get('threshold')}。"
-        body = "最紧张：" + "；".join(f"{w['name']} {w['stock']:g}{w['unit']}" for w in warn[:5]) if warn else "暂无紧张库存。"
-        return data, head + body
-
-    if tool in ("today_stats", "month_stats"):
-        st = reportmod.official_stats(erp)
-        scope = st.get("today" if tool == "today_stats" else "month") or {}
-        label = "今天" if tool == "today_stats" else "本月"
-        data = {"scope": label, "buy": scope.get("buy"), "buy_n": scope.get("buy_n"),
-                "sell": scope.get("sell"), "sell_n": scope.get("sell_n"),
-                "profit_cash": scope.get("profit")}
-        return data, (f"{label}采购 {scope.get('buy'):,.2f} 元（{scope.get('buy_n')} 笔），"
-                      f"销售 {scope.get('sell'):,.2f} 元（{scope.get('sell_n')} 笔），"
-                      f"现金流差额 {scope.get('profit'):,.2f} 元（销售-采购，非毛利）。")
-
-    if tool == "debts":
-        s = reportmod.summary(erp)
-        data = {"receivable_top": s.get("debt_recv"), "receivable_total": s.get("debt_recv_total"),
-                "payable_top": s.get("debt_pay"), "payable_total": s.get("debt_pay_total")}
-        recv = "；".join(f"{x['name']} {x['amount']:,.2f}" for x in (s.get("debt_recv") or [])[:4])
-        pay = "；".join(f"{x['name']} {x['amount']:,.2f}" for x in (s.get("debt_pay") or [])[:4])
-        tpl = (f"客户共欠我 {s.get('debt_recv_total'):,.2f} 元（{recv or '无'}）；"
-               f"我欠供应商 {s.get('debt_pay_total'):,.2f} 元（{pay or '无'}）。")
-        return data, tpl
-
-    if tool == "recent_bills":
-        bills = reportmod.recent_bills(erp, limit=6)
-        data = {"bills": bills}
-        if not bills:
-            return data, "系统里还没有单据。"
-        lines = "；".join(f"{b['time']} {b['type']} {b['party']} {b['total']:,.2f}元" for b in bills[:5])
-        return data, f"最近 {len(bills)} 张单：{lines}。"
-
-    if tool == "stock_value":
-        st = reportmod.official_stats(erp)
-        sm = st.get("stock_money") or {}
-        data = {"total_stock": sm.get("total_stock"), "total_value": sm.get("total_value")}
-        return data, (f"库存货值约 {sm.get('total_value'):,.2f} 元"
-                      f"（{sm.get('total_stock'):g} 件，按当前成本价估算）。")
-
-    return {}, ""
+def _stock_query(args, erp):
+    name = str(args.get("material") or "").strip()
+    mrow, kind = erp.find_material(name)
+    if not mrow:
+        cands = erp.material_candidates(name)
+        return {"material": name, "found": False, "candidates": cands}, \
+            f"系统里没有查到「{name}」的库存记录" + (f"，最接近的档案：{'、'.join(cands)}" if cands else "")
+    deps = erp.depots()
+    depot_filter = str(args.get("depot") or "").strip()
+    rows, total = [], 0.0
+    for d in deps:
+        if depot_filter and erp._norm(d.get("name")) != erp._norm(depot_filter):
+            continue
+        st = erp.stock(mrow["id"], d["id"])
+        if st is None:
+            continue
+        rows.append({"depot": d.get("name"), "stock": float(st)})
+        total += float(st)
+    unit = mrow.get("unit") or ""
+    data = {"material": mrow.get("name"), "unit": unit, "by_depot": rows,
+            "total": round(total, 2), "matched": kind or "exact"}
+    detail = "；".join(f"{r['depot']} {r['stock']:g}" for r in rows) if rows else "各仓均无库存记录"
+    return data, (f"「{mrow.get('name')}」当前库存 {total:g}{unit}。{detail}。"
+                  if rows else f"「{mrow.get('name')}」在系统里没有库存记录。")
 
 
+def _low_stock(_args, erp):
+    ov = stock_overview(erp)
+    warn = ov.get("warn_list") or []
+    data = {"kinds": ov.get("kinds"), "negative": ov.get("negative"),
+            "low": ov.get("low"), "threshold": ov.get("threshold"),
+            "warn_list": warn[:12]}
+    head = f"共 {ov.get('kinds')} 种商品，其中 {ov.get('negative')} 种负库存、{ov.get('low')} 种低于 {ov.get('threshold')}。"
+    body = "最紧张：" + "；".join(f"{w['name']} {w['stock']:g}{w['unit']}" for w in warn[:5]) if warn else "暂无紧张库存。"
+    return data, head + body
+
+
+def _today_stats(_args, erp):
+    st = official_stats(erp)
+    scope = st.get("today") or {}
+    data = {"scope": "今天", "buy": scope.get("buy"), "buy_n": scope.get("buy_n"),
+            "sell": scope.get("sell"), "sell_n": scope.get("sell_n"),
+            "profit_cash": scope.get("profit")}
+    return data, (f"今天采购 {scope.get('buy'):,.2f} 元（{scope.get('buy_n')} 笔），"
+                  f"销售 {scope.get('sell'):,.2f} 元（{scope.get('sell_n')} 笔），"
+                  f"现金流差额 {scope.get('profit'):,.2f} 元（销售-采购，非毛利）。")
+
+
+def _month_stats(_args, erp):
+    st = official_stats(erp)
+    scope = st.get("month") or {}
+    data = {"scope": "本月", "buy": scope.get("buy"), "buy_n": scope.get("buy_n"),
+            "sell": scope.get("sell"), "sell_n": scope.get("sell_n"),
+            "profit_cash": scope.get("profit")}
+    return data, (f"本月采购 {scope.get('buy'):,.2f} 元（{scope.get('buy_n')} 笔），"
+                  f"销售 {scope.get('sell'):,.2f} 元（{scope.get('sell_n')} 笔），"
+                  f"现金流差额 {scope.get('profit'):,.2f} 元（销售-采购，非毛利）。")
+
+
+def _debts(_args, erp):
+    s = summary(erp)
+    data = {"receivable_top": s.get("debt_recv"), "receivable_total": s.get("debt_recv_total"),
+            "payable_top": s.get("debt_pay"), "payable_total": s.get("debt_pay_total")}
+    recv = "；".join(f"{x['name']} {x['amount']:,.2f}" for x in (s.get("debt_recv") or [])[:4])
+    pay = "；".join(f"{x['name']} {x['amount']:,.2f}" for x in (s.get("debt_pay") or [])[:4])
+    tpl = (f"客户共欠我 {s.get('debt_recv_total'):,.2f} 元（{recv or '无'}）；"
+           f"我欠供应商 {s.get('debt_pay_total'):,.2f} 元（{pay or '无'}）。")
+    return data, tpl
+
+
+def _recent_bills(_args, erp):
+    bills = _rb(erp, limit=6)
+    data = {"bills": bills}
+    if not bills:
+        return data, "系统里还没有单据。"
+    lines = "；".join(f"{b['time']} {b['type']} {b['party']} {b['total']:,.2f}元" for b in bills[:5])
+    return data, f"最近 {len(bills)} 张单：{lines}。"
+
+
+def _stock_value(_args, erp):
+    st = official_stats(erp)
+    sm = st.get("stock_money") or {}
+    data = {"total_stock": sm.get("total_stock"), "total_value": sm.get("total_value")}
+    return data, (f"库存货值约 {sm.get('total_value'):,.2f} 元"
+                  f"（{sm.get('total_stock'):g} 件，按当前成本价估算）。")
+
+
+# 规则直答层允许的工具（全部无参数）
+_RULE_TOOLS = {
+    "today_stats": _today_stats, "month_stats": _month_stats, "debts": _debts,
+    "recent_bills": _recent_bills, "low_stock": _low_stock, "stock_value": _stock_value,
+}
+
+
+def _tools(erp):
+    """构造 agent 工具注册表（全部只读）。Phase 2 的检索工具在此追加。"""
+    def bind(fn):
+        return lambda args: fn(args, erp)
+    return {
+        "stock_query": {"desc": "查某种商品的库存（哪个仓、还剩多少）",
+                        "args_hint": '{"material":"商品名","depot":"仓库名，没说就空字符串"}',
+                        "run": bind(_stock_query)},
+        "low_stock": {"desc": "哪些货快没了/缺货/该补货了", "args_hint": "{}",
+                      "run": bind(_low_stock)},
+        "today_stats": {"desc": "今天买了多少/卖了多少", "args_hint": "{}",
+                        "run": bind(_today_stats)},
+        "month_stats": {"desc": "本月采购、销售、差额", "args_hint": "{}",
+                        "run": bind(_month_stats)},
+        "debts": {"desc": "谁欠我钱、我欠谁钱（应收应付）", "args_hint": "{}",
+                  "run": bind(_debts)},
+        "recent_bills": {"desc": "最近录了哪些单", "args_hint": "{}",
+                         "run": bind(_recent_bills)},
+        "stock_value": {"desc": "库存里的货总共值多少钱", "args_hint": "{}",
+                        "run": bind(_stock_value)},
+    }
+
+
+# --------------------------------------------------------------------------
+# 入口：三层递进
+# --------------------------------------------------------------------------
 def ask(text, erp=None):
-    """只读问答入口。返回 {ok, answer, tool, data, meta}。"""
+    """只读问答。返回 {ok, answer, tool, route, steps, tokens, meta}。"""
     erp = erp or get_client()
     prof = cfgmod.active_profile()
     if not prof:
         return {"ok": False, "message": "尚未配置 AI 模型，请先在「设置」里添加。"}
-
-    # 1) 选工具
-    try:
-        raw = llmmod._chat(prof, [
-            {"role": "system", "content": SELECT_PROMPT.replace("{names}", _names_block(erp))},
-            {"role": "user", "content": text},
-        ])
-        choice = llmmod._extract_json(raw)
-    except Exception as e:
-        return {"ok": False, "message": "AI 解析失败：%s" % str(e)[:120]}
-    tool = str(choice.get("tool") or "none").strip()
-    args = choice.get("args") if isinstance(choice.get("args"), dict) else {}
-
     meta = {"model": prof.get("model", ""), "prompt_version": PROMPT_VERSION}
-    if tool == "none":
-        return {"ok": True, "tool": "none",
-                "answer": str(choice.get("answer") or "我只能回答库存、采购销售、欠款这类经营数据问题。"),
-                "data": None, "meta": meta}
 
-    # 2) 执行只读工具
-    try:
-        data, tpl = _run_tool(tool, args, erp)
-    except Exception as e:
-        return {"ok": False, "message": "数据查询失败：%s" % str(e)[:120]}
+    # ---- 第 1 层：规则直答（0 token）----
+    hit = _rule_route(text)
+    if hit:
+        tool, args = hit
+        try:
+            data, tpl = _RULE_TOOLS[tool](args, erp)
+        except Exception as e:
+            return {"ok": False, "message": "数据查询失败：%s" % str(e)[:120], "meta": meta}
+        return {"ok": True, "tool": tool, "answer": tpl, "data": data,
+                "route": "rule", "grounded": True, "meta": meta,
+                "steps": [{"step": 1, "thought": "规则直答（零 LLM 调用）", "tool": tool,
+                           "args": args, "ok": True, "observation": data}],
+                "tokens": {"prompt": 0, "completion": 0, "estimated": False}}
 
-    # 3) 依数据作答（失败退模板，模板也绝不引入数据外的数字）
-    answer = tpl or "已查到数据，但暂时无法组织回答。"
-    try:
-        raw2 = llmmod._chat(prof, [
-            {"role": "system", "content": ANSWER_PROMPT.format(q=text, tool=tool,
-                                                               data=json.dumps(data, ensure_ascii=False))},
-            {"role": "user", "content": "请回答"},
-        ])
-        txt = (raw2 or "").strip()
-        if txt:
-            head = txt.lstrip()[:1]
-            if head == "{":                       # {"answer": "..."} → 取字段
-                txt = str(llmmod._extract_json(txt).get("answer") or "").strip()
-            elif head == "[":                     # JSON 数组包装 → 摘纯文本；不是纯文本就整体作废
-                try:
-                    arr = llmmod._extract_json(txt)
-                    if isinstance(arr, list) and arr and isinstance(arr[0], dict):
-                        txt = str(arr[0].get("text") or arr[0].get("answer") or "").strip()
-                    elif isinstance(arr, list) and arr and isinstance(arr[0], str):
-                        txt = arr[0].strip()
-                    else:
-                        txt = ""                  # [{"name":...}] 这类内容不是自然语言回答
-                except Exception:
-                    txt = ""
-            if txt:
-                txt = txt.strip()
-                # 一致性兜底：模型文本里出现数据/模板中都没有的数字 → 弃用，退回模板句
-                answer = txt if _numeric_grounded(txt, data, tpl) else answer
-    except Exception:
-        pass
-    return {"ok": True, "tool": tool, "answer": answer, "data": data, "meta": meta}
+    # ---- 第 2 层：agent loop（多步取证 + 第 3 层接地兜底在 loop 内）----
+    from . import agent as agentmod
+    out = agentmod.run_agent(text, _tools(erp), max_steps=4, context_block=_context(erp))
+    if not out.get("ok"):
+        out["meta"] = meta
+        return out
+    tools_used = [s["tool"] for s in out.get("steps", []) if s.get("tool") and s.get("ok")]
+    obs = out.get("observations") or []
+    return {
+        "ok": True,
+        "tool": tools_used[0] if len(tools_used) == 1 else "agent",
+        "answer": out["answer"],
+        "data": obs[0] if len(obs) == 1 else obs,
+        "route": "agent",
+        "grounded": out.get("grounded"),
+        "steps": out.get("steps", []),
+        "tokens": out.get("tokens", {}),
+        "meta": dict(out.get("meta") or {}, **meta),
+    }
