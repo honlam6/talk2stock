@@ -1029,7 +1029,7 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 }
 .al-live-txt { letter-spacing: .02em; font-size: 12.5px; }
 .al-steps { display: flex; flex-direction: column; border-left: 2px solid var(--line-soft); margin: 2px 0 0 2px; }
-.al-step { margin: 0; }
+.al-step { margin: 0; white-space: normal; }   /* .msg 的 pre-wrap 会把模板换行渲染成空行，步骤树内恢复折叠 */
 .al-step .al-hd {
   display: flex; align-items: center; gap: 6px; padding: 2px 7px;
   cursor: pointer; border-radius: 6px; user-select: none; white-space: nowrap;
@@ -1129,8 +1129,27 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 
 .chat-input-row { display: flex; gap: 10px; max-width: 860px; margin: 0 auto; width: 100%; position: sticky; bottom: 0; background: var(--paper); padding: 12px 0 4px; }
 .chat-input-row textarea {
-  flex: 1; font-size: 16.5px; padding: 12px 15px; height: 52px; line-height: 1.5;
+  flex: 1; font-size: 16.5px; padding: 12px 15px; min-height: 52px; line-height: 1.5;
   border: 1.5px solid var(--line); border-radius: 13px; font-family: inherit; resize: none;
+}
+/* 流式进行中「提问」变「停止」 */
+.chat-input-row .btn.stop {
+  background: var(--card); color: #a33c1f; border: 1.5px solid #e3c2b2;
+}
+.chat-input-row .btn.stop:hover:not(:disabled) { border-color: #a33c1f; color: #7a2d12; }
+/* 在飞时示例词条置灰禁点 */
+.ask-samples.off .tag { opacity: .45; pointer-events: none; }
+/* 错误气泡里的「重问一次」 */
+.msg .retry-row { margin-top: 8px; }
+.msg .retry-row .tag { cursor: pointer; }
+/* 恢复上次对话的提示条（有历史时出现在 log 顶部，居中小字） */
+.ask-restore {
+  align-self: center; display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-3); padding-top: 2px;
+}
+.ask-restore .ask-clear {
+  border: 0; background: none; padding: 0; font: inherit; cursor: pointer;
+  color: var(--gold-deep, #8a6d1f); text-decoration: underline;
 }
 .chat-input-row textarea:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(194, 154, 59, .15); }
 
@@ -1352,7 +1371,7 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
   .chat-wrap { min-height: 0; height: calc(100dvh - 262px); }
   .chat-log { padding-bottom: 6px; }
   .chat-input-row { padding: 8px 0 2px; }
-  .chat-input-row textarea { height: 46px; font-size: 16px; padding: 10px 13px; }
+  .chat-input-row textarea { min-height: 46px; font-size: 16px; padding: 10px 13px; }
   .chat-input-row .btn { padding: 10px 16px; font-size: 15px; }
   .ask-samples { gap: 6px; margin-bottom: 8px; }
   .ask-samples .tag { font-size: 12px; padding: 2px 9px; }

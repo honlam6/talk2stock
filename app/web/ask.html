@@ -11,7 +11,7 @@
   <div id="ph"></div>
 
   <div class="chat-wrap">
-    <div class="chat-log" id="log"></div>
+    <div class="chat-log" id="log" role="log" aria-live="polite"></div>
     <div class="ask-samples" id="askSamples">
       <span class="tag tag-new" style="cursor:pointer" data-q="可乐还有多少库存？">可乐还有多少库存？</span>
       <span class="tag tag-new" style="cursor:pointer" data-q="今天卖了多少？">今天卖了多少？</span>
@@ -31,11 +31,24 @@ shell('/ask');
 $('#ph').innerHTML = pageHead('ASK', '问一问', '库存 / 采销 / 欠款，随口问，答案带数据来源');
 
 const log = $('#log');
+const qEl = $('#q');
+const sendBtn = $('#send');
+const samplesEl = $('#askSamples');
+
+// ---- 会话历史（sessionStorage，只存本页：刷新不丢；上限 30 条） ----
+const HKEY = 't2s_ask_v1';
+let hist = [];
+try { hist = JSON.parse(sessionStorage.getItem(HKEY) || '[]'); } catch (e) { hist = []; }
+// 页面关闭时在飞的问题没有答案，恢复出来是条悬空提问，丢掉
+while (hist.length && hist[hist.length - 1].t === 'u') hist.pop();
+const saveHist = () => {
+  try { sessionStorage.setItem(HKEY, JSON.stringify(hist.slice(-30))); } catch (e) { /* 存储满/隐私模式：历史丢弃，不影响当页 */ }
+};
 
 // 空状态引导（首问之后自动消失）。
 // 不用白色气泡：引导不是"AI 回复"，做成全宽居中的欢迎版式，
 // 与真实回复（气泡）在视觉上区分开。窄屏刻意做矮，一屏要装下输入框。
-(function emptyState() {
+function emptyState() {
   const d = document.createElement('div');
   d.className = 'ask-hello';
   d.innerHTML = `
@@ -44,27 +57,62 @@ const log = $('#log');
     <div class="ah-d">库存余量 · 今日 / 本月采销 · 谁欠谁钱 · 哪些货快没了 · 库存值多少钱</div>
     <div class="ah-note">所有回答只读 · 数字实时取自 ERP</div>`;
   log.appendChild(d);
-})();
+}
 
-// 空状态里的示例 chip 现在放在输入框上方（ask-samples），提问后隐藏该行
-$('#askSamples').addEventListener('click', e => {
-  const el = e.target.closest('[data-q]');
-  if (el) doAsk(el.dataset.q);
-});
+// 恢复历史时顶部的小操作条：清空入口放在这里，不占输入区
+function restoreBar() {
+  const d = document.createElement('div');
+  d.className = 'ask-restore';
+  d.innerHTML = '已恢复上次对话（只存在本页，不会上传）';
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'ask-clear';
+  b.textContent = '清空重来';
+  b.onclick = () => {
+    hist = [];
+    saveHist();
+    log.innerHTML = '';
+    emptyState();
+    samplesEl.style.display = '';
+  };
+  d.appendChild(b);
+  log.appendChild(d);
+}
 
-function add(cls, text, src) {
+function add(cls, text, quiet) {
   const d = document.createElement('div');
   d.className = 'msg ' + cls;
   d.textContent = text;
-  if (src) {
-    const s = document.createElement('span');
-    s.className = 'src';
-    s.textContent = '数据来源：' + src;
-    d.appendChild(s);
+  log.appendChild(d);
+  if (!quiet) d.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  return d;
+}
+
+// 错误气泡 + 「重问一次」入口（历史恢复时只渲染不记账，用 errBubble）
+function errBubble(m, retryQ) {
+  const d = document.createElement('div');
+  d.className = 'msg bot err';
+  d.textContent = m;
+  if (retryQ) {
+    const row = document.createElement('div');
+    row.className = 'retry-row';
+    const b = document.createElement('span');
+    b.className = 'tag tag-new';
+    b.style.cursor = 'pointer';
+    b.textContent = '↻ 重问一次';
+    b.dataset.retry = retryQ;
+    row.appendChild(b);
+    d.appendChild(row);
   }
+  return d;
+}
+function addErr(m, retryQ) {
+  const d = errBubble(m, retryQ);
   log.appendChild(d);
   d.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  return d;
+  hist.push({ t: 'e', m, q: retryQ || '' });
+  saveHist();
+  qEl.focus({ preventScroll: true });
 }
 
 const TOOL_LABEL = {
@@ -89,17 +137,8 @@ function stepRow(s) {
   row.className = 'al-step' + (s.ok === false ? ' al-err' : '');
   const args = s.args && Object.values(s.args).filter(v => v !== '' && v != null).join(' · ');
   const obs = JSON.stringify(s.observation, null, 1) || '';
-  row.innerHTML = `
-    <div class="al-hd">
-      <span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span>
-      <span class="al-name">${TOOL_LABEL[s.tool] || s.tool}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>
-      ${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}
-      <span class="al-caret" aria-hidden="true">▾</span>
-    </div>
-    <div class="al-body">
-      ${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}
-      <pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre>
-    </div>`;
+  // 模板单行拼接（同 botShell 注释：.msg pre-wrap 下块间换行会变空行）
+  row.innerHTML = `<div class="al-hd"><span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span><span class="al-name">${esc(TOOL_LABEL[s.tool] || s.tool)}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}<span class="al-caret" aria-hidden="true">▾</span></div><div class="al-body">${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}<pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre></div>`;
   row.querySelector('.al-hd').onclick = () => {
     row.classList.toggle('open');
     row.querySelector('.al-caret').textContent = row.classList.contains('open') ? '▴' : '▾';
@@ -109,6 +148,7 @@ function stepRow(s) {
 
 // ---- 完成后的顶部徽章行（路由结果 + token + 接地状态，一眼可审计）----
 function badgeLine(r) {
+  if (r.route === 'stopped') return '<span class="at-tok">已停止</span>';
   const tok = (r.tokens && (r.tokens.prompt + r.tokens.completion)) || 0;
   if (r.route === 'rule') {
     return `<span class="at-badge at-fast">⚡ 规则直答</span><span class="at-tok">0 token</span>
@@ -122,68 +162,118 @@ function badgeLine(r) {
       : '<span class="at-ground" title="答案中每个数字都来自工具观察 JSON（数字接地）">✓ 数字已核对</span>'}`;
 }
 
-// ---- 流式问答主体：SSE 逐事件渲染；流式不可用降级普通接口一次性渲染 ----
-async function doAsk(q) {
-  if (!q.trim()) return;
-  add('user', q);
-  $('#q').value = '';
-  $('#askSamples').style.display = 'none';
-  const hello = log.querySelector('.ask-hello');
-  if (hello) hello.remove();
+// 历史存档里的 answer 结果做瘦身：thought 截断（observation 保留，恢复后仍可展开审计）
+const slimResult = r => ({
+  answer: r.answer, route: r.route, tokens: r.tokens,
+  grounded: r.grounded, tool: r.tool,
+  steps: (r.steps || []).map(s => Object.assign({}, s, {
+    thought: s.thought ? String(s.thought).slice(0, 300) : '',
+  })),
+});
 
-  // 流式气泡骨架：live 动效行 + 步骤容器 + 答案骨架
+// 流式气泡骨架：live 动效行 + 步骤容器 + 答案骨架
+// 注意：innerHTML 必须单行（块间不留空白）——.msg 的 pre-wrap 会把模板换行渲染成空行
+function botShell() {
   const msg = document.createElement('div');
   msg.className = 'msg bot';
-  msg.innerHTML = `
-    <div class="agent-live">
-      <div class="al-live"><span class="al-live-dot"></span><span class="al-live-txt">正在思考…</span></div>
-      <div class="al-steps"></div>
-    </div>
-    <div class="msg-body"><div class="skel skel-text w-80"></div></div>`;
-  log.appendChild(msg);
-  msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  const liveRow = msg.querySelector('.al-live');
-  const liveTxt = msg.querySelector('.al-live-txt');
-  const stepsEl = msg.querySelector('.al-steps');
-  const bodyEl = msg.querySelector('.msg-body');
+  msg.innerHTML = `<div class="agent-live"><div class="al-live"><span class="al-live-dot"></span><span class="al-live-txt">正在思考…</span></div><div class="al-steps"></div></div><div class="msg-body"><div class="skel skel-text w-80"></div></div>`;
+  return {
+    msg,
+    liveRow: msg.querySelector('.al-live'),
+    liveTxt: msg.querySelector('.al-live-txt'),
+    stepsEl: msg.querySelector('.al-steps'),
+    bodyEl: msg.querySelector('.msg-body'),
+  };
+}
+
+// 收尾渲染：live 行移除、答案落位、徽章 + 数据来源；quiet=true 用于历史恢复（不滚动不记账）
+function finalizeOn(shell, r, quiet) {
+  shell.liveRow.remove();
+  shell.bodyEl.innerHTML = '';
+  shell.bodyEl.textContent = r.answer || '（无回答）';
+  const head = document.createElement('div');
+  head.className = 'al-head';
+  head.innerHTML = badgeLine(r);
+  shell.msg.querySelector('.agent-live').prepend(head);
+  if (r.tool && r.tool !== 'none') {
+    const s = document.createElement('span');
+    s.className = 'src';
+    s.textContent = '数据来源：' + (TOOL_LABEL[r.tool] || r.tool);
+    shell.msg.appendChild(s);
+  }
+  if (!quiet) {
+    shell.msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    hist.push({ t: 'b', r: slimResult(r) });
+    saveHist();
+    qEl.focus({ preventScroll: true });
+  }
+}
+
+// ---- 在飞状态机：进行中「提问」按钮变「停止」，词条禁点，Enter 忽略 ----
+let busy = false;
+let ctrl = null;          // 当前流的 AbortController
+let watchdog = null;      // 90 秒无数据自动断开
+
+function setBusy(b) {
+  busy = b;
+  sendBtn.classList.toggle('stop', b);
+  sendBtn.textContent = b ? '停止' : '提问';
+  samplesEl.classList.toggle('off', b);
+}
+function stopStream() {
+  if (ctrl) { ctrl._stopped = true; ctrl.abort(); }
+}
+
+// ---- 流式问答主体：SSE 逐事件渲染；仅当零事件收到时才降级普通接口 ----
+async function doAsk(q, fromInput) {
+  q = (q || '').trim();
+  if (!q || busy) return;
+  setBusy(true);
+  add('user', q);
+  if (fromInput) { qEl.value = ''; qEl.style.height = ''; }   // 词条提问不动输入框草稿
+  samplesEl.style.display = 'none';
+  const hello = log.querySelector('.ask-hello');
+  if (hello) hello.remove();
+  const rb = log.querySelector('.ask-restore');
+  if (rb) rb.remove();
+  hist.push({ t: 'u', q });
+  saveHist();
+
+  const shell = botShell();
+  log.appendChild(shell.msg);
+  shell.msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+
+  ctrl = new AbortController();
+  let gotAny = false;       // 是否收到过任何 SSE 事件（决定能否安全降级）
+  let done = false;
+  const touch = () => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => { if (ctrl) ctrl.abort(); }, 90000);
+  };
+  touch();
 
   const paintStep = s => {
-    stepsEl.appendChild(stepRow(s));
-    liveRow.classList.remove('hidden');
-    liveTxt.textContent = '结合数据思考下一步…';
-    msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    shell.stepsEl.appendChild(stepRow(s));
+    shell.liveRow.classList.remove('hidden');
+    shell.liveTxt.textContent = '结合数据思考下一步…';
+    shell.msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
   };
-  const finalize = r => {
-    liveRow.remove();
-    bodyEl.innerHTML = '';
-    bodyEl.textContent = r.answer || '（无回答）';
-    const head = document.createElement('div');
-    head.className = 'al-head';
-    head.innerHTML = badgeLine(r);
-    msg.querySelector('.agent-live').prepend(head);
-    if (r.tool && r.tool !== 'none') {
-      const s = document.createElement('span');
-      s.className = 'src';
-      s.textContent = '数据来源：' + (TOOL_LABEL[r.tool] || r.tool);
-      msg.appendChild(s);
-    }
-    msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  };
-  const fail = m => { msg.remove(); add('bot err', m || '查询失败'); };
 
-  let done = false;
   try {
+    const pass = localStorage.getItem('t2s_pass');
     const resp = await fetch('/api/ask/stream', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: Object.assign({ 'Content-Type': 'application/json' }, pass ? { 'X-T2S-Pass': pass } : {}),
       body: JSON.stringify({ text: q }),
+      signal: ctrl.signal,
     });
-    if (!resp.ok || !resp.body) throw new Error('流式接口不可用');
+    if (!resp.ok || !resp.body) throw new Error('流式接口不可用（HTTP ' + resp.status + '）');
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
     while (true) {
       const { done: rd, value } = await reader.read();
+      touch();
       if (rd) break;
       buf += dec.decode(value, { stream: true });
       let idx;
@@ -194,13 +284,15 @@ async function doAsk(q) {
         if (!line) continue;
         let ev;
         try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
+        gotAny = true;
         if (ev.type === 'action') {
-          liveRow.classList.remove('hidden');
-          liveTxt.textContent = (TOOL_VERB[ev.tool] || '正在调用 ' + (TOOL_LABEL[ev.tool] || ev.tool)) + '…';
+          shell.liveRow.classList.remove('hidden');
+          shell.liveTxt.textContent = (TOOL_VERB[ev.tool] || '正在调用 ' + (TOOL_LABEL[ev.tool] || ev.tool)) + '…';
         } else if (ev.type === 'step') {
           paintStep(ev.step);
         } else if (ev.type === 'done') {
-          finalize(ev.result || {}); done = true;
+          finalizeOn(shell, ev.result || {});
+          done = true;
         } else if (ev.type === 'error') {
           throw new Error(ev.message || '查询失败');
         }
@@ -208,24 +300,85 @@ async function doAsk(q) {
     }
     if (!done) throw new Error('连接中断');
   } catch (e) {
-    // 降级：普通一次性接口（老 WebView / 流式中断保底），复用同一套渲染
-    try {
-      const r = await api('/api/ask', { method: 'POST', body: { text: q } });
-      if (!r.ok) { fail(r.message); return; }
-      (r.steps || []).filter(s => s.tool).forEach(s => stepsEl.appendChild(stepRow(s)));
-      finalize(r);
-    } catch (e2) { fail(e2.message); }
+    clearTimeout(watchdog);
+    const wasStopped = !!(ctrl && ctrl._stopped);
+    if (wasStopped) {
+      // 用户主动停止：保留已执行步骤，答案区落一条停止说明
+      finalizeOn(shell, { answer: '（已停止本次回答）', route: 'stopped' });
+    } else if (gotAny || e.name === 'AbortError') {
+      // 流已产出过内容 / 看门狗超时：原地报错 + 可重问。
+      // 不降级重跑：agent 已消耗 token、步骤已画出，重跑会双份计费 + 步骤重复。
+      shell.msg.remove();
+      addErr(e.name === 'AbortError' ? '回答超时：长时间没有收到数据，已中断' : (e.message || '查询失败'), q);
+    } else {
+      // 一个事件都没收到：降级一次性接口（老 WebView / 代理不支持流）
+      try {
+        const r = await api('/api/ask', { method: 'POST', body: { text: q } });
+        if (!r.ok) {
+          shell.msg.remove();
+          addErr(r.message || '查询失败', q);
+        } else {
+          (r.steps || []).filter(s => s.tool).forEach(s => shell.stepsEl.appendChild(stepRow(s)));
+          finalizeOn(shell, r);
+        }
+      } catch (e2) {
+        shell.msg.remove();
+        addErr(e2.message || '查询失败', q);
+      }
+    }
+  } finally {
+    clearTimeout(watchdog);
+    ctrl = null;
+    setBusy(false);
   }
 }
 
-$('#send').onclick = () => doAsk($('#q').value);
-$('#q').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doAsk($('#q').value); }
+// 输入框自适应长高（最多约 4 行，超出内部滚动）
+qEl.addEventListener('input', () => {
+  qEl.style.height = 'auto';
+  qEl.style.height = Math.min(qEl.scrollHeight, 132) + 'px';
 });
-document.querySelectorAll('[data-q]').forEach(el =>
-  el.onclick = () => doAsk(el.dataset.q));
 
-$('#q').focus();
+sendBtn.onclick = () => { busy ? stopStream() : doAsk(qEl.value, true); };
+qEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (!busy) doAsk(qEl.value, true);
+  }
+});
+// 示例词条：容器统一委托（旧版这里 + 元素 onclick 双重绑定，点一次发两次请求）
+samplesEl.addEventListener('click', e => {
+  const el = e.target.closest('[data-q]');
+  if (el && !busy) doAsk(el.dataset.q, false);
+});
+// 错误气泡里的「重问一次」（气泡是动态建的，挂在 log 上委托）
+log.addEventListener('click', e => {
+  const el = e.target.closest('[data-retry]');
+  if (el && !busy) doAsk(el.dataset.retry, false);
+});
+
+// ---- 启动：有历史恢复，否则空状态 ----
+if (hist.length) {
+  restoreBar();
+  hist.forEach(m => {
+    if (m.t === 'u') add('user', m.q, true);
+    else if (m.t === 'e') log.appendChild(errBubble(m.m, m.q));
+    else if (m.t === 'b') {
+      const shell = botShell();
+      log.appendChild(shell.msg);
+      (m.r.steps || []).filter(s => s.tool).forEach(s => shell.stepsEl.appendChild(stepRow(s)));
+      finalizeOn(shell, m.r, true);
+    }
+  });
+  const last = log.lastElementChild;
+  if (last) last.scrollIntoView({ block: 'end' });
+  samplesEl.style.display = 'none';
+} else {
+  emptyState();
+}
+
+// 移动端不在加载时就聚焦：programmatic focus 不弹键盘但 iOS 会滚动页面，键盘留给用户点
+if (!matchMedia('(pointer: coarse)').matches) qEl.focus({ preventScroll: true });
 </script>
 </body>
 </html>
