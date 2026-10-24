@@ -174,9 +174,10 @@ _RULE_TOOLS = {
 
 
 def _tools(erp):
-    """构造 agent 工具注册表（全部只读）。Phase 2 的检索工具在此追加。"""
+    """构造 agent 工具注册表（全部只读）。"""
     def bind(fn):
         return lambda args: fn(args, erp)
+    from . import retrieve as rmod
     return {
         "stock_query": {"desc": "查某种商品的库存（哪个仓、还剩多少）",
                         "args_hint": '{"material":"商品名","depot":"仓库名，没说就空字符串"}',
@@ -193,6 +194,12 @@ def _tools(erp):
                          "run": bind(_recent_bills)},
         "stock_value": {"desc": "库存里的货总共值多少钱", "args_hint": "{}",
                         "run": bind(_stock_value)},
+        "search_docs": {"desc": "查操作文档（怎么录单/什么字段必填/术语解释等概念问题）",
+                        "args_hint": '{"query":"检索词"}',
+                        "run": lambda a: rmod.search_docs(str(a.get("query") or ""))},
+        "search_history": {"desc": "搜历史单据（上次/之前跟谁买过什么、某商品进过几次货、原话找单）",
+                           "args_hint": '{"query":"检索词，如商品名或往来单位"}',
+                           "run": lambda a: rmod.search_history(str(a.get("query") or ""))},
     }
 
 
