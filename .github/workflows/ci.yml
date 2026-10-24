@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 后端语法检查
+        run: python3 -m py_compile app/server.py app/selfcheck.py app/core/*.py eval/*.py
+
+      - name: 单元测试（unittest，零依赖）
+        run: |
+          cd "$(pwd)" && python3 -m unittest discover -s tests -v
+
+      - name: 前端内联 JS 语法检查
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 提取并校验页面内联脚本
+        run: |
+          python3 - <<'EOF'
+          import re, glob, subprocess, sys
+          failed = False
+          for page in sorted(glob.glob("app/web/*.html")):
+              html = open(page, encoding="utf8").read()
+              scripts = re.findall(r"<script>(.*?)</script>", html, re.S)
+              if not scripts:
+                  continue
+              js = "/tmp/%s.js" % page.replace("/", "_")
+              open(js, "w").write("\n;\n".join(scripts))
+              r = subprocess.run(["node", "--check", js], capture_output=True)
+              status = "OK " if r.returncode == 0 else "FAIL"
+              print(f"[{status}] {page}")
+              if r.returncode != 0:
+                  print(r.stderr.decode()[:500])
+                  failed = True
+          sys.exit(1 if failed else 0)
+          EOF
