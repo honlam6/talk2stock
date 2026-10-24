@@ -6,10 +6,17 @@
 - prompt 里明确列出「只需要 4 类信息」，其余字段禁止编造
 - 附带 ERP 现有主数据（供应商/客户/商品/仓库名单）让模型优先复用已有名称，减少误建
 - 输出后做规范化 + 自检，畸形则报错让上层回退
+
+用量与可靠性（Phase 1a）：
+- 每次调用记录 token 用量到 data/usage.jsonl（流式带 stream_options.include_usage；
+  网关不支持时按字符粗估并标注 estimated，统计失败绝不阻断业务）
+- 网络错误 / 5xx 指数退避重试（4xx 参数问题不重试）
 """
 import json
+import os
 import re
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -126,6 +133,7 @@ def _insecure_context():
 
 
 def _post(url, payload, api_key, stream=False, ssl_context=None):
+    """发请求，返回 (文本, usage)。usage 为 None 表示网关未返回精确用量。"""
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
@@ -138,9 +146,13 @@ def _post(url, payload, api_key, stream=False, ssl_context=None):
         kw["context"] = ssl_context
     with urllib.request.urlopen(req, **kw) as r:
         if not stream:
-            return json.loads(r.read().decode("utf-8", "replace"))
-        # SSE 流式：逐行读取 "data: {...}"，拼接 choices[0].delta.content
+            j = json.loads(r.read().decode("utf-8", "replace"))
+            content = j["choices"][0]["message"]["content"]
+            return content, _norm_usage(j.get("usage"))
+        # SSE 流式：逐行读取 "data: {...}"，拼接 choices[0].delta.content；
+        # include_usage 时 usage 挂在最后一个 chunk（choices 为空），先抓再跳过
         text = ""
+        usage = None
         for raw in r:
             line = raw.decode("utf-8", "replace").strip()
             if not line or not line.startswith("data:"):
@@ -152,6 +164,9 @@ def _post(url, payload, api_key, stream=False, ssl_context=None):
                 obj = json.loads(data)
             except Exception:
                 continue
+            u = _norm_usage(obj.get("usage"))
+            if u:
+                usage = u
             choices = obj.get("choices") or []
             if not choices:
                 continue
@@ -159,7 +174,121 @@ def _post(url, payload, api_key, stream=False, ssl_context=None):
             piece = delta.get("content")
             if isinstance(piece, str):
                 text += piece
-        return text
+        return text, usage
+
+
+def _post_retry(url, payload, api_key, stream=False, ssl_context=None, retries=2):
+    """带重试的 POST：仅网络错误 / 5xx 指数退避重试，4xx（参数问题）重试无意义。"""
+    delay = 0.6
+    for attempt in range(retries + 1):
+        try:
+            return _post(url, payload, api_key, stream=stream, ssl_context=ssl_context)
+        except urllib.error.HTTPError as e:
+            if e.code >= 500 and attempt < retries:
+                time.sleep(delay)
+                delay *= 2.5
+                continue
+            raise
+        except (urllib.error.URLError, TimeoutError, OSError):
+            # URLError(超时/DNS/拒连) 与读取中途断流；POST 幂等（纯生成），重试安全
+            if attempt < retries:
+                time.sleep(delay)
+                delay *= 2.5
+                continue
+            raise
+
+
+# 网关能力记忆：不认 stream_options 的端点 400 一次后记住，后续请求不再带
+_quirks = set()
+
+
+def _norm_usage(u):
+    if isinstance(u, dict) and u.get("prompt_tokens") is not None:
+        try:
+            return {"prompt_tokens": int(u.get("prompt_tokens") or 0),
+                    "completion_tokens": int(u.get("completion_tokens") or 0),
+                    "estimated": False}
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _estimate_tokens(text):
+    """拿不到精确 usage 时的粗估：中文约 1 字 1 token、英文约 4 字符 1 token，混合取 0.8。"""
+    return max(1, int(round(len(text or "") * 0.8)))
+
+
+# --------------------------------------------------------------------------
+# 用量记录（data/usage.jsonl）：统计失败绝不阻断业务
+# --------------------------------------------------------------------------
+_USAGE_MAX_BYTES = 10 * 1024 * 1024
+_usage_lock = threading.Lock()
+
+
+def _record_usage(prof, purpose, usage, latency_ms):
+    try:
+        d = cfgmod.data_dir()
+        os.makedirs(d, exist_ok=True)
+        full = os.path.join(d, "usage.jsonl")
+        rec = {
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "profile": prof.get("name") or prof.get("key") or "",
+            "model": prof.get("model", ""),
+            "purpose": purpose or "",
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "estimated": bool(usage.get("estimated")),
+            "latency_ms": int(latency_ms),
+        }
+        with _usage_lock:
+            try:
+                if os.path.getsize(full) > _USAGE_MAX_BYTES:
+                    os.replace(full, full + ".1")
+            except OSError:
+                pass
+            with open(full, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def usage_summary():
+    """聚合今日（本地时区）LLM 用量，供看板/设置页成本卡展示。"""
+    today = time.strftime("%Y-%m-%d")
+    out = {"date": today, "calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+           "estimated_calls": 0, "by_purpose": {}, "avg_latency_ms": 0}
+    lat_total = 0
+    try:
+        full = os.path.join(cfgmod.data_dir(), "usage.jsonl")
+        with open(full, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if not str(r.get("ts") or "").startswith(today):
+                    continue
+                out["calls"] += 1
+                out["prompt_tokens"] += int(r.get("prompt_tokens") or 0)
+                out["completion_tokens"] += int(r.get("completion_tokens") or 0)
+                if r.get("estimated"):
+                    out["estimated_calls"] += 1
+                p = str(r.get("purpose") or "?")
+                agg = out["by_purpose"].setdefault(p, {"calls": 0, "tokens": 0})
+                agg["calls"] += 1
+                agg["tokens"] += int(r.get("prompt_tokens") or 0) + int(r.get("completion_tokens") or 0)
+                lat_total += int(r.get("latency_ms") or 0)
+    except OSError:
+        pass
+    if out["calls"]:
+        out["avg_latency_ms"] = lat_total // out["calls"]
+        out["total_tokens"] = out["prompt_tokens"] + out["completion_tokens"]
+    else:
+        out["total_tokens"] = 0
+    return out
 
 
 def _merge_system(messages):
@@ -178,7 +307,11 @@ def _merge_system(messages):
     return rest
 
 
-def _chat(prof, messages, force_json=True):
+def _chat(prof, messages, force_json=True, purpose="", collect=None):
+    """单次对话调用（三级降级 + 重试 + 用量记录），返回模型文本。
+    purpose 标记调用来源（parse/ask_select/ask_answer/agent/insight/test），进用量台账。
+    collect 传入 dict 时，把本次 usage 写入其中（调用方做会话级合计/预算用）。"""
+    started = time.time()
     if prof.get("merge_system"):
         messages = _merge_system(messages)
     url = prof["base_url"].rstrip("/") + "/chat/completions"
@@ -191,36 +324,54 @@ def _chat(prof, messages, force_json=True):
         base["response_format"] = {"type": "json_object"}
     ctx = _insecure_context() if prof.get("insecure") else None
 
-    last_err = None
-    # 1) 流式 + response_format（优先；很多推理端点非流式会挂起）
+    text, usage, last_err = None, None, None
+
+    # 1) 流式 + response_format（优先；很多推理端点非流式会挂起）+ include_usage
     try:
-        txt = _post(url, dict(base, stream=True), prof["api_key"], stream=True, ssl_context=ctx)
-        if txt and txt.strip():
-            return txt
-    except Exception as e:
-        last_err = e
-    # 2) 流式，不带 response_format（兼容不支持该参数的端点）
-    try:
-        payload = {k: v for k, v in base.items() if k != "response_format"}
-        payload["stream"] = True
-        txt = _post(url, payload, prof["api_key"], stream=True, ssl_context=ctx)
-        if txt and txt.strip():
-            return txt
-    except Exception as e:
-        last_err = e
-    # 3) 非流式兜底（去掉 response_format 重试一次）
-    try:
-        payload = {k: v for k, v in base.items() if k != "response_format"}
-        j = _post(url, payload, prof["api_key"], stream=False, ssl_context=ctx)
-        return j["choices"][0]["message"]["content"]
+        payload = dict(base, stream=True)
+        if "no_stream_options" not in _quirks:
+            payload["stream_options"] = {"include_usage": True}
+        text, usage = _post_retry(url, payload, prof["api_key"], stream=True, ssl_context=ctx)
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
-        if force_json and ("response_format" in detail or e.code == 400):
-            j = _post(url, payload, prof["api_key"], stream=False, ssl_context=ctx)
-            return j["choices"][0]["message"]["content"]
-        raise RuntimeError(f"AI 接口报错 {e.code}：{detail}")
+        if "stream_options" in detail:
+            _quirks.add("no_stream_options")   # 该端点不认此参数，记住并立即降级
+        last_err = "HTTP %s %s" % (e.code, detail)
     except Exception as e:
-        raise RuntimeError(f"AI 接口连接失败：{e}（流式也失败：{last_err}）")
+        last_err = e
+
+    # 2) 流式，不带 response_format / stream_options（兼容不支持这些参数的端点）
+    if not (text and text.strip()):
+        try:
+            payload = {k: v for k, v in base.items() if k != "response_format"}
+            payload["stream"] = True
+            text, usage = _post_retry(url, payload, prof["api_key"], stream=True, ssl_context=ctx)
+        except Exception as e:
+            last_err = e
+
+    # 3) 非流式兜底
+    if not (text and text.strip()):
+        try:
+            payload = {k: v for k, v in base.items() if k != "response_format"}
+            text, usage = _post_retry(url, payload, prof["api_key"], stream=False, ssl_context=ctx)
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:300]
+            raise RuntimeError(f"AI 接口报错 {e.code}：{detail}")
+        except Exception as e:
+            raise RuntimeError(f"AI 接口连接失败：{e}（流式也失败：{last_err}）")
+
+    # 用量记录：拿不到精确 usage 时按字符粗估并标注，统计绝不阻断业务
+    if usage is None:
+        usage = {
+            "prompt_tokens": _estimate_tokens(json.dumps(messages, ensure_ascii=False)),
+            "completion_tokens": _estimate_tokens(text or ""),
+            "estimated": True,
+        }
+    _record_usage(prof, purpose, usage, int((time.time() - started) * 1000))
+    if collect is not None:
+        collect.clear()
+        collect.update(usage)
+    return text
 
 
 def _extract_json(text):
@@ -382,7 +533,7 @@ def parse(text, erp=None, prev_draft=None):
     content = _chat(prof, [
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": user_content},
-    ])
+    ], purpose="parse")
     raw = _extract_json(content)
     draft, problems = normalize(raw)
     meta = {
@@ -403,7 +554,7 @@ def test_profile(prof):
         c = _chat(prof, [
             {"role": "system", "content": "只回复 JSON：{\"ok\":true}"},
             {"role": "user", "content": "测试"},
-        ])
+        ], purpose="test")
         _extract_json(c)
         return True, "连接成功"
     except Exception as e:
