@@ -327,6 +327,24 @@ def api_ask(_q, body):
     return askmod.ask(text, erp)
 
 
+def api_alerts(_q, _body):
+    """主动预警（纯规则零 LLM）：负库存/低库存/应收集中/大额单。"""
+    from core import insight as insmod
+    return insmod.alerts(_erp())
+
+
+def api_insight(_q, _body):
+    """经营洞察：规则事实 + LLM 组织语言（未配置模型/不接地自动退规则模板）。"""
+    from core import insight as insmod
+    return insmod.insights(_erp())
+
+
+def api_daily_report(_q, _body):
+    """每日经营日报数据包（图文卡渲染交给前端）。"""
+    from core import insight as insmod
+    return insmod.daily_report(_erp())
+
+
 def api_dashboard(q, _body):
     from core import report as reportmod
     lite = (q.get("lite") or [""])[0].strip().lower() in ("1", "true", "yes")
@@ -420,6 +438,9 @@ ROUTES = {
     ("GET", "/api/dashboard"): api_dashboard,
     ("GET", "/api/history"): api_history,
     ("POST", "/api/ask"): api_ask,
+    ("GET", "/api/alerts"): api_alerts,
+    ("GET", "/api/insight"): api_insight,
+    ("GET", "/api/daily-report"): api_daily_report,
     ("POST", "/api/parse"): api_parse,
     ("POST", "/api/resolve"): api_resolve,
     ("POST", "/api/commit"): api_commit,

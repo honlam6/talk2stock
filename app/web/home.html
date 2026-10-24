@@ -58,6 +58,9 @@
     </a>
   </div>
 
+  <!-- 主动预警横幅（agent 规则层主动检查，有异常才出现；点开跳看板） -->
+  <div id="alertBar"></div>
+
   <!-- KPI 顶条（加载中显示骨架屏） -->
   <div class="mt-5 kpi-grid" id="kpis"></div>
 
@@ -135,6 +138,25 @@ async function refreshKPI() {
   try { renderKPI(await api('/api/dashboard?lite=1')); } catch (e) { renderKPI(null); }
 }
 
+// ---------- 主动预警（agent 规则层，零 LLM；有异常才渲染横幅） ----------
+async function loadAlerts() {
+  const el = $('#alertBar');
+  try {
+    const r = await api('/api/alerts');
+    const list = (r.ok && r.alerts || []).slice(0, 3);
+    if (!list.length) return;
+    const hasWarn = list.some(a => a.level === 'warn');
+    el.innerHTML = `
+      <div class="alert-bar mt-4" onclick="location.href='/dashboard'" role="button" tabindex="0"
+           onkeydown="if(event.key==='Enter')location.href='/dashboard'">
+        <span class="ab-ico">${hasWarn ? '⚠' : '📣'}</span>
+        <span class="ab-lines">${list.map(a =>
+          `<span class="ab-line ${a.level}">${esc(a.text)}</span>`).join('')}</span>
+        <span class="ab-more">看板详情 →</span>
+      </div>`;
+  } catch (e) { /* 预警拉取失败不打断工作台 */ }
+}
+
 // ---------- 最近录单 ----------
 function fieldZh(s) {
   return String(s || '')
@@ -205,7 +227,7 @@ async function loadMarquee() {
 // ---------- 状态 ----------
 (async () => {
   renderKPISkeleton();      // KPI 先出骨架，数据到了再替换
-  refreshKPI(); refreshHistory(); loadMarquee();
+  refreshKPI(); refreshHistory(); loadMarquee(); loadAlerts();
   try {
     const r = await api('/api/config');
     const cfg = r.config || r;

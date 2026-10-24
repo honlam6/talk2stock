@@ -24,6 +24,17 @@
 
   <div class="kpi-grid" id="kpiRow"></div>
 
+  <!-- AI 经营洞察：规则事实 + LLM 组织语言，数字全部接地可追溯；日报在其下展开 -->
+  <div class="card mb-4" id="aiCard">
+    <h2><span class="bar"></span>AI 经营洞察
+      <span class="muted" style="font-size:12px;font-weight:400" id="insSrc"></span>
+      <span class="flex-1"></span>
+      <button class="btn btn-sm" id="reportBtn">生成日报</button>
+    </h2>
+    <div id="insBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div></div>
+    <div id="reportBox" hidden></div>
+  </div>
+
   <div class="db-grid">
     <div class="card">
       <h2><span class="bar"></span>经营趋势
@@ -779,6 +790,65 @@ async function load() {
 }
 
 $('#refresh').onclick = load;
+
+// ---------- AI 经营洞察 + 每日日报 ----------
+async function loadInsights() {
+  const box = $('#insBox');
+  try {
+    const r = await api('/api/insight');
+    if (!r.ok) { box.innerHTML = `<div class="muted" style="font-size:13px">洞察暂不可用：${esc(r.message || '')}</div>`; return; }
+    $('#insSrc').textContent = r.source === 'llm' ? '· 数字全部来自 ERP，可追溯' : '· 规则生成';
+    box.innerHTML = (r.insights || []).map(c => `
+      <div class="ins-card ${c.level === 'warn' ? 'ins-warn' : ''}">
+        <div class="ins-t">${c.level === 'warn' ? '⚠' : '💡'} ${esc(c.title)}</div>
+        <div class="ins-d">${esc(c.detail)}</div>
+      </div>`).join('') || '<div class="muted">暂无可分析的经营活动</div>';
+  } catch (e) {
+    box.innerHTML = `<div class="muted" style="font-size:13px">洞察加载失败：${esc(e.message)}</div>`;
+  }
+}
+
+let reportBusy = false;
+async function genReport() {
+  if (reportBusy) return;
+  reportBusy = true;
+  const btn = $('#reportBtn');
+  btn.disabled = true; btn.textContent = '生成中…';
+  const box = $('#reportBox');
+  box.hidden = false;
+  box.innerHTML = '<div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div>';
+  try {
+    const r = await api('/api/daily-report');
+    if (!r.ok) throw new Error(r.message || '生成失败');
+    const ins = (r.insights || []).map(c =>
+      `<li>${c.level === 'warn' ? '⚠' : '•'} <b>${esc(c.title)}</b>　${esc(c.detail)}</li>`).join('');
+    const al = (r.alerts || []).map(a => `<li>${a.level === 'warn' ? '⚠' : '·'} ${esc(a.text)}</li>`).join('');
+    const tpRaw = r.top_parties || {};
+    const tp = [...(tpRaw.suppliers || []), ...(tpRaw.customers || [])]
+      .sort((a, b) => (b.amount || 0) - (a.amount || 0)).slice(0, 5)
+      .map(p => `<tr><td>${esc(p.name || '')}</td><td>${money(p.amount)}</td></tr>`).join('');
+    box.innerHTML = `
+      <div class="report-card">
+        <div class="rp-head">
+          <div class="rp-title">Talk2Stock 经营日报</div>
+          <div class="rp-date">${esc(r.date || '')} · 由 AI 基于当日 ERP 数据生成</div>
+        </div>
+        <div class="rp-sec"><div class="rp-h">今日洞察</div><ul class="rp-list">${ins || '<li>今日暂无显著变化</li>'}</ul></div>
+        ${al ? `<div class="rp-sec"><div class="rp-h">风险提示</div><ul class="rp-list">${al}</ul></div>` : ''}
+        ${tp ? `<div class="rp-sec"><div class="rp-h">往来 TOP5（累计发生额）</div>
+          <table class="dtable rp-tbl"><thead><tr><th>往来单位</th><th>金额</th></tr></thead><tbody>${tp}</tbody></table></div>` : ''}
+      </div>`;
+    box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) {
+    box.innerHTML = `<div class="muted">日报生成失败：${esc(e.message)}</div>`;
+  } finally {
+    reportBusy = false;
+    btn.disabled = false; btn.textContent = '生成日报';
+  }
+}
+$('#reportBtn').onclick = genReport;
+loadInsights();
+
 $('#trendToggle').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   trendMode = b.dataset.m;

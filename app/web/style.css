@@ -1067,6 +1067,49 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 .at-tok { color: #6f7a6f; font-size: 11px; white-space: nowrap; }
 .at-ground { color: #1e7d5a; font-weight: 600; font-size: 11px; }
 .at-unground { color: #a33c1f; font-weight: 600; font-size: 11px; }
+
+/* ---- AI 经营洞察卡 + 每日日报（dashboard） ---- */
+#insBox { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.ins-card {
+  border: 1px solid var(--line-soft); border-left: 3px solid var(--jade, #1e7d5a);
+  border-radius: 9px; background: #faf8f1; padding: 10px 12px; min-width: 0;
+}
+.ins-card.ins-warn { border-left-color: #a33c1f; background: #fbf4ee; }
+.ins-card .ins-t { font-weight: 700; font-size: 14px; margin-bottom: 3px; }
+.ins-card .ins-d { font-size: 12.5px; color: var(--text-2); line-height: 1.65; }
+.report-card {
+  margin-top: 12px; border: 1.5px solid var(--gold); border-radius: 12px;
+  background: #fffdf6; padding: 18px 20px;
+}
+.rp-head { border-bottom: 1px dashed var(--gold); padding-bottom: 10px; margin-bottom: 12px; }
+.rp-title { font-family: var(--serif, "Songti SC", serif); font-size: 20px; font-weight: 700; letter-spacing: .06em; }
+.rp-date { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.rp-sec { margin: 12px 0; }
+.rp-h { font-weight: 700; font-size: 13.5px; margin-bottom: 6px; color: var(--gold-deep, #8a6d1f); }
+.rp-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.9; color: var(--text-2); }
+.rp-tbl { font-size: 12.5px; }
+.rp-tbl th, .rp-tbl td { padding: 4px 10px; }
+@media print {
+  .report-card { border: 1px solid #666; }
+  #nav, .topbar, #aiCard .btn, .marquee { display: none !important; }
+}
+
+/* ---- 主动预警横幅（工作台） ---- */
+.alert-bar {
+  display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap;
+  border: 1px solid #e3c2b2; border-left: 4px solid #a33c1f;
+  background: #fbf4ee; border-radius: 10px; padding: 10px 14px; margin-bottom: 14px;
+  font-size: 13px; line-height: 1.7; color: var(--text-1);
+  cursor: pointer; transition: box-shadow .15s;
+}
+.alert-bar:hover { box-shadow: 0 3px 12px -5px rgba(163, 60, 31, .35); }
+.alert-bar .ab-ico { font-size: 16px; line-height: 1.4; }
+.alert-bar .ab-more { color: var(--gold-deep, #8a6d1f); font-weight: 600; white-space: nowrap; margin-left: auto; }
+.alert-bar .ab-lines { flex: 1; min-width: 0; }
+.alert-bar .ab-line { display: block; }
+.alert-bar .ab-line.info { color: var(--text-2); }
+.alert-bar .ab-line.warn { color: #7a2d12; font-weight: 500; }
+
 @media (max-width: 640px) {
   .agent-live { font-size: 11px; }
   .al-step .al-hd { padding: 2px 6px; }
