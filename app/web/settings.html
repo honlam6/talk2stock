@@ -46,6 +46,9 @@
     <h2><span class="bar"></span>AI 模型档案</h2>
     <div class="hint" style="margin:-6px 0 14px">支持任何 OpenAI 兼容接口（DeepSeek / 通义 / Moonshot / 本地 Ollama / 自建网关）。密钥只存本机服务端。</div>
 
+    <!-- 今日 AI 用量（成本可观测）：parse/agent/insight 分用途 token 台账 -->
+    <div id="usageBox" class="usage-bar" hidden></div>
+
     <div id="profList"></div>
 
     <details class="fold" id="addFold">
@@ -90,7 +93,26 @@ async function loadCfg() {
   $('#e_user').value = erp.user || '';
   $('#e_pass').value = '';
   renderProfs();
+  loadUsage();
   return CFG;
+}
+
+// 今日 AI 用量条：分用途 token 台账（录单/问答/洞察），成本可观测
+async function loadUsage() {
+  const el = $('#usageBox');
+  try {
+    const r = await api('/api/usage');
+    const u = r.usage || {};
+    if (!u.calls) return;
+    const PU = { parse: '录单解析', agent: '问答 agent', insight: '经营洞察', ask_select: '问答路由', ask_answer: '问答作答', test: '连通测试' };
+    const parts = Object.entries(u.by_purpose || {}).sort((a, b) => b[1].tokens - a[1].tokens)
+      .map(([k, v]) => `${PU[k] || k} ${v.calls} 次/${v.tokens >= 10000 ? (v.tokens / 1000).toFixed(1) + 'k' : v.tokens} tok`)
+      .join(' · ');
+    el.hidden = false;
+    el.innerHTML = `<span class="ub-num">${u.total_tokens >= 10000 ? (u.total_tokens / 1000).toFixed(1) + 'k' : u.total_tokens}</span> token / ${u.calls} 次调用（今日）
+      <span class="ub-detail">${esc(parts || '')}</span>
+      <span class="ub-avg">均延迟 ${u.avg_latency_ms}ms${u.estimated_calls ? ' · 部分为估算值' : ''}</span>`;
+  } catch (e) { /* 用量拉取失败不打断设置页 */ }
 }
 
 $('#erpSave').onclick = async () => {

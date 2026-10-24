@@ -345,6 +345,11 @@ def api_daily_report(_q, _body):
     return insmod.daily_report(_erp())
 
 
+def api_usage(_q, _body):
+    """今日 LLM 用量汇总（usage.jsonl 聚合），供成本卡展示。"""
+    return {"ok": True, "usage": llmmod.usage_summary()}
+
+
 def api_dashboard(q, _body):
     from core import report as reportmod
     lite = (q.get("lite") or [""])[0].strip().lower() in ("1", "true", "yes")
@@ -441,6 +446,7 @@ ROUTES = {
     ("GET", "/api/alerts"): api_alerts,
     ("GET", "/api/insight"): api_insight,
     ("GET", "/api/daily-report"): api_daily_report,
+    ("GET", "/api/usage"): api_usage,
     ("POST", "/api/parse"): api_parse,
     ("POST", "/api/resolve"): api_resolve,
     ("POST", "/api/commit"): api_commit,

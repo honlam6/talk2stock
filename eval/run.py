@@ -239,18 +239,22 @@ def main():
                 err = str(e2)[:200]
                 draft, meta = {"biz": "", "party": "", "items": []}, {}
         lat = time.time() - t0
+        toks = (meta or {}).get("tokens") or {}
         if err:
             failures.append({"id": c["id"], "error": err})
             results.append({"id": c["id"], "type": c["type"], "latency_s": round(lat, 2),
                             "fields": {}, "all_correct": False, "error": err,
-                            "hallucinations": [], "confidence": "", "note": "", "item_detail": []})
+                            "hallucinations": [], "confidence": "", "note": "", "item_detail": [],
+                            "tokens": toks})
             print(f"[{i:>2}/{len(cases)}] {c['id']}  ERROR {err[:60]}")
         else:
             r = score_case(c, draft, meta, lat)
+            r["tokens"] = toks
             results.append(r)
+            tok_str = ("  %.0ftok" % (toks.get("prompt_tokens", 0) + toks.get("completion_tokens", 0))) if toks else ""
             mark = "✓" if r["all_correct"] else "✗"
             bad = [k for k, v in r["fields"].items() if not v]
-            print(f"[{i:>2}/{len(cases)}] {c['id']}  {mark}  {'' if not bad else '错:' + ','.join(bad)}"
+            print(f"[{i:>2}/{len(cases)}] {c['id']}  {mark}  {'' if not bad else '错:' + ','.join(bad)}{tok_str}"
                   + (f"  幻觉:{';'.join(r['hallucinations'])}" if r["hallucinations"] else ""))
         if args.sleep:
             time.sleep(args.sleep)
@@ -264,6 +268,12 @@ def main():
     lat_list = [r["latency_s"] for r in results if "latency_s" in r]
     lat_sorted = sorted(lat_list)
     p95 = lat_sorted[min(len(lat_sorted) - 1, int(round(0.95 * len(lat_sorted))))] if lat_sorted else 0
+
+    # token 维度：每单 prompt/completion 用量（网关返回精确值或估算，见 llm.usage 台账）
+    ptoks = [r["tokens"]["prompt_tokens"] for r in results if (r.get("tokens") or {}).get("prompt_tokens")]
+    ctoks = [r["tokens"]["completion_tokens"] for r in results if (r.get("tokens") or {}).get("completion_tokens")]
+    per_case_total = [t["prompt_tokens"] + t["completion_tokens"] for t in
+                      (r.get("tokens") or {} for r in results) if t.get("prompt_tokens")]
 
     def acc(field, subset=None):
         rows = [r for r in results if (subset is None or r["type"] == subset) and field in r.get("fields", {})]
@@ -283,6 +293,9 @@ def main():
         "errors": failures,
         "latency_avg_s": round(statistics.mean(lat_list), 2) if lat_list else 0,
         "latency_p95_s": round(p95, 2),
+        "tokens_prompt_avg": round(statistics.mean(ptoks)) if ptoks else 0,
+        "tokens_completion_avg": round(statistics.mean(ctoks)) if ctoks else 0,
+        "tokens_total_avg": round(statistics.mean(per_case_total)) if per_case_total else 0,
         "conf_low_on_adversarial": "{}/{}".format(
             sum(1 for r in results if r["type"] == "adversarial" and r.get("confidence") == "low"),
             sum(1 for r in results if r["type"] == "adversarial")),

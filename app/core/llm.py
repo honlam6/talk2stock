@@ -98,8 +98,33 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 只输出 JSON，不要 markdown 代码块，不要解释。"""
 
 
-def _context_block(erp):
-    """把 ERP 现有主数据塞进 prompt，让模型优先复用已有名称。"""
+def _ngrams(s):
+    s = (s or "").lower()
+    return {s[i:i + 2] for i in range(max(len(s) - 1, 1))} or {s}
+
+
+def _rank_master(names, text, top_k=12):
+    """主数据预筛：按与输入的 2-gram Jaccard 相关度取 top-K。
+    全都不相关时返回空（调用方回退全量名单）——宁可多塞不能漏。"""
+    q = _ngrams(text)
+    scored = []
+    for n in names:
+        if not n:
+            continue
+        g = _ngrams(n)
+        inter = len(q & g)
+        if inter:
+            scored.append((inter / len(q | g), n))
+    scored.sort(key=lambda x: -x[0])
+    return [n for _, n in scored[:top_k]]
+
+
+def _context_block(erp, text=""):
+    """把 ERP 现有主数据塞进 prompt，让模型优先复用已有名称。
+
+    token 效率：带用户输入时先做相关度预筛（每类 top-K 而非全量名单），
+    预期把该段从 ~400 token 压到 ~100；无任何相关命中则回退全量（不漏配）。
+    """
     try:
         sup = [s.get("supplier") for s in erp.suppliers("供应商")][:60]
         cus = [s.get("supplier") for s in erp.suppliers("客户")][:60]
@@ -107,6 +132,17 @@ def _context_block(erp):
         dep = [d.get("name") for d in erp.depots()][:30]
     except Exception:
         return ""
+
+    if text:
+        sup_f = _rank_master(sup, text)
+        cus_f = _rank_master(cus, text)
+        mat_f = _rank_master(mat, text)
+        dep_f = _rank_master(dep, text, top_k=6)
+        if sup_f or cus_f or mat_f:
+            sup, cus, mat, dep = sup_f, cus_f, mat_f, dep_f
+        else:
+            pass   # 输入与全部主数据都不相关：保持全量，避免漏配
+
     parts = ["\n# 系统里已有的主数据（名称相同/相近时请直接用这里的写法，避免重复新建）"]
     if sup:
         parts.append("供应商：" + "、".join(filter(None, sup)))
@@ -556,12 +592,13 @@ def parse(text, erp=None, prev_draft=None):
     prof = cfgmod.active_profile()
     if not prof:
         raise RuntimeError("尚未配置 AI 模型，请在「设置」里添加一个模型档案")
-    sys_prompt = SYSTEM_PROMPT + _date_block() + (_context_block(erp) if erp else "")
+    sys_prompt = SYSTEM_PROMPT + _date_block() + (_context_block(erp, text) if erp else "")
     user_content = text + (_revision_block(prev_draft) if prev_draft else "")
+    u = {}
     content = _chat(prof, [
         {"role": "system", "content": sys_prompt},
         {"role": "user", "content": user_content},
-    ], purpose="parse")
+    ], purpose="parse", collect=u)
     raw = _extract_json(content)
     draft, problems = normalize(raw)
     cl = _clarify_question(draft)
@@ -573,6 +610,7 @@ def parse(text, erp=None, prev_draft=None):
         "problems": problems,
         "revision": bool(prev_draft),
         "raw": raw,
+        "tokens": u,
         "clarify": {"question": cl[0], "missing": cl[1]} if cl else None,
     }
     return draft, meta
