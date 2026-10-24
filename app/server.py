@@ -244,11 +244,21 @@ def api_parse(_q, body):
     # 多轮修正：body.draft 非空时，本轮输入是对该草稿的增量修改指令
     prev = body.get("draft")
     prev = prev if isinstance(prev, dict) and prev else None
+    # skip_clarify：用户点「跳过追问」或已达澄清轮次上限，直接出确认卡
+    skip_clarify = bool(body.get("skip_clarify"))
     erp = _erp()
     try:
         draft, meta = llmmod.parse(text, erp, prev_draft=prev)
     except Exception as e:
         return {"ok": False, "message": "AI 解析失败：%s" % friendly(e)}
+    # 主动澄清：缺关键信息时不签令牌不出确认卡，追问一轮（前端把补充回答
+    # 连同本 draft 重发 /api/parse 即多轮修正链路；跳过则走 resolve 出预览）
+    cl = meta.get("clarify")
+    if cl and not skip_clarify:
+        return {"ok": True, "need_clarification": True,
+                "question": cl.get("question", ""), "missing": cl.get("missing", ""),
+                "draft": draft, "meta": {k: meta.get(k) for k in
+                                         ("model", "confidence", "note", "revision")}}
     preview = draftmod.resolve(draft, erp)
     preview["ai"] = {"confidence": meta.get("confidence", ""),
                      "note": meta.get("note", ""), "problems": meta.get("problems", [])}

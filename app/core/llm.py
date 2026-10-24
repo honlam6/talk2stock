@@ -522,9 +522,37 @@ def _revision_block(prev_draft):
             "上一轮草稿：" + json.dumps(prev_draft, ensure_ascii=False))
 
 
+def _clarify_question(draft):
+    """主动澄清：草稿缺关键信息时生成一个追问（纯规则，零 LLM）。
+
+    一次只问最关键的一个缺失，优先级：无明细 > 数量 > 往来单位 > 单价。
+    返回 (question, missing_tag) 或 None（信息完整/属非阻断缺失）。
+    日期与仓库不追问——有系统默认值，问了反而打断录入节奏。
+    """
+    items = draft.get("items") or []
+    if not items:
+        return ("没听出商品明细——说下商品和数量好吗？比如「3瓶可乐」", "items")
+    zero_qty = [i for i in items if _to_num(i.get("qty")) <= 0]
+    if zero_qty:
+        names = "、".join((i.get("name") or "该商品") for i in zero_qty)
+        return (f"「{names}」的数量没说清，是多少？", "qty")
+    biz = draft.get("biz") or ""
+    needs_party = biz in ("purchase_in", "sale_out", "purchase_return", "sale_return")
+    if needs_party and not (draft.get("party") or "").strip():
+        who = "供应商" if "purchase" in biz else "客户"
+        return (f"这是哪家{who}的业务？说个名称", "party")
+    no_price = [i for i in items if not _to_num(i.get("price"))]
+    if no_price:
+        names = "、".join((i.get("name") or "该商品") for i in no_price)
+        return (f"「{names}」的单价没提到——是赠品按 0 元入账，还是补充单价？"
+                f"可直接回复如「3块5一瓶」", "price")
+    return None
+
+
 def parse(text, erp=None, prev_draft=None):
     """自然语言 → (draft, meta)。未配置模型或调用失败时抛 RuntimeError。
-    prev_draft 非空时表示多轮修正：本轮输入是对该草稿的增量修改。"""
+    prev_draft 非空时表示多轮修正：本轮输入是对该草稿的增量修改。
+    meta.clarify 非空时表示草稿缺关键信息，建议上层主动追问（可跳过）。"""
     prof = cfgmod.active_profile()
     if not prof:
         raise RuntimeError("尚未配置 AI 模型，请在「设置」里添加一个模型档案")
@@ -536,6 +564,7 @@ def parse(text, erp=None, prev_draft=None):
     ], purpose="parse")
     raw = _extract_json(content)
     draft, problems = normalize(raw)
+    cl = _clarify_question(draft)
     meta = {
         "model": prof["model"],
         "profile": prof.get("name") or prof.get("key"),
@@ -544,6 +573,7 @@ def parse(text, erp=None, prev_draft=None):
         "problems": problems,
         "revision": bool(prev_draft),
         "raw": raw,
+        "clarify": {"question": cl[0], "missing": cl[1]} if cl else None,
     }
     return draft, meta
 

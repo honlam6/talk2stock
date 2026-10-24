@@ -958,6 +958,20 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 .turn-thinking .stage.on { opacity: 1; color: var(--gold-strong); font-weight: 600; }
 .turn-thinking .stage.on::before { content: '✓ '; }
 .turn-thinking .stage-sep { opacity: .4; }
+/* AI 主动追问（缺信息时）：与用户气泡对侧，弱金色提示语义 */
+.turn-clarify {
+  align-self: flex-start; max-width: 92%;
+  border: 1px solid var(--gold-soft); border-left: 3px solid var(--gold);
+  border-radius: 10px 10px 10px 4px; background: #fbf6e9;
+  padding: 10px 13px; font-size: 14px; word-break: break-all;
+}
+.turn-clarify .tc-tag {
+  display: inline-block; font-size: 11.5px; letter-spacing: .08em;
+  color: var(--gold-deep, #8a6d1f); opacity: .85; margin-bottom: 5px;
+}
+.turn-clarify .tc-q { color: var(--text-1); line-height: 1.65; }
+.turn-clarify .row-btns { margin-top: 10px; }
+.turn-clarify .btn-ghost { color: #7a5f16; border-color: rgba(138, 109, 31, .55); }
 .turn-card {
   align-self: flex-start; width: 100%;
   border: 1px solid var(--line-soft); border-left: 3px solid var(--gold);

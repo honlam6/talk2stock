@@ -224,6 +224,13 @@ function loadConv() {
     turns = JSON.parse(sessionStorage.getItem(CONV_KEY) || '[]');
     if (!Array.isArray(turns)) turns = [];
   } catch (e) { turns = []; }
+  // 恢复会话时若最后正等待补充回答，重建澄清态——否则刷新后第一条输入
+  // 会被当成全新一单、丢掉已有草稿（自愈，clarifyCount 不恢复、上限保护仍在）
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (t.type === 'clarify') { clarifying = { draft: t.draft }; break; }
+    if (t.type === 'draft') break;
+  }
 }
 
 function draftSummary(d) {
@@ -280,6 +287,13 @@ function renderConv() {
         ${reopen}
       </div>`;
     }
+    if (t.type === 'clarify') {
+      return `<div class="turn-clarify" data-turn="${i}">
+        <div class="tc-tag">AI 追问</div>
+        <div class="tc-q">💡 ${esc(t.question)}</div>
+        <div class="row-btns"><button class="btn btn-sm btn-ghost" data-skipclarify="${i}">跳过，直接预览 →</button></div>
+      </div>`;
+    }
     if (t.type === 'result') {
       if (t.ok) {
         const r = t.res || {};
@@ -321,6 +335,36 @@ function renderChip() {
   chip.innerHTML = `✏ 修正模式 · 接着说改哪里（例：「改成50瓶」「换原料仓」）<span class="hint">基于：${esc(draftSummary(correcting.draft))}</span>
     <span class="x" id="correctExit" title="退出修正模式，重新开一单">×</span>`;
   $('#correctExit').onclick = exitCorrect;
+}
+
+// 主动澄清：agent 追问缺的信息（最多 2 轮，超限自动跳过直接出确认卡）
+let clarifying = null;
+let clarifyCount = 0;
+function enterClarify(draft) {
+  clarifying = { draft };
+  clarifyCount++;
+  $('#text').focus();
+}
+function exitClarify(done) {
+  clarifying = null;
+  if (done) clarifyCount = 0;
+}
+
+// 跳过追问：草稿已存在，直接走 /api/resolve 出预览（零 LLM 调用）
+async function skipClarify(idx) {
+  const t = turns[idx];
+  if (!t || t.type !== 'clarify') return;
+  try {
+    const r = await api('/api/resolve', { method: 'POST', body: { draft: t.draft, source: 'ai' } });
+    if (!r.ok) { toast(r.message || '预览失败', 'bad'); return; }
+    const att = (attachMgr && !attachMgr.isEmpty()) ? attachMgr.getPaths().map(p => ({ path: p, name: p.split('/').pop() })) : [];
+    const turn = { type: 'draft', draft: r.draft, preview: r.preview,
+      rawText: t.rawText || '', attach: att, state: 'open', revision: true };
+    turns.push(turn);
+    exitClarify(true);
+    renderConv();
+    openPreview(turn);
+  } catch (e) { toast(e.message, 'bad'); }
 }
 
 // ---------- 预览 / 提交 ----------
@@ -373,6 +417,8 @@ $('#conv').onclick = async e => {
   } else if (correct) {
     const turn = turns[+correct.dataset.correct];
     enterCorrect(turn.draft);
+  } else if (e.target.closest('[data-skipclarify]')) {
+    skipClarify(+e.target.closest('[data-skipclarify]').dataset.skipclarify);
   }
 };
 
@@ -380,6 +426,7 @@ $('#convClear').onclick = () => {
   if (turns.length && !confirm('清空本次会话记录？（不影响已写入 ERP 的单据）')) return;
   turns = [];
   exitCorrect();
+  exitClarify(true);   // 会话清空 = 重新开始：澄清/修正态一并重置，否则新输入仍带旧草稿
   renderConv();
 };
 
@@ -397,10 +444,14 @@ async function doParse() {
   const btn = $('#parseBtn');
   btn.disabled = true; btn.textContent = 'AI 解析中…';
 
-  const wasRevision = !!correcting;
-  const prevDraft = wasRevision ? correcting.draft : null;
+  // 澄清补充回答与修正指令走同一多轮链路：都把上一稿带给模型
+  const base = clarifying ? clarifying.draft : (correcting ? correcting.draft : null);
+  const wasRevision = !!base;
+  const prevDraft = base;
+  const skipClarify = clarifyCount >= 2;   // 超过 2 轮不再追问，直接出确认卡
   turns.push({ type: 'user', text, revision: wasRevision });
-  if (wasRevision) exitCorrect();
+  if (correcting) exitCorrect();
+  if (clarifying) exitClarify(false);       // 本轮是补充回答，等结果再判定是否继续追问
   turns.push({ type: 'pending' });
   renderConv();
   startStages();
@@ -408,6 +459,7 @@ async function doParse() {
   try {
     const body = { text };
     if (prevDraft) body.draft = prevDraft;
+    if (skipClarify) body.skip_clarify = true;
     const r = await api('/api/parse', { method: 'POST', body });
     turns = turns.filter(t => t.type !== 'pending');
     if (!r.ok) {
@@ -416,12 +468,20 @@ async function doParse() {
       if (r.need_config) location.href = '/settings';
       return;
     }
+    if (r.need_clarification) {
+      turns.push({ type: 'clarify', question: r.question || '能补充一下缺失的信息吗？',
+        draft: r.draft, rawText: text });
+      enterClarify(r.draft);
+      renderConv();
+      return;
+    }
     const att = (attachMgr && !attachMgr.isEmpty()) ? attachMgr.getPaths().map(p => ({ path: p, name: p.split('/').pop() })) : [];
     const turn = {
       type: 'draft', draft: r.draft, preview: r.preview,
       rawText: text, attach: att, state: 'open', revision: wasRevision,
     };
     turns.push(turn);
+    exitClarify(true);                       // 链路走通，澄清计数归零
     renderConv();
     openPreview(turn);
   } catch (e) {
