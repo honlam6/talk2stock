@@ -47,7 +47,7 @@ jobs:
           EOF
 
   # main 分支 CI 全绿后自动部署到公网服务器：
-  # 服务器 authorized_keys 对部署密钥限定了 command="/opt/deploy.sh"（只能跑部署）
+  # 服务器 authorized_keys 对部署密钥限定了 command="/opt/t2s-deploy-lite.sh"（只能跑轻量部署：pull+重启+健康检查，不动 ERP 容器）
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: test
@@ -60,8 +60,8 @@ jobs:
           username: root
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
-          command_timeout: 3m
-          script: /opt/deploy.sh
+          command_timeout: 5m
+          script: /opt/t2s-deploy-lite.sh
       - name: 部署后健康检查
         run: |
           code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 http://${{ secrets.SSH_HOST }}:8090/ || true)
