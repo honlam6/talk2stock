@@ -68,36 +68,153 @@ function add(cls, text, src) {
 }
 
 const TOOL_LABEL = {
-  stock_query: '库存查询（实时）', low_stock: '库存预警（实时）',
-  today_stats: '今日经营（官方统计接口）', month_stats: '本月经营（官方统计接口）',
-  debts: '应收应付（单据 debt 字段）', recent_bills: '最近单据', stock_value: '库存货值（官方统计接口）',
+  stock_query: '库存查询', low_stock: '库存预警',
+  today_stats: '今日经营', month_stats: '本月经营',
+  debts: '应收应付', recent_bills: '最近单据', stock_value: '库存货值',
+  agent: 'agent 多步取证',
+};
+// 进行时文案（SSE action 事件到达瞬间即显示，不等执行完）
+const TOOL_VERB = {
+  stock_query: '正在查询库存', low_stock: '正在扫描库存预警',
+  today_stats: '正在调取今日经营', month_stats: '正在调取本月经营',
+  debts: '正在核算应收应付', recent_bills: '正在翻最近单据',
+  stock_value: '正在估算库存货值',
 };
 
+const fmtTok = t => t >= 10000 ? (t / 1000).toFixed(1) + 'k' : String(t);
+
+// ---- ZCode 式紧凑步骤行：一行「图标 工具(参数) 耗时 ▾」，点击展开思考+观察 JSON ----
+function stepRow(s) {
+  const row = document.createElement('div');
+  row.className = 'al-step' + (s.ok === false ? ' al-err' : '');
+  const args = s.args && Object.values(s.args).filter(v => v !== '' && v != null).join(' · ');
+  const obs = JSON.stringify(s.observation, null, 1) || '';
+  row.innerHTML = `
+    <div class="al-hd">
+      <span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span>
+      <span class="al-name">${TOOL_LABEL[s.tool] || s.tool}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>
+      ${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}
+      <span class="al-caret" aria-hidden="true">▾</span>
+    </div>
+    <div class="al-body">
+      ${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}
+      <pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre>
+    </div>`;
+  row.querySelector('.al-hd').onclick = () => {
+    row.classList.toggle('open');
+    row.querySelector('.al-caret').textContent = row.classList.contains('open') ? '▴' : '▾';
+  };
+  return row;
+}
+
+// ---- 完成后的顶部徽章行（路由结果 + token + 接地状态，一眼可审计）----
+function badgeLine(r) {
+  const tok = (r.tokens && (r.tokens.prompt + r.tokens.completion)) || 0;
+  if (r.route === 'rule') {
+    return `<span class="at-badge at-fast">⚡ 规则直答</span><span class="at-tok">0 token</span>
+      <span class="at-ground" title="回答由只读工具模板句生成，数字全部来自 ERP（数字接地）">✓ 数字已核对</span>`;
+  }
+  const n = (r.steps || []).filter(s => s.tool).length;
+  return `<span class="at-badge">🤖 agent · ${n} 步</span>
+    <span class="at-tok">${fmtTok(tok)} token</span>
+    ${r.grounded === false
+      ? '<span class="at-unground" title="模型原答案含观察数据之外的数字，已退回模板句">⚠ 已退回模板</span>'
+      : '<span class="at-ground" title="答案中每个数字都来自工具观察 JSON（数字接地）">✓ 数字已核对</span>'}`;
+}
+
+// ---- 流式问答主体：SSE 逐事件渲染；流式不可用降级普通接口一次性渲染 ----
 async function doAsk(q) {
   if (!q.trim()) return;
   add('user', q);
   $('#q').value = '';
-  $('#askSamples').style.display = 'none';     // 提问后收起示例行
-  const empty = log.querySelector('.msg.bot .empty');
-  if (empty) empty.closest('.msg.bot').remove();     // 首次提问后收起引导
-  const pending = document.createElement('div');
-  pending.className = 'msg bot';
-  pending.innerHTML = `
-    <div style="min-width:220px">
-      <div class="skel skel-text w-60"></div>
-      <div class="skel skel-text w-80"></div>
-      <div class="skel skel-text w-40"></div>
-    </div>`;
-  log.appendChild(pending);
-  pending.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  $('#askSamples').style.display = 'none';
+  const hello = log.querySelector('.ask-hello');
+  if (hello) hello.remove();
+
+  // 流式气泡骨架：live 动效行 + 步骤容器 + 答案骨架
+  const msg = document.createElement('div');
+  msg.className = 'msg bot';
+  msg.innerHTML = `
+    <div class="agent-live">
+      <div class="al-live"><span class="al-live-dot"></span><span class="al-live-txt">正在思考…</span></div>
+      <div class="al-steps"></div>
+    </div>
+    <div class="msg-body"><div class="skel skel-text w-80"></div></div>`;
+  log.appendChild(msg);
+  msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  const liveRow = msg.querySelector('.al-live');
+  const liveTxt = msg.querySelector('.al-live-txt');
+  const stepsEl = msg.querySelector('.al-steps');
+  const bodyEl = msg.querySelector('.msg-body');
+
+  const paintStep = s => {
+    stepsEl.appendChild(stepRow(s));
+    liveRow.classList.remove('hidden');
+    liveTxt.textContent = '结合数据思考下一步…';
+    msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  };
+  const finalize = r => {
+    liveRow.remove();
+    bodyEl.innerHTML = '';
+    bodyEl.textContent = r.answer || '（无回答）';
+    const head = document.createElement('div');
+    head.className = 'al-head';
+    head.innerHTML = badgeLine(r);
+    msg.querySelector('.agent-live').prepend(head);
+    if (r.tool && r.tool !== 'none') {
+      const s = document.createElement('span');
+      s.className = 'src';
+      s.textContent = '数据来源：' + (TOOL_LABEL[r.tool] || r.tool);
+      msg.appendChild(s);
+    }
+    msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  };
+  const fail = m => { msg.remove(); add('bot err', m || '查询失败'); };
+
+  let done = false;
   try {
-    const r = await api('/api/ask', { method: 'POST', body: { text: q } });
-    pending.remove();
-    if (!r.ok) { add('bot err', r.message || '查询失败'); return; }
-    add('bot', r.answer || '（无回答）', r.tool && r.tool !== 'none' ? (TOOL_LABEL[r.tool] || r.tool) : '');
+    const resp = await fetch('/api/ask/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: q }),
+    });
+    if (!resp.ok || !resp.body) throw new Error('流式接口不可用');
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done: rd, value } = await reader.read();
+      if (rd) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const line = chunk.split('\n').find(l => l.startsWith('data:'));
+        if (!line) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
+        if (ev.type === 'action') {
+          liveRow.classList.remove('hidden');
+          liveTxt.textContent = (TOOL_VERB[ev.tool] || '正在调用 ' + (TOOL_LABEL[ev.tool] || ev.tool)) + '…';
+        } else if (ev.type === 'step') {
+          paintStep(ev.step);
+        } else if (ev.type === 'done') {
+          finalize(ev.result || {}); done = true;
+        } else if (ev.type === 'error') {
+          throw new Error(ev.message || '查询失败');
+        }
+      }
+    }
+    if (!done) throw new Error('连接中断');
   } catch (e) {
-    pending.remove();
-    add('bot err', e.message);
+    // 降级：普通一次性接口（老 WebView / 流式中断保底），复用同一套渲染
+    try {
+      const r = await api('/api/ask', { method: 'POST', body: { text: q } });
+      if (!r.ok) { fail(r.message); return; }
+      (r.steps || []).filter(s => s.tool).forEach(s => stepsEl.appendChild(stepRow(s)));
+      finalize(r);
+    } catch (e2) { fail(e2.message); }
   }
 }
 

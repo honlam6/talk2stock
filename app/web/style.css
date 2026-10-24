@@ -1006,9 +1006,74 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
   align-self: flex-start; background: var(--card);
   border: 1px solid var(--line-soft); box-shadow: var(--shadow-1);
   border-bottom-left-radius: 4px;
+  padding: 9px 13px; font-size: 13.5px; line-height: 1.65;
+  max-width: 92%; min-width: 300px;   /* 进行中→完成两态宽度稳定，避免跳变 */
 }
-.msg.bot .src { display: block; margin-top: 8px; font-size: 12px; color: var(--text-3); }
+.msg.bot .src { display: block; margin-top: 6px; font-size: 11px; color: #6f7a6f; }
 .msg.bot.err { background: var(--rust-bg); border-color: #e3c2b2; }
+
+/* ---- agent 执行轨迹（SSE 流式；ZCode 式紧凑步骤行，可逐行展开审计） ---- */
+.agent-live { margin: -2px 0 5px; font-size: 12px; color: #55604f; }
+.al-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 3px; }
+.al-live { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.al-live.hidden { display: none; }
+.al-live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--gold); flex: none;
+  animation: al-pulse 1.3s ease-out infinite;
+}
+@keyframes al-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(194, 154, 59, .45); opacity: 1; }
+  70%  { box-shadow: 0 0 0 9px rgba(194, 154, 59, 0); opacity: .85; }
+  100% { box-shadow: 0 0 0 0 rgba(194, 154, 59, 0); opacity: 1; }
+}
+.al-live-txt { letter-spacing: .02em; font-size: 12.5px; }
+.al-steps { display: flex; flex-direction: column; border-left: 2px solid var(--line-soft); margin: 2px 0 0 2px; }
+.al-step { margin: 0; }
+.al-step .al-hd {
+  display: flex; align-items: center; gap: 6px; padding: 2px 7px;
+  cursor: pointer; border-radius: 6px; user-select: none; white-space: nowrap;
+}
+.al-step .al-hd:hover { background: rgba(194, 154, 59, .07); }
+.al-ico { font-size: 11px; color: #1e7d5a; flex: none; }
+.al-step.al-err .al-ico { color: #a33c1f; }
+.al-name { color: var(--text-2); font-weight: 500; }
+.al-args { color: #6f7a6f; font-weight: 400; margin-left: 4px; }
+.al-args::before { content: '('; } .al-args::after { content: ')'; }
+.al-ms { color: #6f7a6f; font-size: 11px; margin-left: auto; }
+.al-caret { color: var(--text-3); font-size: 10px; }
+.al-body {
+  max-height: 0; overflow: hidden; transition: max-height .25s ease;
+  padding: 0 8px 0 16px;
+}
+.al-step.open .al-body { max-height: 460px; padding-bottom: 4px; }
+.al-think { font-size: 11.5px; color: var(--text-2); margin: 2px 0; line-height: 1.5; }
+.al-json {
+  margin: 3px 0; padding: 6px 9px; background: #faf8f3;
+  border: 1px solid var(--line-soft); border-left: 2px solid var(--gold);
+  border-radius: 6px; font-size: 10.5px; line-height: 1.5; overflow-x: auto;
+  color: var(--text-2);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  max-height: 220px; overflow-y: auto; white-space: pre;
+}
+/* 徽章（路由结果 / token / 接地状态） */
+.at-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: rgba(232, 201, 122, .16); color: #7a5f16;
+  border: 1px solid rgba(194, 154, 59, .3); border-radius: 7px;
+  padding: 0 7px; font-weight: 600; font-size: 11px; line-height: 1.8;
+}
+.at-badge.at-fast { background: rgba(30, 125, 90, .1); color: #1e7d5a; border-color: rgba(30, 125, 90, .25); }
+.at-tok { color: #6f7a6f; font-size: 11px; white-space: nowrap; }
+.at-ground { color: #1e7d5a; font-weight: 600; font-size: 11px; }
+.at-unground { color: #a33c1f; font-weight: 600; font-size: 11px; }
+@media (max-width: 640px) {
+  .agent-live { font-size: 11px; }
+  .al-step .al-hd { padding: 2px 6px; }
+  .al-json { font-size: 10px; max-height: 160px; }
+  .msg.bot { padding: 8px 11px; font-size: 13px; max-width: 96%; min-width: 240px; }
+}
+
 .chat-input-row { display: flex; gap: 10px; max-width: 860px; margin: 0 auto; width: 100%; position: sticky; bottom: 0; background: var(--paper); padding: 12px 0 4px; }
 .chat-input-row textarea {
   flex: 1; font-size: 16.5px; padding: 12px 15px; height: 52px; line-height: 1.5;

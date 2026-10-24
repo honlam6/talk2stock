@@ -54,6 +54,17 @@ def _rule_route(text):
     return None
 
 
+def _compound_hints(text):
+    """复合问题：把子问题显式列成清单注入 goal——实测仅靠规则约束模型仍会
+    只查一半就作答（"库存总值未取到"式偷懒），显式清单是最可靠的干预。"""
+    parts = re.split(r"另外|还有|以及|顺便|然后|同时", text)
+    parts = [p.strip(" ？?，。,") for p in parts if p.strip(" ？?，。,")]
+    if len(parts) > 1:
+        return ("\n\n# 该问题包含 %d 个子问题，每个都必须先用工具取证、全部查完才能作答：\n"
+                % len(parts)) + "\n".join("- %s" % p for p in parts)
+    return ""
+
+
 def _context(erp):
     """主数据名单作为 agent 的 context block，帮模型对齐系统里的真实名称。"""
     try:
@@ -188,13 +199,21 @@ def _tools(erp):
 # --------------------------------------------------------------------------
 # 入口：三层递进
 # --------------------------------------------------------------------------
-def ask(text, erp=None):
-    """只读问答。返回 {ok, answer, tool, route, steps, tokens, meta}。"""
+def ask(text, erp=None, on_event=None):
+    """只读问答。返回 {ok, answer, tool, route, steps, tokens, meta}。
+    on_event：SSE 流式回调——规则直答发一条 step，agent loop 发 action/step 序列。"""
     erp = erp or get_client()
     prof = cfgmod.active_profile()
     if not prof:
         return {"ok": False, "message": "尚未配置 AI 模型，请先在「设置」里添加。"}
     meta = {"model": prof.get("model", ""), "prompt_version": PROMPT_VERSION}
+
+    def _emit(evt):
+        if on_event:
+            try:
+                on_event(evt)
+            except Exception:
+                pass
 
     # ---- 第 1 层：规则直答（0 token）----
     hit = _rule_route(text)
@@ -204,15 +223,19 @@ def ask(text, erp=None):
             data, tpl = _RULE_TOOLS[tool](args, erp)
         except Exception as e:
             return {"ok": False, "message": "数据查询失败：%s" % str(e)[:120], "meta": meta}
+        rec = {"step": 1, "thought": "规则直答（零 LLM 调用）", "tool": tool,
+               "args": args, "ok": True, "observation": data}
+        _emit({"type": "step", "step": rec})
         return {"ok": True, "tool": tool, "answer": tpl, "data": data,
                 "route": "rule", "grounded": True, "meta": meta,
-                "steps": [{"step": 1, "thought": "规则直答（零 LLM 调用）", "tool": tool,
-                           "args": args, "ok": True, "observation": data}],
+                "steps": [rec],
                 "tokens": {"prompt": 0, "completion": 0, "estimated": False}}
 
     # ---- 第 2 层：agent loop（多步取证 + 第 3 层接地兜底在 loop 内）----
     from . import agent as agentmod
-    out = agentmod.run_agent(text, _tools(erp), max_steps=4, context_block=_context(erp))
+    out = agentmod.run_agent(text + _compound_hints(text), _tools(erp),
+                             max_steps=4, context_block=_context(erp),
+                             on_event=on_event)
     if not out.get("ok"):
         out["meta"] = meta
         return out

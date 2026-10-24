@@ -24,7 +24,9 @@ from . import llm as llmmod
 
 OBS_MAX_CHARS = 2600   # 单步观察喂回 prompt 的上限（token 预算；trace 里存全量）
 DEFAULT_MAX_STEPS = 4
-DEFAULT_MAX_TOKENS = 6000
+# token 预算只是防失控保险丝，步数预算才是主约束——必须放宽到容得下
+# 网关侧固定注入（实测 custom 模式每请求 ~8.5K 人格前缀，6000 会让第一步就熔断）
+DEFAULT_MAX_TOKENS = 40000
 
 LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用工具收集数据，回答用户问题。
 
@@ -40,6 +42,8 @@ LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用
 
 # 规则
 1. 最多 {max_steps} 轮工具调用，先想清楚一共需要哪几个数据，再按顺序调用。
+1a. 用户问题常包含多个子问题：每个子问题都必须有对应的工具观察支撑，全部查完
+    才允许 final；只查了一部分就作答、或声称"没有记录"而实际没查，都是不允许的。
 2. final 里的每个数字、每个名称都必须来自上面某步的观察 JSON，禁止编造、禁止心算新数字。
 3. final 先直接回答问题，再给关键数字（带单位），不超过四句话。
 4. 观察里没有的信息可以再调工具；确实查不到就明说「系统里没有记录」。
@@ -81,11 +85,14 @@ def _hist(i, thought, name, args, obs):
 
 
 def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_TOKENS,
-              context_block=""):
+              context_block="", on_event=None):
     """执行一个 agent 会话。返回 {ok, answer, steps, tokens, meta}。
 
     tools: {name: {"desc": str, "args_hint": str, "run": callable(args) -> (data, note)}}
            run 必须只读；data 是喂回模型的结构化观察，note 是确定性模板句（接地兜底）。
+    on_event: 可选回调 on_event(evt)，SSE 流式前端用——
+        {"type":"action","tool":..,"args":..} 决策出要调的工具、执行前推（前端显示"正在查询…"）
+        {"type":"step", ...完整 step 记录}  该步执行完、trace 落定后推。
     """
     prof = cfgmod.active_profile()
     if not prof:
@@ -140,12 +147,15 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         tool = tools.get(name)
         if not tool:
             obs = {"error": "没有这个工具：%s。可用：%s" % (name, "、".join(tools))}
-            steps.append({"step": i, "thought": thought, "tool": name,
-                          "args": act.get("args"), "ok": False, "observation": obs})
+            rec = {"step": i, "thought": thought, "tool": name,
+                   "args": act.get("args"), "ok": False, "observation": obs}
+            steps.append(rec)
+            _emit(on_event, {"type": "step", "step": rec})
             history_lines.append(_hist(i, thought, name, act.get("args"), obs))
             continue   # 错误作为观察喂回，让下一轮自我纠正
 
         args = act.get("args") if isinstance(act.get("args"), dict) else {}
+        _emit(on_event, {"type": "action", "tool": name, "args": args})
         t0 = time.time()
         try:
             data, note = tool["run"](args)
@@ -156,8 +166,10 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         except Exception as e:
             data, note, ok = {"error": str(e)[:200]}, None, False
         lat = int((time.time() - t0) * 1000)
-        steps.append({"step": i, "thought": thought, "tool": name, "args": args,
-                      "ok": ok, "latency_ms": lat, "observation": data})
+        rec = {"step": i, "thought": thought, "tool": name, "args": args,
+               "ok": ok, "latency_ms": lat, "observation": data}
+        steps.append(rec)
+        _emit(on_event, {"type": "step", "step": rec})
         history_lines.append(_hist(i, thought, name, args, data))
 
     # ---- 预算耗尽（步数 / token）：只准作答的收尾机会，不再执行任何工具 ----
@@ -181,6 +193,16 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
     steps.append({"step": len(steps) + 1, "tool": None, "fallback": True, "final": answer})
     return _finish(goal, answer, steps, tokens, started, observations, notes, prof,
                    forced=True)
+
+
+def _emit(on_event, evt):
+    """推事件给调用方（SSE 流式）；回调异常绝不影响 agent 主流程。"""
+    if on_event is None:
+        return
+    try:
+        on_event(evt)
+    except Exception:
+        pass
 
 
 def _finish(goal, final, steps, tokens, started, observations, notes, prof, forced=False):

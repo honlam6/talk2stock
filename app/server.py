@@ -495,6 +495,42 @@ class Handler(BaseHTTPRequestHandler):
             data = f.read()
         self._send(200, data, MIME.get(ext, "application/octet-stream"))
 
+    # ---- 流式问答（SSE）----
+    def _ask_stream(self, body):
+        """SSE 流式问答：start → step(每步工具调用) → done(最终结果)。
+        HTTP/1.1 无 Content-Length，以 Connection: close 界定响应结束（纯标准库写法）。"""
+        text = (body.get("text") or "").strip()
+        if not text:
+            self._json({"ok": False, "message": "请输入问题，例如「可乐还有多少库存？」"}, 400)
+            return
+        if not llmmod.is_configured():
+            self._json({"ok": False, "need_config": True,
+                        "message": "尚未配置 AI 模型，请点右上角「设置」添加。"}, 200)
+            return
+
+        def ev(obj):
+            data = json.dumps(obj, ensure_ascii=False, default=str)
+            self.wfile.write(("data: %s\n\n" % data).encode("utf-8"))
+            self.wfile.flush()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            from core import ask as askmod
+            r = askmod.ask(text, _erp(), on_event=ev)
+            ev({"type": "done", "result": r})
+        except Exception as e:
+            sys.stderr.write(traceback.format_exc())
+            try:
+                ev({"type": "error", "message": friendly(e)})
+            except Exception:
+                pass
+
     # ---- 分发 ----
     def _handle(self, method):
         parsed = urllib.parse.urlparse(self.path)
@@ -506,6 +542,15 @@ class Handler(BaseHTTPRequestHandler):
             if cfgmod.require_auth() and not self._auth_ok():
                 self._json({"ok": False, "need_auth": True,
                             "message": "该服务已开启访问口令（请检查 T2S_DEMO_PASS）"}, 401)
+                return
+            # SSE 流式问答：agent 每步即推（事件：start/step/done/error）
+            if method == "POST" and path == "/api/ask/stream":
+                try:
+                    body = self._body()
+                except ValueError as e:
+                    self._json({"ok": False, "message": str(e)}, 400)
+                    return
+                self._ask_stream(body)
                 return
             fn = ROUTES.get((method, path))
             if not fn:
