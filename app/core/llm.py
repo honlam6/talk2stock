@@ -188,14 +188,18 @@ def _insecure_context():
     return ctx
 
 
-def _post(url, payload, api_key, stream=False, ssl_context=None):
-    """发请求，返回 (文本, usage)。usage 为 None 表示网关未返回精确用量。"""
+def _post(url, payload, api_key, stream=False, ssl_context=None, extra_headers=None):
+    """发请求，返回 (文本, usage)。usage 为 None 表示网关未返回精确用量。
+    extra_headers：档案级自定义请求头（config.json 档案里配），随请求原样带上。"""
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
         "Accept": "text/event-stream" if stream else "application/json",
     }
+    for k, v in (extra_headers or {}).items():
+        if k and v:
+            headers[str(k)] = str(v)
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     kw = {"timeout": TIMEOUT}
     if ssl_context is not None:
@@ -233,12 +237,13 @@ def _post(url, payload, api_key, stream=False, ssl_context=None):
         return text, usage
 
 
-def _post_retry(url, payload, api_key, stream=False, ssl_context=None, retries=2):
+def _post_retry(url, payload, api_key, stream=False, ssl_context=None, retries=2, extra_headers=None):
     """带重试的 POST：仅网络错误 / 5xx 指数退避重试，4xx（参数问题）重试无意义。"""
     delay = 0.6
     for attempt in range(retries + 1):
         try:
-            return _post(url, payload, api_key, stream=stream, ssl_context=ssl_context)
+            return _post(url, payload, api_key, stream=stream, ssl_context=ssl_context,
+                         extra_headers=extra_headers)
         except urllib.error.HTTPError as e:
             if e.code >= 500 and attempt < retries:
                 time.sleep(delay)
@@ -379,6 +384,7 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None):
     if force_json:
         base["response_format"] = {"type": "json_object"}
     ctx = _insecure_context() if prof.get("insecure") else None
+    extra_headers = prof.get("extra_headers") or None   # 档案级自定义头（如 X-Prompt-Mode 分流）
 
     text, usage, last_err = None, None, None
 
@@ -387,7 +393,7 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None):
         payload = dict(base, stream=True)
         if "no_stream_options" not in _quirks:
             payload["stream_options"] = {"include_usage": True}
-        text, usage = _post_retry(url, payload, prof["api_key"], stream=True, ssl_context=ctx)
+        text, usage = _post_retry(url, payload, prof["api_key"], stream=True, ssl_context=ctx, extra_headers=extra_headers)
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
         if "stream_options" in detail:
@@ -401,7 +407,7 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None):
         try:
             payload = {k: v for k, v in base.items() if k != "response_format"}
             payload["stream"] = True
-            text, usage = _post_retry(url, payload, prof["api_key"], stream=True, ssl_context=ctx)
+            text, usage = _post_retry(url, payload, prof["api_key"], stream=True, ssl_context=ctx, extra_headers=extra_headers)
         except Exception as e:
             last_err = e
 
@@ -409,7 +415,7 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None):
     if not (text and text.strip()):
         try:
             payload = {k: v for k, v in base.items() if k != "response_format"}
-            text, usage = _post_retry(url, payload, prof["api_key"], stream=False, ssl_context=ctx)
+            text, usage = _post_retry(url, payload, prof["api_key"], stream=False, ssl_context=ctx, extra_headers=extra_headers)
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:300]
             raise RuntimeError(f"AI 接口报错 {e.code}：{detail}")

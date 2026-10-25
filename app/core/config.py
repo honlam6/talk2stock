@@ -264,6 +264,12 @@ def upsert_profile(key, profile):
             prof_new[opt] = old[opt]
         elif opt in profile:
             prof_new[opt] = bool(profile[opt])
+    # extra_headers 同为网关行为配置（不在表单里）：档案级自定义请求头，
+    # 如自建网关的 X-Prompt-Mode 分流（fork 功能），从旧档案原样继承
+    if "extra_headers" in old:
+        prof_new["extra_headers"] = old["extra_headers"]
+    elif isinstance(profile.get("extra_headers"), dict) and profile["extra_headers"]:
+        prof_new["extra_headers"] = profile["extra_headers"]
     profiles[key] = prof_new
     if not cfg["llm"].get("active"):
         cfg["llm"]["active"] = key
