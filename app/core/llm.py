@@ -32,7 +32,11 @@ TIMEOUT = 120
 #   v2-20261010  修相对日期失分：注入当前日期，要求今天/昨天/明天/后天换算成绝对日期
 #   v3-20261011  多轮修正：用户对上一稿说「改成50瓶」时，把上一稿 JSON 随输入带入，
 #                只改提到的字段、其余保留，输出完整新草稿
-PROMPT_VERSION = "v3-20261011"
+#   v4-20261025  规格/型号专项（issue #1「一个配件多个规格对不上」）：商品名自带的
+#                型号规格必须保留（M8螺丝/6号电池/2.5平方电线，旧规则会把数字全剥掉）；
+#                主数据名单带型号展示照抄；「各N」多规格拆多行；一句话多笔业务只处理
+#                第一笔并压低 confidence
+PROMPT_VERSION = "v4-20261025"
 
 BIZ_ENUM = list(BILL_TYPES.keys())
 
@@ -73,7 +77,9 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 
 # 字段规则
 - party：只写单位名称本身，不要带"供应商"、"客户"、"从"、"给"等字。
-- items[].name：只写商品名，绝不能包含数字、数量、单位、价格。"3瓶可乐"→ name是"可乐"，qty是3，unit是"瓶"。
+- items[].name：只写商品名本身，不要把数量/单价混进名字（"3瓶可乐"→name是"可乐"，qty是3，unit是"瓶"）。但商品名自带的型号、规格必须完整保留——型号里的数字是名字的一部分："M8螺丝"→"M8螺丝"、"6号电池"→"6号电池"、"2.5平方电线"→"2.5平方电线"、"304不锈钢管"→"304不锈钢管"，绝不能缩成"螺丝/电池/电线/钢管"。主数据名单里怎么写（含型号）就照抄。
+- 同一句话里同一商品多个规格各来N个（"4分和6分的PPR管各20根"）→ items 拆成多行，每行一个完整规格名，qty 各自 N，单价对应各自的。
+- 一句话里含多笔不同业务（又买又卖、又进又退）→ 只处理语序上的第一笔，confidence 填 low，note 写"检测到多笔业务，已只处理第一笔，其余请分开逐笔录入"；后一笔提到的单价/金额属于后一笔，第一笔没说的字段照旧留空（price 留 0）。
 - qty / price：纯数字，不带单位不带"元"。price 是单价不是总价；若用户只说了总价，用 总价÷数量 算单价。
 - unit：中文量词，如 个/瓶/箱/kg/卷/台。没说就填"个"。箱/盒这类副单位要原样保留，系统会按单位组自动折算基本数量。
 - items[].tax_rate：税率百分比数字。"含税13%"→13，"13个点"→13，"不含税"或没提→0。不要自己算税额。
@@ -95,12 +101,26 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 输入：从美宜佳进2箱可乐，一箱含税120，13个点
 输出：{"biz":"purchase_in","party":"美宜佳","items":[{"name":"可乐","qty":2,"unit":"箱","price":120,"tax_rate":13}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
 
+输入：从日化批发部进6号电池100节，每节2块5
+输出：{"biz":"purchase_in","party":"日化批发部","items":[{"name":"6号电池","qty":100,"unit":"节","price":2.5}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
+
+输入：卖给张记便利店4分和6分的PPR管各20根，4分的一根3块，6分的一根4块
+输出：{"biz":"sale_out","party":"张记便利店","items":[{"name":"4分PPR管","qty":20,"unit":"根","price":3},{"name":"6分PPR管","qty":20,"unit":"根","price":4}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
+
 只输出 JSON，不要 markdown 代码块，不要解释。"""
 
 
 def _ngrams(s):
     s = (s or "").lower()
     return {s[i:i + 2] for i in range(max(len(s) - 1, 1))} or {s}
+
+
+def _mat_label(m):
+    """主数据名单里的商品写法：带型号的拼成「名字 型号」整串展示，
+    模型照抄后才能对上「同名不同规格」的档案。"""
+    name = str(m.get("name") or "").strip()
+    model = str(m.get("model") or "").strip()
+    return f"{name} {model}" if name and model else name
 
 
 def _rank_master(names, text, top_k=12):
@@ -128,7 +148,7 @@ def _context_block(erp, text=""):
     try:
         sup = [s.get("supplier") for s in erp.suppliers("供应商")][:60]
         cus = [s.get("supplier") for s in erp.suppliers("客户")][:60]
-        mat = [m.get("name") for m in erp.materials()][:120]
+        mat = [_mat_label(m) for m in erp.materials()][:120]
         dep = [d.get("name") for d in erp.depots()][:30]
     except Exception:
         return ""
@@ -143,7 +163,7 @@ def _context_block(erp, text=""):
         else:
             pass   # 输入与全部主数据都不相关：保持全量，避免漏配
 
-    parts = ["\n# 系统里已有的主数据（名称相同/相近时请直接用这里的写法，避免重复新建）"]
+    parts = ["\n# 系统里已有的主数据（名称相同/相近时请直接用这里的写法（商品含型号的整串照抄），避免重复新建）"]
     if sup:
         parts.append("供应商：" + "、".join(filter(None, sup)))
     if cus:

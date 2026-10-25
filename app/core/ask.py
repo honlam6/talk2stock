@@ -68,9 +68,13 @@ def _compound_hints(text):
 def _context(erp):
     """主数据名单作为 agent 的 context block，帮模型对齐系统里的真实名称。"""
     try:
-        mats = [m.get("name") for m in erp.materials()][:80]
+        mats = []
+        for m in erp.materials()[:80]:
+            nm = str(m.get("name") or "").strip()
+            mo = str(m.get("model") or "").strip()
+            mats.append(f"{nm} {mo}" if nm and mo else nm)
         deps = [d.get("name") for d in erp.depots()][:20]
-        return ("# 系统主数据参考（工具参数尽量用这里的写法）\n商品："
+        return ("# 系统主数据参考（工具参数尽量用这里的写法，商品带型号的整串照抄）\n商品："
                 + "、".join(filter(None, mats)) + "\n仓库：" + "、".join(filter(None, deps)))
     except Exception:
         return ""
@@ -79,13 +83,22 @@ def _context(erp):
 # --------------------------------------------------------------------------
 # 工具实现（全部只读，返回 (data, 模板句)——模板句是接地兜底，只用 data 里的数字）
 # --------------------------------------------------------------------------
+def _cand_label(c):
+    """商品候选的可读写法：名字+型号（同名不同规格靠型号区分）。"""
+    if isinstance(c, dict):
+        return c.get("name", "") + (f"（{c['model']}）" if c.get("model") else "")
+    return str(c)
+
+
 def _stock_query(args, erp):
     name = str(args.get("material") or "").strip()
     mrow, kind = erp.find_material(name)
     if not mrow:
         cands = erp.material_candidates(name)
+        labels = [_cand_label(c) for c in cands]
         return {"material": name, "found": False, "candidates": cands}, \
-            f"系统里没有查到「{name}」的库存记录" + (f"，最接近的档案：{'、'.join(cands)}" if cands else "")
+            f"系统里没有查到「{name}」的唯一档案" + (
+                f"，最接近的档案：{'、'.join(labels)}，请说明要哪个规格" if labels else "")
     deps = erp.depots()
     depot_filter = str(args.get("depot") or "").strip()
     rows, total = [], 0.0
