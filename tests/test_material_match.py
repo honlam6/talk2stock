@@ -259,5 +259,92 @@ class TestPromptV4(unittest.TestCase):
         self.assertEqual(llmmod._mat_label(mat(1, "可乐")), "可乐")
 
 
+class TestCleanName(unittest.TestCase):
+    """「数字+量词」才算数量；数字黏名词是型号规格，一律保留（与 prompt v4 同口径）。"""
+
+    def test_spec_names_preserved(self):
+        for s in ["6号电池", "M8螺丝", "2.5平方电线", "304不锈钢管", "4分PPR管", "PPR管4分"]:
+            name, qty, unit = llmmod._clean_name(s)
+            self.assertEqual(name, s)
+            self.assertIsNone(qty)
+            self.assertIsNone(unit)
+
+    def test_qty_with_unit_stripped(self):
+        self.assertEqual(llmmod._clean_name("3瓶可乐"), ("可乐", 3.0, "瓶"))
+        self.assertEqual(llmmod._clean_name("可乐3瓶"), ("可乐", 3.0, "瓶"))
+        self.assertEqual(llmmod._clean_name("电池100节"), ("电池", 100.0, "节"))
+        self.assertEqual(llmmod._clean_name("12盒方便面"), ("方便面", 12.0, "盒"))
+        self.assertEqual(llmmod._clean_name("2.5平方电线100米"), ("2.5平方电线", 100.0, "米"))
+        # 「6 节 6号电池」：剥掉数量，规格名完整留下
+        self.assertEqual(llmmod._clean_name("6 节 6号电池"), ("6号电池", 6.0, "节"))
+
+
+class TestBarcodeMatch(unittest.TestCase):
+    def setUp(self):
+        self.rows = ROWS + [
+            mat(8, "扫码商品", model="", unit="个"),
+            mat(9, "另一个", unit="个"),
+        ]
+        self.rows = [dict(r) for r in self.rows]
+        self.rows[-2]["mBarCode"] = "6901234567890"
+        self.rows[-1]["mBarCode"] = "BC9"
+
+    def test_barcode_exact(self):
+        row, kind = match_material_rows(self.rows, "6901234567890")
+        self.assertEqual((row["id"], kind), (8, "exact"))
+        row, kind = match_material_rows(self.rows, "BC9")
+        self.assertEqual((row["id"], kind), (9, "exact"))
+
+    def test_non_barcode_falls_through(self):
+        # 普通名字不受条码分支影响
+        row, kind = match_material_rows(self.rows, "可乐")
+        self.assertEqual((row["id"], kind), (1, "exact"))
+        # 形似条码但无命中 → 正常走名字匹配（这里无匹配）
+        row, kind = match_material_rows(self.rows, "12345678")
+        self.assertIsNone(row)
+
+
+class TestPartyAmbiguous(unittest.TestCase):
+    def test_resolve_warns_and_commit_blocks(self):
+        rows = ROWS
+        fake = FakeErp(rows)
+        # 两个同名供应商
+        dup = FakeErp(rows)
+        dup.find_party = lambda name, ptype: (
+            (None, "ambiguous") if name == "美宜佳" else FakeErp.find_party(dup, name, ptype))
+        d = _draft()
+        p = draftmod.resolve(d, erp=dup)
+        self.assertFalse(p["party"]["matched"])
+        self.assertEqual(p["party"]["match_kind"], "ambiguous")
+        self.assertFalse(p["party"]["will_create"])       # 歧义≠新建
+        self.assertTrue(any("多个同名档案" in w for w in p["warnings"]))
+        res = draftmod.commit(d, erp=dup)
+        self.assertFalse(res["ok"])
+        self.assertIn("多个同名档案", res["message"])
+
+
+class TestRevisionCarryMaterialId(unittest.TestCase):
+    def test_carry_on_same_name(self):
+        prev = {"items": [{"name": "螺丝", "qty": 10, "material_id": 4}]}
+        draft = {"items": [{"name": "螺丝", "qty": 20}]}
+        _, prev_ids = llmmod._revision_block(prev)
+        llmmod._carry_material_ids(draft, prev_ids)
+        self.assertEqual(draft["items"][0]["material_id"], 4)   # 改数量不丢点选
+
+    def test_no_carry_on_renamed(self):
+        prev = {"items": [{"name": "螺丝", "qty": 10, "material_id": 4}]}
+        draft = {"items": [{"name": "PPR管", "qty": 5}]}
+        _, prev_ids = llmmod._revision_block(prev)
+        llmmod._carry_material_ids(draft, prev_ids)
+        self.assertNotIn("material_id", draft["items"][0])      # 换商品不带旧档案
+
+    def test_revision_block_hides_internal_field(self):
+        prev = {"biz": "purchase_in", "party": "美宜佳",
+                "items": [{"name": "螺丝", "qty": 10, "material_id": 4}]}
+        block, prev_ids = llmmod._revision_block(prev)
+        self.assertNotIn("material_id", block)                  # 不给模型看内部键
+        self.assertEqual(prev_ids, {"螺丝": 4})
+
+
 if __name__ == "__main__":
     unittest.main()

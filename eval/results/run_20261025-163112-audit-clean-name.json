@@ -1,0 +1,459 @@
+{
+ "summary": {
+  "corpus_version": "v2-20261025",
+  "model": "global:deepseek-v4.1-flash",
+  "prompt": "v4-20261025/1b05eddd",
+  "n": 8,
+  "whole_bill_acc": 1.0,
+  "field_acc": {
+   "biz": [
+    8,
+    8
+   ],
+   "party": [
+    8,
+    8
+   ],
+   "item_name": [
+    8,
+    8
+   ],
+   "item_qty": [
+    8,
+    8
+   ],
+   "item_unit": [
+    8,
+    8
+   ],
+   "item_price": [
+    8,
+    8
+   ],
+   "depot": [
+    8,
+    8
+   ],
+   "date": [
+    8,
+    8
+   ],
+   "pay_amount": [
+    8,
+    8
+   ]
+  },
+  "hallucination_total": 0,
+  "hallucination_cases": 0,
+  "errors": [],
+  "latency_avg_s": 3.47,
+  "latency_p95_s": 4.97,
+  "tokens_prompt_avg": 9610,
+  "tokens_completion_avg": 263,
+  "tokens_total_avg": 9874,
+  "conf_low_on_adversarial": "0/0",
+  "conf_low_on_spec": "2/8"
+ },
+ "results": [
+  {
+   "id": "s01",
+   "type": "spec",
+   "latency_s": 3.29,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "6号电池",
+      "qty": 60,
+      "unit": "节",
+      "price": 2
+     },
+     "draft": {
+      "name": "6号电池",
+      "qty": 60.0,
+      "unit": "节",
+      "price": 2.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 9602,
+    "completion_tokens": 222,
+    "estimated": false
+   }
+  },
+  {
+   "id": "s02",
+   "type": "spec",
+   "latency_s": 2.36,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "螺丝M8×20",
+      "qty": 50,
+      "unit": "盒",
+      "price": 5
+     },
+     "draft": {
+      "name": "螺丝 M8×20",
+      "qty": 50.0,
+      "unit": "盒",
+      "price": 5.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 9612,
+    "completion_tokens": 133,
+    "estimated": false
+   }
+  },
+  {
+   "id": "s03",
+   "type": "spec",
+   "latency_s": 2.52,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "4分PPR管",
+      "qty": 30,
+      "unit": "根",
+      "price": 2
+     },
+     "draft": {
+      "name": "PPR管 4分",
+      "qty": 30.0,
+      "unit": "根",
+      "price": 2.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    },
+    {
+     "gold": {
+      "name": "6分PPR管",
+      "qty": 30,
+      "unit": "根",
+      "price": 3
+     },
+     "draft": {
+      "name": "PPR管 6分",
+      "qty": 30.0,
+      "unit": "根",
+      "price": 3.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 9634,
+    "completion_tokens": 205,
+    "estimated": false
+   }
+  },
+  {
+   "id": "s04",
+   "type": "spec",
+   "latency_s": 2.71,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "304不锈钢管",
+      "qty": 20,
+      "unit": "根",
+      "price": 45
+     },
+     "draft": {
+      "name": "304不锈钢管",
+      "qty": 20.0,
+      "unit": "根",
+      "price": 45.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 9608,
+    "completion_tokens": 177,
+    "estimated": false
+   }
+  },
+  {
+   "id": "s05",
+   "type": "spec",
+   "latency_s": 2.98,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "2.5平方电线",
+      "qty": 100,
+      "unit": "米",
+      "price": 1.2
+     },
+     "draft": {
+      "name": "2.5平方电线",
+      "qty": 100.0,
+      "unit": "米",
+      "price": 1.2,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 9605,
+    "completion_tokens": 223,
+    "estimated": false
+   }
+  },
+  {
+   "id": "s06",
+   "type": "spec",
+   "latency_s": 4.58,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "6号电池",
+      "qty": 80,
+      "unit": "节",
+      "price": 3
+     },
+     "draft": {
+      "name": "6号电池",
+      "qty": 80.0,
+      "unit": "节",
+      "price": 3.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 9605,
+    "completion_tokens": 200,
+    "estimated": false
+   }
+  },
+  {
+   "id": "s07",
+   "type": "spec",
+   "latency_s": 4.97,
+   "confidence": "low",
+   "note": "未提及供应商、数量（仅说\"一批\"）和单价，请补充；商品已按主数据匹配为螺丝 M8×20",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "M8螺丝",
+      "qty": null,
+      "unit": null,
+      "price": null,
+      "aliases": [
+       "螺丝 M8×20",
+       "螺丝M8×20",
+       "M8×20螺丝"
+      ]
+     },
+     "draft": {
+      "name": "螺丝 M8×20",
+      "qty": 0,
+      "unit": "个",
+      "price": 0.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 9593,
+    "completion_tokens": 550,
+    "estimated": false
+   }
+  },
+  {
+   "id": "s08",
+   "type": "spec",
+   "latency_s": 4.33,
+   "confidence": "low",
+   "note": "检测到多笔业务（先采购后销售），已只处理第一笔，其余请分开逐笔录入；第一笔未提单价（一箱44属于后一笔销售），price留0；早上为时段未精确到时间，oper_time留空",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "方便面",
+      "qty": 10,
+      "unit": "箱",
+      "price": null
+     },
+     "draft": {
+      "name": "方便面",
+      "qty": 10.0,
+      "unit": "箱",
+      "price": 0.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 9624,
+    "completion_tokens": 396,
+    "estimated": false
+   }
+  }
+ ]
+}

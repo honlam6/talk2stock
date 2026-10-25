@@ -84,6 +84,13 @@ def resolve_rel_date(token):
     m = re.match(r"REL:([+-]?\d+)$", t)
     if m:
         return str(today + timedelta(days=int(m.group(1))))
+    # REL:MONTH-1:15 = 上个月15号（跨年自动进位；用小日期避开月末长度差异）
+    m = re.match(r"REL:MONTH([+-]\d+):(\d{1,2})$", t)
+    if m:
+        k = today.month + int(m.group(1))
+        y = today.year + (k - 1) // 12
+        k = (k - 1) % 12 + 1
+        return str(date(y, k, int(m.group(2))))
     return token[:10]
 
 
