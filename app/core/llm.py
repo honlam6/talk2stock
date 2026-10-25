@@ -22,7 +22,7 @@ import urllib.error
 import urllib.request
 
 from . import config as cfgmod
-from .erp import BILL_TYPES
+from .erp import BILL_TYPES, _norm_text
 
 TIMEOUT = 120
 
@@ -456,7 +456,8 @@ def _extract_json(text):
 
 # --------- 输出清洗 ---------
 UNITS = ["瓶", "个", "箱", "卷", "包", "袋", "台", "件", "只", "张", "米", "斤",
-         "公斤", "kg", "KG", "克", "g", "吨", "套", "本", "支", "根", "块", "片", "打", "桶", "罐", "条"]
+         "公斤", "kg", "KG", "克", "g", "吨", "套", "本", "支", "根", "块", "片", "打", "桶", "罐", "条",
+         "节", "盒", "把", "双", "对", "捆", "扎", "提", "副"]
 
 _NUM = r"\d+(?:\.\d+)?"
 
@@ -481,11 +482,15 @@ def _to_num(v, default=0.0):
 
 
 def _clean_name(name):
-    """把混进商品名的数量/单位/价格剥掉。返回 (name, qty, unit)"""
+    """把混进商品名的数量/单位剥掉。返回 (name, qty, unit)。
+
+    只有「数字+量词」才算数量（3瓶可乐 / 可乐3瓶 / 电池100节）；
+    数字直接黏名词的是型号规格（6号电池 / 304不锈钢管 / 2.5平方电线 /
+    4分PPR管），一律保留——与 prompt v4 的规格保留规则同口径。"""
     s = str(name or "").strip()
     qty = unit = None
-    # 前缀式 "3瓶可乐"
-    m = re.match(rf"^({_NUM})\s*({'|'.join(UNITS)})?\s*(.+)$", s)
+    # 前缀式 "3瓶可乐" / "6 节 6号电池"：量词必选，剥掉的是数量
+    m = re.match(rf"^({_NUM})\s*({'|'.join(UNITS)})\s*(.+)$", s)
     if m and m.group(3):
         qty = float(m.group(1))
         unit = m.group(2)
@@ -572,10 +577,29 @@ def _date_block():
 
 def _revision_block(prev_draft):
     """多轮修正：把上一稿带给模型，本轮输入是对它的增量修改指令。"""
+    # material_id 是用户点选锁定的档案，LLM 输出契约里没有这个键——
+    # 名字没变的行原样带下去，别让「改成20盒」把已消歧的规格选择弄丢
+    prev_ids = {_norm_text(i.get("name")): i.get("material_id")
+                for i in (prev_draft.get("items") or []) if i.get("material_id")}
+    shown = dict(prev_draft)
+    if prev_ids:
+        shown = dict(prev_draft)
+        shown["items"] = [{k: v for k, v in it.items() if k != "material_id"}
+                          for it in (prev_draft.get("items") or [])]
     return ("\n\n# 修正上一张草稿\n"
             "用户本轮输入是对下面这张已有草稿的修改要求（改数量/单价/仓库/往来单位/日期，或增删商品行），"
             "不是一笔新业务。只修改用户提到的部分，其余字段原样保留，输出修改后的完整草稿 JSON。\n"
-            "上一轮草稿：" + json.dumps(prev_draft, ensure_ascii=False))
+            "上一轮草稿：" + json.dumps(shown, ensure_ascii=False)), prev_ids
+
+
+def _carry_material_ids(draft, prev_ids):
+    """把上一稿点选锁定的档案按商品名带回新草稿（名字对不上=换了商品，不带）。"""
+    if not prev_ids:
+        return
+    for it in draft.get("items") or []:
+        mid = prev_ids.get(_norm_text(it.get("name")))
+        if mid:
+            it["material_id"] = mid
 
 
 def _clarify_question(draft):
@@ -613,7 +637,8 @@ def parse(text, erp=None, prev_draft=None):
     if not prof:
         raise RuntimeError("尚未配置 AI 模型，请在「设置」里添加一个模型档案")
     sys_prompt = SYSTEM_PROMPT + _date_block() + (_context_block(erp, text) if erp else "")
-    user_content = text + (_revision_block(prev_draft) if prev_draft else "")
+    rev_block, prev_ids = _revision_block(prev_draft) if prev_draft else ("", {})
+    user_content = text + rev_block
     u = {}
     content = _chat(prof, [
         {"role": "system", "content": sys_prompt},
@@ -621,6 +646,7 @@ def parse(text, erp=None, prev_draft=None):
     ], purpose="parse", collect=u)
     raw = _extract_json(content)
     draft, problems = normalize(raw)
+    _carry_material_ids(draft, prev_ids)
     cl = _clarify_question(draft)
     meta = {
         "model": prof["model"],
