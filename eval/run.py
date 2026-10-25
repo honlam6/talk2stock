@@ -36,7 +36,7 @@ from core import llm as llmmod      # noqa: E402
 
 CASES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cases.jsonl")
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
-CORPUS_VERSION = "v1-20261010"  # 冻结日期 2026-10-10；改动语料必须升版本号并全量重跑
+CORPUS_VERSION = "v2-20261025"  # v1-20261010 冻结 60 条；v2 追加 spec 组 8 条（issue #1 多规格场景）
 
 UNIT_SYNONYM = {"公斤": "kg", "千克": "kg", "kg": "kg", "KG": "kg", "克": "g", "g": "g"}
 
@@ -105,6 +105,14 @@ def party_hit(gold_party, aliases, draft_party):
     return False, False
 
 
+def name_pair(gn, dn):
+    """商品名等价判定：精确 / 互相包含 / 字符多重集相同（「4分PPR管」vs「PPR管 4分」
+    只是规格词序不同，字符集合一样，算同一商品）。"""
+    if not dn:
+        return False
+    return dn == gn or gn in dn or dn in gn or sorted(gn) == sorted(dn)
+
+
 def score_case(case, draft, meta, latency):
     gold = case["gold"]
     r = {"id": case["id"], "type": case["type"], "latency_s": round(latency, 2),
@@ -119,18 +127,21 @@ def score_case(case, draft, meta, latency):
     r["fields"]["party"] = ok
     r["fuzzy_party"] = fuzzy
 
-    # 明细逐行对齐：gold 每行找一条未用过的 draft 行（名字互相包含即配对）
+    # 明细逐行对齐：gold 每行找一条未用过的 draft 行（名字等价即配对，
+    # 含 spec 词序等价与 gold 声明的 aliases——模型把「M8螺丝」规范成主数据
+    # 写法「螺丝 M8×20」是正确行为，靠 aliases 认账）
     ditems = list(draft.get("items") or [])
     used = set()
     item_detail = []
     for g in gold["items"]:
         gn = norm(g["name"])
+        g_aliases = [norm(a) for a in (g.get("aliases") or []) if a]
         best, best_i = None, None
         for i, d in enumerate(ditems):
             if i in used:
                 continue
             dn = norm(d.get("name"))
-            if dn and (dn == gn or gn in dn or dn in gn):
+            if name_pair(gn, dn) or any(name_pair(a, dn) for a in g_aliases):
                 if best is None or abs(fnum(d.get("qty")) - fnum(g.get("qty"))) < abs(fnum(best.get("qty")) - fnum(g.get("qty"))):
                     best, best_i = d, i
         if best is None:
@@ -192,7 +203,7 @@ def score_case(case, draft, meta, latency):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--type", choices=["normal", "adversarial", "all"], default="all")
+    ap.add_argument("--type", choices=["normal", "adversarial", "spec", "all"], default="all")
     ap.add_argument("--profile", default="", help="临时切换模型档案 key（不改配置文件）")
     ap.add_argument("--tag", default="")
     ap.add_argument("--sleep", type=float, default=0.0)
@@ -299,6 +310,9 @@ def main():
         "conf_low_on_adversarial": "{}/{}".format(
             sum(1 for r in results if r["type"] == "adversarial" and r.get("confidence") == "low"),
             sum(1 for r in results if r["type"] == "adversarial")),
+        "conf_low_on_spec": "{}/{}".format(
+            sum(1 for r in results if r["type"] == "spec" and r.get("confidence") == "low"),
+            sum(1 for r in results if r["type"] == "spec")),
     }
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -316,7 +330,8 @@ def main():
                 f"- 幻觉字段：{summary['hallucination_total']} 处 / 影响 {summary['hallucination_cases']} 条（目标 0）\n"
                 f"- 解析报错：{len(failures)} 条\n"
                 f"- 延迟：均值 {summary['latency_avg_s']}s · p95 {summary['latency_p95_s']}s（目标 p95≤3s）\n"
-                f"- 对抗样本上标 low 置信度：{summary['conf_low_on_adversarial']}\n\n")
+                f"- 对抗样本上标 low 置信度：{summary['conf_low_on_adversarial']}\n"
+                f"- 规格组（issue #1 场景）标 low 置信度：{summary['conf_low_on_spec']}\n\n")
         f.write("| 字段 | 对/总 | 准确率 |\n|---|---|---|\n")
         for k, (a, b) in summary["field_acc"].items():
             f.write(f"| {k} | {a}/{b} | {a/b*100:.1f}% |\n" if b else f"| {k} | - | - |\n")

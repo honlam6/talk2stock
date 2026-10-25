@@ -42,8 +42,27 @@ DEMO_TENANT = 63  # jsh 账号所在租户（脚本会先动态确认）
 # ---------------- 演示数据集（与 eval/cases.jsonl 的名称体系一致） ----------------
 SUPPLIERS = ["美宜佳", "农夫山泉", "日化批发部", "玖龙纸业"]
 CUSTOMERS = ["永辉超市", "张记便利店", "校园超市"]
-MATERIALS = [("可乐", "瓶"), ("矿泉水", "瓶"), ("方便面", "箱"), ("电池", "节"),
-             ("纸箱", "个"), ("牛皮纸", "卷"), ("肥皂", "块")]
+# (名称, 基本单位, 型号)——同名不同型号 = 「一个配件多个规格」的真实形态（issue #1 场景）
+MATERIALS = [
+    ("可乐", "瓶", ""), ("矿泉水", "瓶", ""), ("方便面", "箱", ""), ("电池", "节", ""),
+    ("纸箱", "个", ""), ("牛皮纸", "卷", ""), ("肥皂", "块", ""),
+    ("螺丝", "盒", "M8×20"), ("螺丝", "盒", "M10×30"),   # 同名双规格：歧义消解演示
+    ("PPR管", "根", "4分"), ("PPR管", "根", "6分"),       # 同名双规格 + 「各N」拆行
+    ("6号电池", "节", ""),                                # 名字自带规格数字
+]
+UNIT_OF = {}
+for _n, _u, _m in MATERIALS:
+    UNIT_OF.setdefault(_n, _u)
+
+
+def _ensure_material_model(erp, name, unit, model):
+    """按 名字+型号 判重建档（ensure_material 遇同名多档会主动拦，这里要的就是多档）。"""
+    for r in erp.materials():
+        if (erp._norm(r.get("name")) == erp._norm(name)
+                and (r.get("model") or "").strip() == model):
+            return False
+    erp.add_material(name, unit, model=model)
+    return True
 
 def _d(offset):
     return (date.today() + timedelta(days=offset)).strftime("%Y-%m-%d") + " 10:30:00"
@@ -108,15 +127,14 @@ def seed():
     for c in CUSTOMERS:
         _, was_new = erp.ensure_party(c, "客户")
         created["parties"] += bool(was_new)
-    for name, unit in MATERIALS:
-        _, was_new = erp.ensure_material(name, unit)
-        created["materials"] += bool(was_new)
+    for name, unit, model in MATERIALS:
+        created["materials"] += bool(_ensure_material_model(erp, name, unit, model))
     erp.invalidate("")
 
     for offset, biz, party, depot, items, pay in BILLS:
         d = {
             "biz": biz, "party": party, "depot": depot,
-            "items": [{"name": n, "qty": q, "unit": dict(MATERIALS)[n], "price": p}
+            "items": [{"name": n, "qty": q, "unit": UNIT_OF[n], "price": p}
                       for n, q, p in items],
             "oper_time": _d(offset),
         }
