@@ -10,6 +10,7 @@
 """
 import hashlib
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -93,6 +94,15 @@ def match_material_rows(rows, name):
     if not name:
         return None, "none"
     q = str(name).strip()
+    # 条码直达：扫码枪/单据上抄来的编号（EAN-13 或自建的 BC<id>，最短 3 位）
+    # 是 3-20 位含数字的字母数字串，按条码（列表行字段叫 mBarCode）精确对档案
+    if re.fullmatch(r"[0-9A-Za-z]{3,20}", q) and any(c.isdigit() for c in q):
+        bc = [r for r in rows
+              if str(r.get("mBarCode") or r.get("barCode") or "").strip() == q]
+        if len(bc) == 1:
+            return bc[0], "exact"
+        if len(bc) > 1:
+            return None, "ambiguous"
     n = _norm_text(q)
     exact = [r for r in rows if str(r.get("name", "")).strip() == q]
     if not exact:
@@ -379,17 +389,19 @@ class JshERP:
         return None
 
     def find_party(self, name, ptype):
-        """精确 → 忽略大小写空格 → 包含。返回 (row, match_kind)"""
+        """精确 → 忽略大小写空格 → 包含。返回 (row, match_kind)。
+        同名多档案返回 ambiguous（与商品同规则：绝不静默挑第一个）。"""
         if not name:
             return None, "none"
         rows = self.suppliers(ptype)
         n = self._norm(name)
-        for r in rows:
-            if str(r.get("supplier", "")).strip() == str(name).strip():
-                return r, "exact"
-        for r in rows:
-            if self._norm(r.get("supplier")) == n:
-                return r, "exact"
+        exact = [r for r in rows
+                 if str(r.get("supplier", "")).strip() == str(name).strip()
+                 or self._norm(r.get("supplier")) == n]
+        if len(exact) == 1:
+            return exact[0], "exact"
+        if len(exact) > 1:
+            return None, "ambiguous"
         cands = [r for r in rows if n and (n in self._norm(r.get("supplier")) or self._norm(r.get("supplier")) in n)]
         if len(cands) == 1:
             return cands[0], "fuzzy"
@@ -426,7 +438,10 @@ class JshERP:
         return self.unit_group(name) or {"name": name, "basicUnit": name}
 
     def ensure_party(self, name, ptype):
-        row, _ = self.find_party(name, ptype)
+        row, kind = self.find_party(name, ptype)
+        if kind == "ambiguous":
+            # 同名多档案绝不替用户挑：预览候选点选后由名称唯一化/人工确认
+            raise ErpError(f"{ptype}「{name}」有多个同名档案，请先点选对应的那个再写入")
         if row:
             return row, False
         res = self._req("/supplier/add", "POST",

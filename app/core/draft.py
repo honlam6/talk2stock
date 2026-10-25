@@ -88,13 +88,15 @@ def resolve(draft, erp=None):
         "id": prow.get("id") if prow else None,
         "matched": bool(prow), "match_kind": pkind,
         "matched_name": prow.get("supplier") if prow else None,
-        "will_create": bool(party_name) and not prow,
+        "will_create": bool(party_name) and not prow and pkind == "none",
         # 没匹配上时给 top3 相似候选，确认卡上可点选（点选后重新预览）
         "candidates": erp.party_candidates(party_name, party_type)
                       if (party_name and not prow) else [],
     }
     if party_info["will_create"]:
         to_create.append(f"新建{party_type}：{party_name}")
+    if pkind == "ambiguous":
+        warnings.append(f"{party_type}「{party_name}」有多个同名档案，请点选对应的再确认")
     if pkind == "fuzzy":
         warnings.append(f"{party_type}「{party_name}」模糊匹配到「{prow.get('supplier')}」，请确认")
 
@@ -225,8 +227,14 @@ def commit(draft, erp=None, auto_create=True):
     btype, sub_type, party_type, direction = BILL_TYPES[biz]
     created = []
 
-    # 预检：同名多规格且未点选档案的明细先拦下——ensure_material 遇歧义会抛错，
+    # 预检：同名多档案（商品或往来单位）且未消歧的先拦下——ensure_* 遇歧义会抛错，
     # 预检能保证此时一行都还没写（半截单/孤儿档案都不留）。
+    _pn = (draft.get("party") or "").strip()
+    if _pn:
+        _prow, _pkind = erp.find_party(_pn, party_type)
+        if _pkind == "ambiguous":
+            return {"ok": False,
+                    "message": f"{party_type}「{_pn}」有多个同名档案，请回预览点选对应的再写入"}
     for it in draft["items"]:
         if it.get("material_id"):
             continue

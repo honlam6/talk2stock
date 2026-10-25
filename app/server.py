@@ -239,6 +239,9 @@ def api_parse(_q, body):
     text = (body.get("text") or "").strip()
     if not text:
         return {"ok": False, "message": "请先输入一句话描述，例如「从美宜佳买了3瓶可乐单价3块5」"}
+    if len(text) > 500:
+        return {"ok": False,
+                "message": "一句话太长了（%d 字）——单次最多 500 字；一笔业务一句话，多笔分开录" % len(text)}
     if not llmmod.is_configured():
         return {"ok": False, "need_config": True,
                 "message": "尚未配置 AI 模型，请点右上角「设置」添加一个模型档案（Base URL / API Key / 模型名）后再试。"}
