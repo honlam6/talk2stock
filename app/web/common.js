@@ -214,9 +214,11 @@ function autocomplete(input, getPool, onPick, onType) {
       : pool).slice(0, 40);
     const exists = !!findExact(pool, input.value);
     if (!items.length && !v) { close(); return; }
-    let html = items.map((x, i) =>
-      `<div class="ac-item${i === idx ? ' sel' : ''}" data-i="${i}">${esc(x.name)}` +
-      (x.unit ? `<span class="sub">${esc(x.unit)}</span>` : '') + `</div>`).join('');
+    let html = items.map((x, i) => {
+      const sub = [x.model, x.unit].filter(Boolean).join(' · ');   // 同名档案靠型号区分
+      return `<div class="ac-item${i === idx ? ' sel' : ''}" data-i="${i}">${esc(x.name)}` +
+      (sub ? `<span class="sub">${esc(sub)}</span>` : '') + `</div>`;
+    }).join('');
     if (v && !exists) {
       html += `<div class="ac-item mk-new" data-new="1">＋ 使用「${esc(input.value.trim())}」（系统中没有，提交时自动新建）</div>`;
     }
@@ -393,9 +395,16 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
   let detachKey = null;        // 当前弹层的键盘监听卸载器（重渲染时先卸旧的，防残留）
   let detachTrap = null;       // 焦点陷阱卸载器
 
+  // 候选 chip：商品候选是 {id,name,model,standard,unit}（同名档案靠型号区分），
+  // 往来单位候选仍是纯名字字符串——两种都渲染；商品 chip 带 data-cand-mid，
+  // 点选后 material_id 直达档案，不再靠名字匹配
   const candChips = (cands, pick) => (cands || []).length
-    ? `<div class="mt-1"><span class="hint">是指：</span>${cands.map(c =>
-        `<span class="tag tag-blue" style="cursor:pointer" data-pick="${esc(pick)}" data-cand="${esc(c)}">${esc(c)}</span>`).join(' ')}</div>`
+    ? `<div class="mt-1"><span class="hint">是指：</span>${cands.map(c => {
+        const o = (c && typeof c === 'object');
+        const label = o ? [c.name, c.model, c.standard].filter(Boolean).join(' · ') : c;
+        const mid = o && c.id ? ` data-cand-mid="${c.id}"` : '';
+        return `<span class="tag tag-blue" style="cursor:pointer" data-pick="${esc(pick)}" data-cand="${esc(o ? c.name : c)}"${mid}>${esc(label)}</span>`;
+      }).join(' ')}</div>`
     : '';
 
   // 与服务端 draft.validate 同口径的轻校验，编辑后即时给出反馈
@@ -415,10 +424,18 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
   const curTotal = () => (st.draft.items || [])
     .reduce((t, it) => t + num(it.qty) * num(it.price), 0);
 
+  // 与服务端 _norm_text/_mat_composite 同口径：名字+型号合成串比较，
+  // 「螺丝 M8×20」要认出是已有档案「螺丝 / 型号M8×20」，不能误报「将新建」
+  const matNorm = s => String(s || '').replace(/[()（）]/g, '').replace(/[×✕ｘ]/g, 'x')
+    .trim().toLowerCase().replace(/\s/g, '');
+
   function itemTag(i) {
     const it = (st.draft.items || [])[i];
     if (!it || !(it.name || '').trim()) return '<span class="muted">未填</span>';
-    return findExact(MD.materials, it.name)
+    const n = matNorm(it.name);
+    const hit = (MD.materials || []).find(x =>
+      matNorm(x.name) === n || matNorm(x.name + (x.model || '') + (x.standard || '')) === n);
+    return hit
       ? '<span class="tag tag-ok">已有</span>'
       : '<span class="tag tag-new">将新建</span>';
   }
@@ -447,7 +464,7 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
       return `<tr>
         <td>
           <div class="pv-name-row"><div class="ac-wrap" style="flex:1"><input class="pv-name" data-i="${i}" value="${esc(it.name)}" placeholder="商品名称" autocomplete="off"></div></div>
-          <div class="pv-sub">${itemTag(i)}${pv.match_kind === 'fuzzy' && pv.matched_name ? ` <span class="tag tag-fuzzy">匹配→${esc(pv.matched_name)}</span>` : ''}${candChips(pv.candidates, 'item:' + i)}</div>
+          <div class="pv-sub">${itemTag(i)}${(pv.match_kind === 'fuzzy' || pv.match_kind === 'picked') && pv.matched_name ? ` <span class="tag ${pv.match_kind === 'picked' ? 'tag-ok' : 'tag-fuzzy'}">匹配→${esc(pv.matched_name)}${pv.matched_model ? ' ' + esc(pv.matched_model) : ''}</span>` : ''}${candChips(pv.candidates, 'item:' + i)}</div>
         </td>
         <td><input class="pv-qty num" data-i="${i}" type="number" step="any" value="${it.qty ?? ''}" placeholder="0"></td>
         <td><input class="pv-unit" data-i="${i}" value="${esc(it.unit || '')}" placeholder="个"></td>
@@ -584,18 +601,29 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
       setDirty(); refreshOkState();
     });
     $$('.pv-name').forEach(inp => {
+      // pickedNow：autocomplete 的 mousedown 会先 onPick 再 onType（同一次事件），
+      // 靠这个标志区分「点选档案」与「手改名字」——后者必须清掉 material_id
+      let pickedNow = false;
       autocomplete(inp, () => MD.materials,
         it2 => {
           const i = +inp.dataset.i;
-          if (it2.unit && st.draft.items[i] && !st.draft.items[i].unit) {
-            st.draft.items[i].unit = it2.unit;
+          const it = st.draft.items[i];
+          if (!it) return;
+          pickedNow = true;
+          if (it2.id) it.material_id = it2.id;   // 选中即锁定档案（同名规格不再靠名字猜）
+          if (it2.unit && !it.unit) {
+            it.unit = it2.unit;
             const u = $(`.pv-unit[data-i="${i}"]`);
             if (u) u.value = it2.unit;
           }
         },
         () => {
           const i = +inp.dataset.i;
-          if (st.draft.items[i]) st.draft.items[i].name = inp.value.trim();
+          const it = st.draft.items[i];
+          if (!it) return;
+          it.name = inp.value.trim();
+          if (!pickedNow) delete it.material_id;  // 手改名字＝放弃锁定的档案
+          pickedNow = false;
           syncRow(i); setDirty(); refreshOkState();
         });
     });
@@ -690,7 +718,11 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
         if (chip.dataset.pick === 'party') st.draft.party = cand;
         else {
           const i = parseInt(chip.dataset.pick.split(':')[1], 10);
-          if (st.draft.items && st.draft.items[i]) st.draft.items[i].name = cand;
+          const it = st.draft.items && st.draft.items[i];
+          if (!it) return;
+          it.name = cand;
+          // 同名不同规格：material_id 锁定点选的档案，重新预览/写入都不再靠名字猜
+          if (chip.dataset.candMid) it.material_id = +chip.dataset.candMid;
         }
         chip.textContent = '…';
         try {
