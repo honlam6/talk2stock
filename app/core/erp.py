@@ -68,6 +68,85 @@ def parallel(fns, workers=6):
         return list(ex.map(_safe, fns))
 
 
+# ---------- 商品匹配（纯函数，无网络，便于单测） ----------
+def _norm_text(s):
+    """匹配用归一：去首尾、去空格、去全半角括号、乘号归一成 x、小写。
+    括号要删：主数据常写成「螺丝(M8)」；乘号要归一：档案写 M8×20、用户敲 M8x20。"""
+    for ch in "()（）":
+        s = str(s or "").replace(ch, "")
+    for ch in "×✕ｘ":
+        s = s.replace(ch, "x")
+    return s.strip().lower().replace(" ", "")
+
+
+def _mat_composite(row):
+    """名字+型号+标准合成串。规格放在型号/标准字段（而非名字里）的档案，
+    靠这个也能被「螺丝M8」这类输入命中。"""
+    return _norm_text("".join(
+        str(p) for p in (row.get("name"), row.get("model"), row.get("standard")) if p))
+
+
+def match_material_rows(rows, name):
+    """在 rows 里找 name。返回 (row, kind)：exact / ambiguous / fuzzy / none。
+    同名多档案（一个配件多个规格）返回 ambiguous，绝不静默挑第一个——
+    歧义交上层走候选点选（预览卡会列出各档案的型号让人点）。"""
+    if not name:
+        return None, "none"
+    q = str(name).strip()
+    n = _norm_text(q)
+    exact = [r for r in rows if str(r.get("name", "")).strip() == q]
+    if not exact:
+        exact = [r for r in rows if _norm_text(r.get("name")) == n]
+    if len(exact) == 1:
+        return exact[0], "exact"
+    if len(exact) > 1:
+        return None, "ambiguous"
+    comp = [r for r in rows if _mat_composite(r) == n]
+    if len(comp) == 1:
+        return comp[0], "exact"
+    if len(comp) > 1:
+        return None, "ambiguous"
+    # 包含匹配只看合成串（名字+型号）：纯名字包含在同名多档案下永远歧义，
+    # 「螺丝M8」in「螺丝+M8×20」才能把规格对上
+    cands = [r for r in rows if n and (n in _mat_composite(r) or _mat_composite(r) in n)]
+    if len(cands) == 1:
+        return cands[0], "fuzzy"
+    return None, "none"
+
+
+def rank_material_rows(rows, name, n=3, min_score=0.35):
+    """候选排序（供点选）：对「名字」与「名字×型号」合成串各算编辑相似度取高者。
+    与输入完全同名的档案（同名不同规格）全部进候选且排最前——必须让人看全。"""
+    import difflib
+    q = _norm_text(name)
+    if not q:
+        return []
+    same, scored = [], []
+    for r in rows:
+        nm = _norm_text(r.get("name"))
+        if not nm:
+            continue
+        if nm == q:
+            same.append(r)
+            continue
+        score = max(difflib.SequenceMatcher(None, q, nm).ratio(),
+                    difflib.SequenceMatcher(None, q, _mat_composite(r)).ratio())
+        if nm.startswith(q) or q.startswith(nm) or _mat_composite(r).startswith(q):
+            score += 0.15
+        scored.append((score, r))
+    scored.sort(key=lambda x: (-x[0], str(x[1].get("name") or "")))
+    others = [r for sc, r in scored if sc >= min_score]
+    return (same + others)[:n]
+
+
+def material_candidate_info(row):
+    """候选点选条目：同名档案靠型号/标准/单位区分，缺了用户只能瞎点。"""
+    return {"id": row.get("id"), "name": str(row.get("name") or "").strip(),
+            "model": str(row.get("model") or "").strip(),
+            "standard": str(row.get("standard") or "").strip(),
+            "unit": row.get("unit") or ""}
+
+
 class JshERP:
     def __init__(self, base="http://localhost:9999/jshERP-boot", user="jsh", password="123456"):
         self.base = base.rstrip("/")
@@ -289,7 +368,15 @@ class JshERP:
         return self._ranked_candidates(self.suppliers(ptype), "supplier", name, n)
 
     def material_candidates(self, name, n=3):
-        return self._ranked_candidates(self.materials(), "name", name, n)
+        """商品候选：带 id/型号/标准/单位的 dict 列表（同名档案靠型号区分）。"""
+        return [material_candidate_info(r)
+                for r in rank_material_rows(self.materials(), name, n)]
+
+    def material_by_id(self, mid):
+        for r in self.materials():
+            if r.get("id") == mid:
+                return r
+        return None
 
     def find_party(self, name, ptype):
         """精确 → 忽略大小写空格 → 包含。返回 (row, match_kind)"""
@@ -309,20 +396,8 @@ class JshERP:
         return None, "none"
 
     def find_material(self, name):
-        if not name:
-            return None, "none"
-        rows = self.materials()
-        n = self._norm(name)
-        for r in rows:
-            if str(r.get("name", "")).strip() == str(name).strip():
-                return r, "exact"
-        for r in rows:
-            if self._norm(r.get("name")) == n:
-                return r, "exact"
-        cands = [r for r in rows if n and (n in self._norm(r.get("name")) or self._norm(r.get("name")) in n)]
-        if len(cands) == 1:
-            return cands[0], "fuzzy"
-        return None, "none"
+        """委托纯函数 match_material_rows：exact / ambiguous / fuzzy / none。"""
+        return match_material_rows(self.materials(), name)
 
     def find_depot(self, name):
         if not name:
@@ -401,30 +476,53 @@ class JshERP:
         })
         return bc
 
+    def add_material(self, name, unit="个", category_id=None, model="", standard=""):
+        """直接建档（不去重）。同名不同规格要建第二个档案时只能走这里。
+        返回新建行（barCode 已补齐，建单不会报 barCode cannot be null）。"""
+        known = {r.get("id") for r in self.materials()
+                 if self._norm(r.get("name")) == self._norm(name)}
+        urow = self.ensure_unit(unit)
+        basic = urow.get("basicUnit") or unit
+        body = {
+            "name": name, "model": model, "standard": standard,
+            "unit": basic, "enabled": 1,
+            "categoryId": category_id or self._default_category_id(),
+        }
+        if urow.get("id"):
+            # 关键：带上 unitId，后端才能按单位组的 ratio 自动折算 basicNumber
+            body["unitId"] = urow["id"]
+        res = self._req("/material/add", "POST", body)
+        if res.get("code") != 200:
+            raise ErpError(f"新建商品「{name}」失败：{res}")
+        self.invalidate("/material/list")
+        # 响应里没有可靠 id 时，按「同名且不在旧集合」识别新行（同名多规格场景）
+        row = None
+        data = res.get("data")
+        if isinstance(data, dict) and data.get("id"):
+            row = self.material_by_id(data["id"])
+        if row is None:
+            for r in self.materials():
+                if r.get("id") not in known and self._norm(r.get("name")) == self._norm(name):
+                    row = r
+                    break
+        if row is None:
+            raise ErpError(f"新建商品「{name}」后查不到")
+        bc = row.get("barCode") or self.material_barcode(row["id"], row.get("unit") or unit)
+        return dict(row, barCode=bc)
+
     def ensure_material(self, name, unit="个", category_id=None, model="", standard=""):
-        row, _ = self.find_material(name)
+        row, kind = self.find_material(name)
+        if kind == "ambiguous":
+            # 同名多档案（一个配件多个规格）绝不替用户挑：预览层会列候选让人点，
+            # 点选后 draft.items[].material_id 直达档案，不走名字匹配
+            raise ErpError(f"商品「{name}」有多个同名档案（规格不同），请点选对应规格后再写入")
         created = False
         if not row:
-            urow = self.ensure_unit(unit)
-            basic = urow.get("basicUnit") or unit
-            body = {
-                "name": name, "model": model, "standard": standard,
-                "unit": basic, "enabled": 1,
-                "categoryId": category_id or self._default_category_id(),
-            }
-            if urow.get("id"):
-                # 关键：带上 unitId，后端才能按单位组的 ratio 自动折算 basicNumber
-                body["unitId"] = urow["id"]
-            res = self._req("/material/add", "POST", body)
-            if res.get("code") != 200:
-                raise ErpError(f"新建商品「{name}」失败：{res}")
-            self.invalidate("/material/list")
-            row, _ = self.find_material(name)
-            if not row:
-                raise ErpError(f"新建商品「{name}」后查不到")
+            row = self.add_material(name, unit, category_id, model, standard)
             created = True
-        bc = row.get("barCode") or self.material_barcode(row["id"], row.get("unit") or unit)
-        row = dict(row, barCode=bc)
+        else:
+            bc = row.get("barCode") or self.material_barcode(row["id"], row.get("unit") or unit)
+            row = dict(row, barCode=bc)
         return row, created
 
     # ---------- 库存 ----------

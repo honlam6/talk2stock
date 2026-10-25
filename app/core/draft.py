@@ -135,10 +135,28 @@ def resolve(draft, erp=None):
             tax_amount = 0.0
             line_total = amount
         total += line_total
-        mrow, mkind = erp.find_material(name) if name else (None, "none")
-        will_create = bool(name) and not mrow
+        # 商品匹配：点选过候选（material_id）直达档案，其余按名字匹配。
+        # 同名多规格档案返回 ambiguous，绝不静默挑第一个——靠候选点选消歧。
+        mrow, mkind = None, "none"
+        picked_id = it.get("material_id")
+        if picked_id:
+            try:
+                mrow = erp.material_by_id(int(picked_id))
+            except (TypeError, ValueError):
+                mrow = None
+            if mrow:
+                mkind = "picked"
+                if name and str(mrow.get("name") or "").strip() != name:
+                    warnings.append(f"第{idx}行按点选档案「{mrow.get('name')}」入账（与输入名「{name}」略有出入，请确认）")
+            else:
+                warnings.append(f"第{idx}行点选的商品档案已不存在，已改回按名称匹配")
+        if not mrow:
+            mrow, mkind = erp.find_material(name) if name else (None, "none")
+        will_create = bool(name) and not mrow and mkind == "none"
         if will_create:
             to_create.append(f"新建商品：{name}（{unit}）")
+        if mkind == "ambiguous":
+            warnings.append(f"商品「{name}」在系统里有多个同名档案（规格不同），请点选对应规格再确认")
         if mkind == "fuzzy":
             warnings.append(f"商品「{name}」模糊匹配到「{mrow.get('name')}」，请确认")
         price_missing = qty > 0 and price == 0
@@ -161,6 +179,7 @@ def resolve(draft, erp=None):
             "material_id": mrow.get("id") if mrow else None,
             "matched": bool(mrow), "match_kind": mkind,
             "matched_name": mrow.get("name") if mrow else None,
+            "matched_model": (mrow.get("model") or "").strip() if mrow else "",
             "will_create": will_create,
             "price_missing": price_missing,
             "candidates": erp.material_candidates(name) if (name and not mrow) else [],
@@ -206,6 +225,18 @@ def commit(draft, erp=None, auto_create=True):
     btype, sub_type, party_type, direction = BILL_TYPES[biz]
     created = []
 
+    # 预检：同名多规格且未点选档案的明细先拦下——ensure_material 遇歧义会抛错，
+    # 预检能保证此时一行都还没写（半截单/孤儿档案都不留）。
+    for it in draft["items"]:
+        if it.get("material_id"):
+            continue
+        _n = (it.get("name") or "").strip()
+        if _n:
+            _row, _kind = erp.find_material(_n)
+            if _kind == "ambiguous":
+                return {"ok": False,
+                        "message": f"商品「{_n}」有多个同名档案（规格不同），请回预览点选对应规格后再写入"}
+
     try:
         # 1. 往来单位
         party_name = draft["party"].strip()
@@ -229,7 +260,21 @@ def commit(draft, erp=None, auto_create=True):
             unit = (it.get("unit") or "个").strip()
             qty = _num(it.get("qty"))
             price = _num(it.get("price"))
-            mrow, was_new = erp.ensure_material(name, unit)
+            was_new = False
+            mrow = None
+            picked_id = it.get("material_id")
+            if picked_id:
+                # 预览里点选过候选：直达该档案（同名多规格不靠名字猜）
+                try:
+                    mrow = erp.material_by_id(int(picked_id))
+                except (TypeError, ValueError):
+                    mrow = None
+            if mrow is None:
+                mrow, was_new = erp.ensure_material(name, unit)
+            else:
+                bc = mrow.get("barCode") or erp.material_barcode(
+                    mrow["id"], mrow.get("unit") or unit)
+                mrow = dict(mrow, barCode=bc)
             if was_new:
                 created.append(f"商品「{name}」")
             # 单位：用户单位属于该商品单位组时保留原样，后端按 ratio 自动折算 basicNumber
