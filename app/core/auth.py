@@ -105,16 +105,49 @@ def admins():
     return {x.strip() for x in str(raw).split(",") if x.strip()}
 
 
-def decide_role(login_name, ismanager):
-    """admin：ERP ismanager=1（管理员角色），或在 T2S_ADMINS 名单里；否则 member。"""
-    if str(login_name) in admins():
-        return "admin"
+_ROLE_MAP_TS = [0.0, None]   # [上次拉取时间, {loginName: roleName}]（进程内缓存）
+
+
+def role_map(max_age=60):
+    """loginName → roleName 映射（服务账号查 /user/list，进程内缓存 60s）。
+
+    为什么不用登录响应里的 ismanager：实测 jshERP 给租户内所有用户都写
+    ismanager=1（admin 与 test1 无差别），该字段没有区分度——用它判定导致
+    test1 拿到管理员会话（失败案例 C11）。roleName 才是 ERP 侧的真实角色。
+    """
+    now = time.time()
+    if _ROLE_MAP_TS[1] is not None and now - _ROLE_MAP_TS[0] < max_age:
+        return _ROLE_MAP_TS[1]
     try:
-        if int(ismanager or 0) == 1:
-            return "admin"
-    except (TypeError, ValueError):
-        pass
+        from . import erp as erpmod
+        rows = erpmod.get_client().list("/user/list", page_size=500)
+        m = {str(r.get("loginName") or ""): str(r.get("roleName") or "")
+             for r in rows if r.get("loginName")}
+        if m:
+            _ROLE_MAP_TS[0], _ROLE_MAP_TS[1] = now, m
+        return _ROLE_MAP_TS[1] or {}
+    except Exception:
+        return _ROLE_MAP_TS[1] or {}   # ERP 抖动时用旧缓存；从未拿到过则空
+
+
+def decide_role(login_name, role_name=None):
+    """admin：T2S_ADMINS 名单，或 ERP 角色名含「管理员」；其余一律 member。
+
+    role_name 缺省时查 role_map；查不到（ERP 不可用且无缓存）按 member 处理——
+    宁可降权也不提权，admin 还有静态口令后备通道。
+    """
+    login_name = str(login_name or "")
+    if login_name in admins():
+        return "admin"
+    if role_name is None:
+        role_name = role_map().get(login_name, "")
+    if "管理员" in str(role_name):
+        return "admin"
     return "member"
+
+
+def invalidate_role_map():
+    _ROLE_MAP_TS[0], _ROLE_MAP_TS[1] = 0.0, None
 
 
 # --------------------------------------------------------------------------
@@ -127,7 +160,7 @@ def issue_session(login_name, username, role, uid=None, ttl_days=None):
             days = float(cfgmod.env("T2S_SESSION_TTL_DAYS", DEFAULT_TTL_DAYS))
         except ValueError:
             days = DEFAULT_TTL_DAYS
-    payload = {"u": str(login_name), "n": str(username or login_name),
+    payload = {"v": 2, "u": str(login_name), "n": str(username or login_name),
                "r": role if role in ("admin", "member") else "member",
                "e": int(time.time() + days * 86400)}
     if uid:
@@ -154,6 +187,8 @@ def verify_session(token):
     except Exception:
         return None
     if int(p.get("e") or 0) < time.time():
+        return None
+    if p.get("v") != 2:   # 令牌版本：角色判定逻辑变更时 +1，旧令牌整体失效
         return None
     if p.get("r") not in ("admin", "member") or not p.get("u"):
         return None
@@ -200,7 +235,7 @@ def login_and_issue(login_name, password):
         _login_fail(login_name)
         return {"ok": False, "message": err}
     _login_ok(login_name)
-    role = decide_role(u.get("loginName"), u.get("ismanager"))
+    role = decide_role(u.get("loginName"))
     token = issue_session(u.get("loginName"), u.get("username"), role, uid=u.get("id"))
     return {"ok": True, "token": token, "role": role,
             "login": u.get("loginName"), "username": u.get("username") or u.get("loginName")}

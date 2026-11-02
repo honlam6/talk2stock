@@ -35,23 +35,50 @@ class SessionTokenTest(unittest.TestCase):
         tok = authmod.issue_session("x", "x", "root")   # 非法角色 → 落到 member
         self.assertEqual(authmod.verify_session(tok)["r"], "member")
 
+    def test_v1_tokens_rejected_after_role_fix(self):
+        """C11：角色判定修复前签发的无版本令牌（含误发的 admin 会话）必须全部失效。"""
+        import base64, hashlib, hmac as _hmac, json as _json, time as _time
+        key = authmod._hmac_key()
+        payload = {"u": "test1", "n": "测试一号", "r": "admin", "e": int(_time.time()) + 3600}
+        body = base64.urlsafe_b64encode(
+            _json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()).decode().rstrip("=")
+        sig = _hmac.new(key, body.encode(), hashlib.sha256).hexdigest()[:32]
+        self.assertIsNone(authmod.verify_session(body + "." + sig),
+                          "v1 令牌（无版本号）应被整体拒绝")
+
     def test_static_pass_header_is_not_a_session(self):
         self.assertIsNone(authmod.verify_session("some-static-password"))
 
 
 class RoleDecisionTest(unittest.TestCase):
-    def test_erp_ismanager_wins(self):
-        self.assertEqual(authmod.decide_role("admin", 1), "admin")
-        self.assertEqual(authmod.decide_role("test1", 0), "member")
+    """C11 回归：ismanager 对租户内所有用户都是 1，不能作为管理员信号；
+    角色判定只认 ERP roleName（/user/list）与 T2S_ADMINS 名单。"""
+
+    def test_role_name_admin(self):
+        self.assertEqual(authmod.decide_role("admin", "管理员"), "admin")
+
+    def test_member_roles(self):
+        # 实测角色名：test1-3=租户，test123=销售代表，但 ismanager 全是 1
+        self.assertEqual(authmod.decide_role("test1", "租户"), "member")
+        self.assertEqual(authmod.decide_role("test123", "销售代表"), "member")
+
+    def test_ismanager_is_ignored(self):
+        # 就算上游误传 ismanager=1 也绝不提权（C11 教训）
+        self.assertEqual(authmod.decide_role("test1", 1), "member")
+
+    def test_unknown_role_falls_to_member(self):
+        self.assertEqual(authmod.decide_role("stranger", ""), "member")
+        self.assertEqual(authmod.decide_role("stranger", None), "member")   # role_map 查不到 → 降权
 
     def test_admin_allowlist(self):
         with mock.patch.dict(os.environ, {"T2S_ADMINS": "test1, test2"}):
-            self.assertEqual(authmod.decide_role("test1", 0), "admin")
-            self.assertEqual(authmod.decide_role("test3", 0), "member")
+            self.assertEqual(authmod.decide_role("test1", "租户"), "admin")
+            self.assertEqual(authmod.decide_role("test3", "租户"), "member")
 
-    def test_allowlist_beats_non_manager(self):
-        with mock.patch.dict(os.environ, {"T2S_ADMINS": "test3"}):
-            self.assertEqual(authmod.decide_role("test3", None), "admin")
+    def test_role_map_lookup_path(self):
+        with mock.patch.object(authmod, "role_map", return_value={"boss": "管理员", "t1": "租户"}):
+            self.assertEqual(authmod.decide_role("boss"), "admin")
+            self.assertEqual(authmod.decide_role("t1"), "member")
 
 
 class LoginThrottleTest(unittest.TestCase):
