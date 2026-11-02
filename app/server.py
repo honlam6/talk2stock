@@ -227,8 +227,8 @@ def _my_model_view():
     g = cfgmod.load().get("llm", {})
     gk = g.get("active") or ""
     gp = (g.get("profiles") or {}).get(gk) or {}
-    # 共享档案只给显示名与模型名（成员不可见 base_url / key）
-    shared = {"key": gk, "name": gp.get("name") or gk, "model": gp.get("model") or ""} if gk else None
+    # 共享档案只给显示名（成员不可见模型名 / base_url / key）
+    shared = {"key": gk, "name": gp.get("name") or gk} if gk else None
     return {"ok": True, "mine": mine, "shared": shared, "role": cfgmod.current_role()}
 
 

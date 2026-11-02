@@ -87,7 +87,7 @@
       <span class="flex-1"></span>
       <span class="hint" id="myScope">仅对你自己生效</span>
     </h2>
-    <div class="hint" style="margin:-6px 0 14px">在这里配置你自己的模型档案：启用后你的录单解析 / 问一问都用它；没配置或没启用时自动回落到共享模型。密钥只存在服务端你自己的档案里。</div>
+    <div class="hint" style="margin:-6px 0 14px">只对你自己生效：启用后，你的录单解析与问一问都用这个模型；未配置或未启用时自动回落共享模型。密钥只存在服务端你自己的档案里。</div>
     <div id="myList"></div>
     <details class="fold" id="myFold">
       <summary>＋ 添加 / 编辑我的模型</summary>
@@ -130,7 +130,8 @@ async function loadMe() {
   $('#erpCard').style.display = admin ? '' : 'none';
   $('#sharedAdmin').style.display = admin ? '' : 'none';
   $('#sharedReadonly').hidden = admin;
-  $('#sharedScope').textContent = admin ? '管理员可编辑' : '由管理员配置 · 全员默认使用';
+  $('#sharedScope').textContent = admin ? '管理员可编辑 · 全员默认使用' : '由管理员配置 · 全员默认使用';
+  $('#myScope').textContent = '只对你自己生效 · 未配置时自动用共享模型';
   return ME;
 }
 
@@ -305,7 +306,7 @@ function renderSharedReadonly() {
   el.innerHTML = SHARED
     ? `<div class="prof-item active"><div class="info">
          <div class="nm">${esc(SHARED.name || SHARED.key)} <span class="tag tag-ok">使用中</span></div>
-         <div class="dt">当前共享模型：${esc(SHARED.model || '')}（地址与密钥仅管理员可见）</div>
+         <div class="dt">共享模型由管理员配置，全员默认使用；地址与密钥仅管理员可见。</div>
        </div></div>`
     : '<div class="muted" style="padding:6px 0 12px">管理员还没有配置共享模型。可在下方「我的模型」里添加你自己的。</div>';
 }

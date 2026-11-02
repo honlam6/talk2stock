@@ -88,16 +88,13 @@ function loginModal(prefPass) {
         <div class="hint" style="margin-top:6px" id="__lgHint"></div>
         <div class="pv-form" id="__lgErp">
           <div class="pv-line"><input id="__lgUser" type="text" placeholder="ERP 账号（如 test1）"
-            autocomplete="username" spellcheck="false"
-            style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:15px"></div>
+            autocomplete="username" spellcheck="false"></div>
           <div class="pv-line"><input id="__lgPwd" type="password" placeholder="ERP 密码"
-            autocomplete="current-password"
-            style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:15px"></div>
+            autocomplete="current-password"></div>
         </div>
         <div class="pv-form" id="__lgPassRow" hidden>
           <div class="pv-line"><input id="__lgPass" type="password" placeholder="管理员口令"
-            autocomplete="off"
-            style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:15px"></div>
+            autocomplete="off"></div>
         </div>
         <div class="row-btns mt-4">
           <button class="btn btn-ghost" id="__lgMode">用管理员口令登录</button>
