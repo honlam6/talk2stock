@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #FFFFFF; }
+  svg { font-family: 'Noto Sans SC', 'WenQuanYi Micro Hei', sans-serif; display: block; }
+</style>
+</head>
+<body>
+<svg width="1780" height="1276" viewBox="0 0 1780 1276" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrRose" markerWidth="9" markerHeight="9" refX="4.5" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#E11D48"/>
+    </marker>
+    <marker id="arrTeal" markerWidth="9" markerHeight="9" refX="4.5" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#0D9488"/>
+    </marker>
+    <marker id="arrOrange" markerWidth="9" markerHeight="9" refX="4.5" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 Z" fill="#EA580C"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1780" height="1276" fill="#FFFFFF"/>
+
+  <!-- ===================== Header ===================== -->
+  <text x="48" y="88" font-size="40" font-weight="900" fill="#0F172A">Talk2Stock · 对话式进销存智能体 系统架构</text>
+  <text x="48" y="124" font-size="17" fill="#64748B">一句话 → 解析成单据草稿 → 字段来历标注 → 人工确认 → 官方接口写入 → 审计留痕　·　Talk-to-Order Agent for Real ERPs</text>
+
+  <!-- legend -->
+  <line x1="1382" y1="76" x2="1424" y2="76" stroke="#E11D48" stroke-width="3" marker-end="url(#arrRose)"/>
+  <text x="1438" y="81" font-size="14.5" font-weight="600" fill="#BE123C">写入路径 Write path</text>
+  <line x1="1382" y1="106" x2="1424" y2="106" stroke="#0D9488" stroke-width="3" marker-end="url(#arrTeal)"/>
+  <text x="1438" y="111" font-size="14.5" font-weight="600" fill="#0F766E">读取路径 Read path（只读）</text>
+
+  <!-- ===================== Band 1 · Entry ===================== -->
+  <rect x="48" y="150" width="1272" height="128" rx="14" fill="#EEF2FF" stroke="#C7D2FE" stroke-width="1.5"/>
+  <text x="76" y="186" font-size="19" font-weight="800" fill="#0F172A">① 入口层 · Entry</text>
+  <text x="270" y="186" font-size="14" fill="#6366F1">:8090 · 纯标准库 HTTP 服务 server.py</text>
+  <text x="1292" y="186" font-size="13.5" fill="#64748B" text-anchor="end">五入口共用同一套 resolve / commit</text>
+  <g font-size="14.5" font-weight="600">
+    <rect x="76"  y="204" width="86"  height="34" rx="8" fill="#FFFFFF" stroke="#C7D2FE"/><text x="119"  y="226" fill="#3730A3" text-anchor="middle">工作台 /</text>
+    <rect x="174" y="204" width="92"  height="34" rx="8" fill="#FFFFFF" stroke="#C7D2FE"/><text x="220"  y="226" fill="#3730A3" text-anchor="middle">录入 /new</text>
+    <rect x="278" y="204" width="106" height="34" rx="8" fill="#FFFFFF" stroke="#C7D2FE"/><text x="331"  y="226" fill="#3730A3" text-anchor="middle">问一问 /ask</text>
+    <rect x="396" y="204" width="140" height="34" rx="8" fill="#FFFFFF" stroke="#C7D2FE"/><text x="466"  y="226" fill="#3730A3" text-anchor="middle">看板 /dashboard</text>
+    <rect x="548" y="204" width="128" height="34" rx="8" fill="#FFFFFF" stroke="#C7D2FE"/><text x="612"  y="226" fill="#3730A3" text-anchor="middle">设置 /settings</text>
+    <rect x="688" y="204" width="200" height="34" rx="8" fill="#FFFFFF" stroke="#C7D2FE"/><text x="788"  y="226" fill="#64748B" text-anchor="middle">原 ERP UI :8080（高级功能）</text>
+  </g>
+  <text x="76" y="262" font-size="13.5" fill="#64748B">对话录单 · 只读问答（SSE 流式过程可视化）· 经营看板 · 确认卡（每个字段标来历）· 手机端适配</text>
+
+  <!-- ===================== Zone 1 arrows ===================== -->
+  <line x1="430" y1="284" x2="430" y2="332" stroke="#E11D48" stroke-width="3" marker-end="url(#arrRose)"/>
+  <text x="446" y="313" font-size="14.5" fill="#BE123C" font-weight="500">写：一句话 → /api/parse（主动澄清 ≤2 轮）→ 单据草稿</text>
+  <line x1="960" y1="284" x2="960" y2="332" stroke="#0D9488" stroke-width="3" marker-end="url(#arrTeal)"/>
+  <text x="976" y="313" font-size="14.5" fill="#0F766E" font-weight="500">读：自然语言问句 → /api/ask/stream（SSE）</text>
+
+  <!-- ===================== Band 2 · Agent Layer ===================== -->
+  <rect x="48" y="340" width="1272" height="250" rx="14" fill="#ECFDF5" stroke="#A7F3D0" stroke-width="1.5"/>
+  <text x="76" y="376" font-size="19" font-weight="800" fill="#0F172A">② 智能体层 · Agent Layer</text>
+  <text x="330" y="376" font-size="14" fill="#059669">理解 · 匹配 · 接地 —— 自研智能层，不依赖任何第三方框架</text>
+
+  <!-- agent cards -->
+  <g>
+    <!-- card 1 -->
+    <rect x="72" y="396" width="239" height="176" rx="10" fill="#FFFFFF" stroke="#A7F3D0" stroke-width="1.2"/>
+    <rect x="86" y="410" width="34" height="7" rx="3.5" fill="#059669"/>
+    <text x="86" y="446" font-size="16.5" font-weight="700" fill="#065F46">llm.py</text>
+    <text x="86" y="467" font-size="12.5" fill="#64748B">口语 → 严格 JSON 草稿</text>
+    <text x="86" y="494" font-size="12.8" fill="#334155">· 4 类信息抽取，禁编造</text>
+    <text x="86" y="513.5" font-size="12.8" fill="#334155">· 多轮修正 · 主动澄清</text>
+    <text x="86" y="533" font-size="12.8" fill="#334155">· prompt 版本化 v4</text>
+    <text x="86" y="552.5" font-size="12.8" fill="#334155">· 网关兼容降级重试</text>
+    <!-- card 2 -->
+    <rect x="323" y="396" width="239" height="176" rx="10" fill="#FFFFFF" stroke="#A7F3D0" stroke-width="1.2"/>
+    <rect x="337" y="410" width="34" height="7" rx="3.5" fill="#059669"/>
+    <text x="337" y="446" font-size="16.5" font-weight="700" fill="#065F46">agent.py</text>
+    <text x="337" y="467" font-size="12.5" fill="#64748B">手写 function-calling loop</text>
+    <text x="337" y="494" font-size="12.8" fill="#334155">· JSON 动作 → 观察回喂</text>
+    <text x="337" y="513.5" font-size="12.8" fill="#334155">· 步数 + token 双预算</text>
+    <text x="337" y="533" font-size="12.8" fill="#334155">· 端点无关，行为一致</text>
+    <text x="337" y="552.5" font-size="12.8" fill="#334155">· 每步 trace 可回放</text>
+    <!-- card 3 -->
+    <rect x="574" y="396" width="239" height="176" rx="10" fill="#FFFFFF" stroke="#A7F3D0" stroke-width="1.2"/>
+    <rect x="588" y="410" width="34" height="7" rx="3.5" fill="#059669"/>
+    <text x="588" y="446" font-size="16.5" font-weight="700" fill="#065F46">ask.py</text>
+    <text x="588" y="467" font-size="12.5" fill="#64748B">三层问答路由</text>
+    <text x="588" y="494" font-size="12.8" fill="#334155">· 规则直答 0 token 秒回</text>
+    <text x="588" y="513.5" font-size="12.8" fill="#334155">· 复合问题多步链式取证</text>
+    <text x="588" y="533" font-size="12.8" fill="#334155">· 数字接地 · 模板句兜底</text>
+    <text x="588" y="552.5" font-size="12.8" fill="#334155">· 绝不空手而归</text>
+    <!-- card 4 -->
+    <rect x="825" y="396" width="239" height="176" rx="10" fill="#FFFFFF" stroke="#A7F3D0" stroke-width="1.2"/>
+    <rect x="839" y="410" width="34" height="7" rx="3.5" fill="#059669"/>
+    <text x="839" y="446" font-size="16.5" font-weight="700" fill="#065F46">retrieve.py</text>
+    <text x="839" y="467" font-size="12.5" fill="#64748B">RAG-lite · BM25 轻检索</text>
+    <text x="839" y="494" font-size="12.8" fill="#334155">· 纯标准库零外部依赖</text>
+    <text x="839" y="513.5" font-size="12.8" fill="#334155">· 文档 + 历史单据双索引</text>
+    <text x="839" y="533" font-size="12.8" fill="#334155">· 中文 bigram，可解释</text>
+    <text x="839" y="552.5" font-size="12.8" fill="#334155">· 注册为 agent 工具</text>
+    <!-- card 5 -->
+    <rect x="1076" y="396" width="239" height="176" rx="10" fill="#FFFFFF" stroke="#A7F3D0" stroke-width="1.2"/>
+    <rect x="1090" y="410" width="34" height="7" rx="3.5" fill="#059669"/>
+    <text x="1090" y="446" font-size="16.5" font-weight="700" fill="#065F46">insight.py</text>
+    <text x="1090" y="467" font-size="12.5" fill="#64748B">主动洞察与预警</text>
+    <text x="1090" y="494" font-size="12.8" fill="#334155">· 规则算事实 → LLM 组织</text>
+    <text x="1090" y="513.5" font-size="12.8" fill="#334155">· 洞察卡 / 预警横幅 / 日报</text>
+    <text x="1090" y="533" font-size="12.8" fill="#334155">· 负库存·低库存·应收集中</text>
+    <text x="1090" y="552.5" font-size="12.8" fill="#334155">· 逐条数字接地</text>
+  </g>
+
+  <!-- ===================== Zone 2 arrows ===================== -->
+  <line x1="430" y1="594" x2="430" y2="642" stroke="#E11D48" stroke-width="3" marker-end="url(#arrRose)"/>
+  <text x="446" y="623" font-size="14.5" fill="#BE123C" font-weight="500">写：单据草稿 → resolve() 只读匹配，返回「将新建」清单</text>
+  <line x1="960" y1="594" x2="960" y2="642" stroke="#0D9488" stroke-width="3" marker-end="url(#arrTeal)"/>
+  <text x="976" y="623" font-size="14.5" fill="#0F766E" font-weight="500">读：agent 循环的只读工具观察（每步可展开）</text>
+
+  <!-- ===================== Band 3 · Write Path ===================== -->
+  <rect x="48" y="648" width="1272" height="208" rx="14" fill="#FFF7ED" stroke="#FED7AA" stroke-width="1.5"/>
+  <text x="76" y="684" font-size="19" font-weight="800" fill="#0F172A">③ 落库层 · Write Path</text>
+  <text x="300" y="684" font-size="14" fill="#EA580C">两段式 resolve / commit —— 确认闸门在这里</text>
+
+  <!-- flow nodes -->
+  <g>
+    <rect x="72" y="706" width="222" height="104" rx="10" fill="#FFFFFF" stroke="#FED7AA" stroke-width="1.2"/>
+    <text x="88" y="732" font-size="15" font-weight="700" fill="#9A3412">resolve() · 只读匹配</text>
+    <text x="88" y="756" font-size="12.3" fill="#334155">· 名称归一 → 档案匹配</text>
+    <text x="88" y="775" font-size="12.3" fill="#334155">· 陌生档案列「将新建」</text>
+    <text x="88" y="794" font-size="12.3" fill="#334155">· 候选 top3 点选直达</text>
+    <line x1="296" y1="758" x2="314" y2="758" stroke="#EA580C" stroke-width="2.5" marker-end="url(#arrOrange)"/>
+
+    <rect x="318" y="706" width="222" height="104" rx="10" fill="#FFFFFF" stroke="#FED7AA" stroke-width="1.2"/>
+    <text x="334" y="732" font-size="15" font-weight="700" fill="#9A3412">确认卡 · 人工确认</text>
+    <text x="334" y="756" font-size="12.3" fill="#334155">· 每字段标注来历</text>
+    <text x="334" y="775" font-size="12.3" fill="#334155">· 缺单价橙色高亮</text>
+    <text x="334" y="794" font-size="12.3" fill="#334155">· AI 置信度直接展示</text>
+    <line x1="542" y1="758" x2="560" y2="758" stroke="#EA580C" stroke-width="2.5" marker-end="url(#arrOrange)"/>
+
+    <rect x="564" y="706" width="222" height="104" rx="10" fill="#FFFFFF" stroke="#FED7AA" stroke-width="1.2"/>
+    <text x="580" y="732" font-size="15" font-weight="700" fill="#9A3412">gate.py · 确认闸门</text>
+    <text x="580" y="756" font-size="12.3" fill="#334155">· HMAC 一次性令牌</text>
+    <text x="580" y="775" font-size="12.3" fill="#334155">· 内容哈希绑定 + 防重放</text>
+    <text x="580" y="794" font-size="12.3" fill="#334155">· 30 分钟过期</text>
+    <line x1="788" y1="758" x2="806" y2="758" stroke="#EA580C" stroke-width="2.5" marker-end="url(#arrOrange)"/>
+
+    <rect x="810" y="706" width="222" height="104" rx="10" fill="#FFFFFF" stroke="#FED7AA" stroke-width="1.2"/>
+    <text x="826" y="732" font-size="15" font-weight="700" fill="#9A3412">commit() · 落库</text>
+    <text x="826" y="756" font-size="12.3" fill="#334155">· 补主数据 + 建单</text>
+    <text x="826" y="775" font-size="12.3" fill="#334155">· 全走官方接口</text>
+    <text x="826" y="794" font-size="12.3" fill="#334155">· 改动 diff 入审计</text>
+    <line x1="1034" y1="758" x2="1052" y2="758" stroke="#EA580C" stroke-width="2.5" marker-end="url(#arrOrange)"/>
+
+    <rect x="1056" y="706" width="222" height="104" rx="10" fill="#FFFFFF" stroke="#FED7AA" stroke-width="1.2"/>
+    <text x="1072" y="732" font-size="15" font-weight="700" fill="#9A3412">erp.py · REST 客户端</text>
+    <text x="1072" y="756" font-size="12.3" fill="#334155">· 登录 / 主数据 / 建单</text>
+    <text x="1072" y="775" font-size="12.3" fill="#334155">· 重试与降级</text>
+    <text x="1072" y="794" font-size="12.3" fill="#334155">· 绝不直连数据库</text>
+  </g>
+  <text x="76" y="840" font-size="13.5" font-weight="600" fill="#9A3412">「无确认不写入」是服务端不变量，不是 UI 约定 —— 无令牌 / 篡改 / 重放一律拒绝，被拒尝试同样进审计</text>
+
+  <!-- ===================== Zone 3 arrows ===================== -->
+  <line x1="430" y1="860" x2="430" y2="908" stroke="#E11D48" stroke-width="3" marker-end="url(#arrRose)"/>
+  <text x="446" y="889" font-size="14.5" fill="#BE123C" font-weight="500">写：人工确认 → commit() → REST 建单 / 补档案（仅 HTTP）</text>
+  <line x1="960" y1="860" x2="960" y2="908" stroke="#0D9488" stroke-width="3" marker-end="url(#arrTeal)"/>
+  <text x="976" y="889" font-size="14.5" fill="#0F766E" font-weight="500">读：主数据 · 库存 · 报表等只读查询</text>
+
+  <!-- ===================== Band 4 · Base ===================== -->
+  <rect x="48" y="914" width="1272" height="122" rx="14" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1.5"/>
+  <text x="76" y="950" font-size="19" font-weight="800" fill="#0F172A">④ 底座 · jshERP</text>
+  <text x="240" y="950" font-size="14" fill="#475569">未改上游一行源码，随时可回退</text>
+  <g font-size="14" font-weight="600">
+    <rect x="76" y="968" width="106" height="32" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/><text x="129" y="989" fill="#334155" text-anchor="middle">Spring Boot</text>
+    <rect x="194" y="968" width="60"  height="32" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/><text x="224" y="989" fill="#334155" text-anchor="middle">Vue</text>
+    <rect x="266" y="968" width="72"  height="32" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/><text x="302" y="989" fill="#334155" text-anchor="middle">MySQL</text>
+    <rect x="350" y="968" width="68"  height="32" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/><text x="384" y="989" fill="#334155" text-anchor="middle">Redis</text>
+    <rect x="430" y="968" width="140" height="32" rx="8" fill="#FFFFFF" stroke="#CBD5E1"/><text x="500" y="989" fill="#334155" text-anchor="middle">仅官方 REST API</text>
+  </g>
+  <text x="76" y="1024" font-size="13.5" fill="#64748B">报表 · 权限 · 盘点 · 财务等高级功能仍回原生 UI（:8080），Talk2Stock 是加速层而非替代层</text>
+
+  <!-- ===================== Evidence column ===================== -->
+  <rect x="1344" y="340" width="388" height="696" rx="14" fill="#F5F3FF" stroke="#DDD6FE" stroke-width="1.5"/>
+  <text x="1368" y="376" font-size="19" font-weight="800" fill="#0F172A">证据链 · Evidence Trail</text>
+  <text x="1368" y="398" font-size="13" fill="#7C3AED">跨层贯穿：每一步可审计、可复现、可回放</text>
+
+  <g>
+    <rect x="1368" y="416" width="340" height="136" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.2"/>
+    <text x="1384" y="444" font-size="15" font-weight="700" fill="#5B21B6">audit.jsonl · 审计留痕</text>
+    <text x="1384" y="469" font-size="12.5" fill="#334155">· 原话 / 模型 / prompt hash</text>
+    <text x="1384" y="490" font-size="12.5" fill="#334155">· 改动 diff / 结果 / 操作人</text>
+    <text x="1384" y="511" font-size="12.5" fill="#334155">· 被拒写入同样留痕</text>
+    <text x="1384" y="532" font-size="12.5" fill="#334155">· 10MB × 5 轮转，失败不静默</text>
+
+    <rect x="1368" y="566" width="340" height="136" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.2"/>
+    <text x="1384" y="594" font-size="15" font-weight="700" fill="#5B21B6">regression.jsonl · 回归沉淀</text>
+    <text x="1384" y="619" font-size="12.5" fill="#334155">· 用户改过的字段自动入集</text>
+    <text x="1384" y="640" font-size="12.5" fill="#334155">· 每次纠错都变成资产</text>
+    <text x="1384" y="661" font-size="12.5" fill="#334155">· bad case → 永久回归用例</text>
+
+    <rect x="1368" y="716" width="340" height="136" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.2"/>
+    <text x="1384" y="744" font-size="15" font-weight="700" fill="#5B21B6">usage.jsonl · token 台账</text>
+    <text x="1384" y="769" font-size="12.5" fill="#334155">· 流式 include_usage 精确计量</text>
+    <text x="1384" y="790" font-size="12.5" fill="#334155">· 网关不支持 → 估算并标注</text>
+    <text x="1384" y="811" font-size="12.5" fill="#334155">· 成本按用途分栏展示</text>
+
+    <rect x="1368" y="866" width="340" height="136" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.2"/>
+    <text x="1384" y="894" font-size="15" font-weight="700" fill="#5B21B6">eval/ · 冻结语料 71 条</text>
+    <text x="1384" y="919" font-size="12.5" fill="#334155">· 51 常规 + 12 对抗 + 8 规格</text>
+    <text x="1384" y="940" font-size="12.5" fill="#334155">· v1→v4 提示词全程跑分留痕</text>
+    <text x="1384" y="961" font-size="12.5" fill="#334155">· 整单全对率 98.3% · 幻觉 0</text>
+  </g>
+
+  <!-- ===================== Invariants strip ===================== -->
+  <g>
+    <rect x="48" y="1060" width="548" height="128" rx="12" fill="#FFFFFF" stroke="#FECDD3" stroke-width="1.5"/>
+    <rect x="48" y="1060" width="8" height="128" rx="4" fill="#E11D48"/>
+    <text x="80" y="1094" font-size="17.5" font-weight="800" fill="#0F172A">不变量一 · 无确认不写入 <tspan fill="#BE123C" font-size="13" font-weight="600">Write Gate</tspan></text>
+    <text x="80" y="1122" font-size="13" fill="#475569">「无确认不写入」是服务端不变量，不是 UI 约定</text>
+    <text x="80" y="1146" font-size="13" fill="#475569">无令牌 / 篡改 / 重放一律拒绝，30 分钟过期，被拒也留痕</text>
+
+    <rect x="616" y="1060" width="548" height="128" rx="12" fill="#FFFFFF" stroke="#C7D2FE" stroke-width="1.5"/>
+    <rect x="616" y="1060" width="8" height="128" rx="4" fill="#4F46E5"/>
+    <text x="648" y="1094" font-size="17.5" font-weight="800" fill="#0F172A">不变量二 · 只做加法可回退 <tspan fill="#4338CA" font-size="13" font-weight="600">Additive Only</tspan></text>
+    <text x="648" y="1122" font-size="13" fill="#475569">全部通过 jshERP 官方 REST API 交互，未改一行上游源码</text>
+    <text x="648" y="1146" font-size="13" fill="#475569">原系统随时可当后备；自研部分独立 MIT 许可</text>
+
+    <rect x="1184" y="1060" width="548" height="128" rx="12" fill="#FFFFFF" stroke="#99F6E4" stroke-width="1.5"/>
+    <rect x="1184" y="1060" width="8" height="128" rx="4" fill="#0D9488"/>
+    <text x="1216" y="1094" font-size="17.5" font-weight="800" fill="#0F172A">不变量三 · 数字接地可追溯 <tspan fill="#0F766E" font-size="13" font-weight="600">Grounded</tspan></text>
+    <text x="1216" y="1122" font-size="13" fill="#475569">回答中每个数字必须来自某步工具观察 JSON</text>
+    <text x="1216" y="1146" font-size="13" fill="#475569">不通过则退回确定性模板句；评测幻觉字段数为 0</text>
+  </g>
+
+  <!-- ===================== Footer ===================== -->
+  <text x="48" y="1232" font-size="13" fill="#94A3B8">自研部分 MIT · 62 项单测全绿 · GitHub Actions CI 通过后自动部署公网 · 71 条冻结语料一键复跑 · prompt v4-20261025</text>
+  <text x="1732" y="1232" font-size="13" fill="#94A3B8" text-anchor="end">架构图 · 2026-11</text>
+</svg>
+</body>
+</html>
