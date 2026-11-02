@@ -47,6 +47,9 @@
 }
 
 * { box-sizing: border-box; }
+/* hidden 属性必须压过任何类里的 display 规则（实测：.pv-form/.usage-bar 是 flex，
+   会把带 hidden 的元素顶出来——登录框字段/用量条曾因此漏显） */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; overflow-x: hidden; }
 body {
   margin: 0; padding: 0;
@@ -137,6 +140,15 @@ a:focus-visible, button:focus-visible, select:focus-visible, summary:focus-visib
 .nav-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: #5a6053; }
 .nav-dot.ok { background: var(--jade-soft); box-shadow: 0 0 8px rgba(76, 174, 135, .8); }
 .nav-dot.bad { background: #d0694a; }
+
+/* 登录者徽章（侧边栏底部）：名字 + 角色徽章 + 退出 */
+.me-chip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 22px; }
+.me-chip .me-name { color: rgba(215, 220, 206, .85); font-weight: 600; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.me-chip .me-badge { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; line-height: 1.6; }
+.me-chip .me-badge.admin { background: rgba(129, 140, 248, .18); color: #a5b4fc; border: 1px solid rgba(129, 140, 248, .35); }
+.me-chip .me-badge.member { background: rgba(76, 174, 135, .15); color: var(--jade-soft); border: 1px solid rgba(76, 174, 135, .3); }
+.me-chip a { color: rgba(215, 220, 206, .55); text-decoration: none; }
+.me-chip a:hover { color: var(--gold-soft); }
 
 .shell-main { margin-left: var(--nav-w); min-height: 100vh; }
 .wrap { max-width: 1060px; margin: 0 auto; padding: 34px 30px 90px; }

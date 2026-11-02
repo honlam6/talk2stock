@@ -10,8 +10,8 @@
 <div class="wrap" style="max-width:780px">
   <div id="ph"></div>
 
-  <!-- ERP 连接 -->
-  <div class="card">
+  <!-- ERP 连接（仅管理员） -->
+  <div class="card" id="erpCard">
     <h2><span class="bar"></span>ERP 连接
       <span class="flex-1"></span>
       <span id="erpBadge"></span>
@@ -41,34 +41,72 @@
     <div id="masterStat" class="hint" style="margin-top:10px"></div>
   </div>
 
-  <!-- LLM 档案 -->
-  <div class="card">
-    <h2><span class="bar"></span>AI 模型档案</h2>
+  <!-- 共享模型（管理员可编辑，成员只读状态行） -->
+  <div class="card" id="sharedCard">
+    <h2><span class="bar"></span>共享模型
+      <span class="flex-1"></span>
+      <span class="hint" id="sharedScope"></span>
+    </h2>
     <div class="hint" style="margin:-6px 0 14px">支持任何 OpenAI 兼容接口（DeepSeek / 通义 / Moonshot / 本地 Ollama / 自建网关）。密钥只存本机服务端。</div>
 
-    <!-- 今日 AI 用量（成本可观测）：parse/agent/insight 分用途 token 台账 -->
-    <div id="usageBox" class="usage-bar" hidden></div>
+    <!-- 成员视角：只读状态行 -->
+    <div id="sharedReadonly" hidden></div>
 
-    <div id="profList"></div>
+    <!-- 管理员视角：完整列表 + 表单（用量条是全局成本，也仅管理员可见） -->
+    <div id="sharedAdmin">
+      <!-- 今日 AI 用量（成本可观测）：parse/agent/insight 分用途 token 台账 -->
+      <div id="usageBox" class="usage-bar" hidden></div>
+      <div id="profList"></div>
+      <details class="fold" id="addFold">
+        <summary>＋ 添加 / 编辑模型</summary>
+        <div class="fold-body">
+          <div class="grid">
+            <div class="field"><label>显示名</label><input id="p_name" placeholder="例如 DeepSeek"></div>
+            <div class="field"><label>模型名</label><input id="p_model" placeholder="deepseek-chat"></div>
+          </div>
+          <div class="grid" style="grid-template-columns:1fr">
+            <div class="field"><label>Base URL</label><input id="p_base" placeholder="https://api.deepseek.com/v1"></div>
+          </div>
+          <div class="grid">
+            <div class="field"><label>API Key</label><input id="p_key" type="password" placeholder="sk-…（编辑时留空表示不修改）"></div>
+            <div class="field"><label>temperature</label><input id="p_temp" type="number" step="0.1" value="0"></div>
+          </div>
+          <div class="row-btns">
+            <button class="btn btn-ghost" id="p_test">测试连接</button>
+            <button class="btn btn-primary" id="p_save">保存</button>
+            <span class="hint" id="p_msg"></span>
+          </div>
+        </div>
+      </details>
+    </div>
+  </div>
 
-    <details class="fold" id="addFold">
-      <summary>＋ 添加 / 编辑模型</summary>
+  <!-- 我的模型（每个登录者自己的，仅对自己生效） -->
+  <div class="card" id="myCard">
+    <h2><span class="bar"></span>我的模型
+      <span class="flex-1"></span>
+      <span class="hint" id="myScope">仅对你自己生效</span>
+    </h2>
+    <div class="hint" style="margin:-6px 0 14px">在这里配置你自己的模型档案：启用后你的录单解析 / 问一问都用它；没配置或没启用时自动回落到共享模型。密钥只存在服务端你自己的档案里。</div>
+    <div id="myList"></div>
+    <details class="fold" id="myFold">
+      <summary>＋ 添加 / 编辑我的模型</summary>
       <div class="fold-body">
         <div class="grid">
-          <div class="field"><label>显示名</label><input id="p_name" placeholder="例如 DeepSeek"></div>
-          <div class="field"><label>模型名</label><input id="p_model" placeholder="deepseek-chat"></div>
+          <div class="field"><label>显示名</label><input id="m_name" placeholder="例如 我的DeepSeek"></div>
+          <div class="field"><label>模型名</label><input id="m_model" placeholder="deepseek-chat"></div>
         </div>
         <div class="grid" style="grid-template-columns:1fr">
-          <div class="field"><label>Base URL</label><input id="p_base" placeholder="https://api.deepseek.com/v1"></div>
+          <div class="field"><label>Base URL</label><input id="m_base" placeholder="https://api.deepseek.com/v1"></div>
         </div>
         <div class="grid">
-          <div class="field"><label>API Key</label><input id="p_key" type="password" placeholder="sk-…（编辑时留空表示不修改）"></div>
-          <div class="field"><label>temperature</label><input id="p_temp" type="number" step="0.1" value="0"></div>
+          <div class="field"><label>API Key</label><input id="m_key" type="password" placeholder="sk-…（编辑时留空表示不修改）"></div>
+          <div class="field"><label>temperature</label><input id="m_temp" type="number" step="0.1" value="0"></div>
         </div>
         <div class="row-btns">
-          <button class="btn btn-ghost" id="p_test">测试连接</button>
-          <button class="btn btn-primary" id="p_save">保存</button>
-          <span class="hint" id="p_msg"></span>
+          <button class="btn btn-ghost" id="m_test">测试连接</button>
+          <button class="btn btn-primary" id="m_save">保存</button>
+          <span class="hint" id="m_msg"></span>
         </div>
       </div>
     </details>
@@ -80,11 +118,23 @@
 <script src="/common.js"></script>
 <script>
 shell('/settings');
-$('#ph').innerHTML = pageHead('SETTINGS', '设置', 'ERP 连接 · AI 模型档案');
+$('#ph').innerHTML = pageHead('SETTINGS', '设置', 'ERP 连接 · 共享模型 · 我的模型');
 
-let CFG = null, editKey = null;
+let CFG = null, ME = null, editKey = null, myEditKey = null;
 
-// ---------- ERP 连接 ----------
+// ---------- 当前登录者 ----------
+async function loadMe() {
+  ME = await api('/api/auth/me');
+  const admin = ME.role === 'admin';
+  document.body.classList.add(admin ? 'is-admin' : 'is-member');
+  $('#erpCard').style.display = admin ? '' : 'none';
+  $('#sharedAdmin').style.display = admin ? '' : 'none';
+  $('#sharedReadonly').hidden = admin;
+  $('#sharedScope').textContent = admin ? '管理员可编辑' : '由管理员配置 · 全员默认使用';
+  return ME;
+}
+
+// ---------- ERP 连接（管理员） ----------
 async function loadCfg() {
   const r = await api('/api/config');
   CFG = r.config || r;
@@ -154,7 +204,7 @@ async function refreshMasterStat() {
   }
 }
 
-// ---------- LLM 档案 ----------
+// ---------- 共享模型（管理员） ----------
 function renderProfs() {
   const llm = (CFG && CFG.llm) || { profiles: {} };
   const ps = llm.profiles || {};
@@ -172,7 +222,7 @@ function renderProfs() {
         <button class="btn btn-sm btn-danger" data-del="${esc(k)}">删除</button>
       </div>
     </div>`;
-  }).join('') : '<div class="muted" style="padding:6px 0 12px">还没有模型档案，展开下面「添加」新建一个。</div>';
+  }).join('') : '<div class="muted" style="padding:6px 0 12px">还没有共享模型，展开下面「添加」新建一个。</div>';
 }
 
 $('#profList').onclick = async e => {
@@ -182,12 +232,12 @@ $('#profList').onclick = async e => {
     if (b.dataset.use) {
       const r = await api('/api/config/llm', { method: 'POST', body: { action: 'activate', key: b.dataset.use } });
       if (!r.ok) { toast(r.message || '切换失败', 'bad'); return; }
-      await loadCfg(); toast('已切换');
+      await loadCfg(); await loadMy(); toast('已切换');
     } else if (b.dataset.del) {
-      if (!confirm('确定删除这个模型档案？')) return;
+      if (!confirm('确定删除这个共享模型？')) return;
       const r = await api('/api/config/llm?key=' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
       if (!r.ok) { toast(r.message || '删除失败', 'bad'); return; }
-      await loadCfg(); toast('已删除');
+      await loadCfg(); await loadMy(); toast('已删除');
     } else if (b.dataset.edit) {
       const p = (CFG.llm.profiles || {})[b.dataset.edit] || {};
       editKey = b.dataset.edit;
@@ -233,15 +283,126 @@ $('#p_save').onclick = async () => {
     $('#p_temp').value = 0;
     $('#p_msg').textContent = '';
     $('#addFold').open = false;
-    await loadCfg();
+    await loadCfg(); await loadMy();
     toast('已保存');
+  } catch (e) { toast(e.message, 'bad'); }
+};
+
+// ---------- 我的模型（每个登录者自己的） ----------
+let MINE = { profiles: {}, active: '' }, SHARED = null;
+
+async function loadMy() {
+  const r = await api('/api/my/model');
+  MINE = r.mine || { profiles: {}, active: '' };
+  SHARED = r.shared || null;
+  renderSharedReadonly();
+  renderMy();
+}
+
+function renderSharedReadonly() {
+  const el = $('#sharedReadonly');
+  if (!el) return;
+  el.innerHTML = SHARED
+    ? `<div class="prof-item active"><div class="info">
+         <div class="nm">${esc(SHARED.name || SHARED.key)} <span class="tag tag-ok">使用中</span></div>
+         <div class="dt">当前共享模型：${esc(SHARED.model || '')}（地址与密钥仅管理员可见）</div>
+       </div></div>`
+    : '<div class="muted" style="padding:6px 0 12px">管理员还没有配置共享模型。可在下方「我的模型」里添加你自己的。</div>';
+}
+
+function renderMy() {
+  const ps = MINE.profiles || {};
+  const keys = Object.keys(ps);
+  $('#myList').innerHTML = keys.length ? keys.map(k => {
+    const p = ps[k], on = MINE.active === k;
+    return `<div class="prof-item${on ? ' active' : ''}">
+      <div class="info">
+        <div class="nm">${esc(p.name || k)} ${on ? '<span class="tag tag-ok">我的当前模型</span>' : ''}</div>
+        <div class="dt">${esc(p.model || '')} · ${esc(p.base_url || '')} · Key ${esc(p.api_key || '未设置')}</div>
+      </div>
+      <div class="row-btns" style="margin:0">
+        ${on ? '' : `<button class="btn btn-sm" data-muse="${esc(k)}">启用</button>`}
+        <button class="btn btn-sm btn-ghost" data-medit="${esc(k)}">编辑</button>
+        <button class="btn btn-sm btn-danger" data-mdel="${esc(k)}">删除</button>
+      </div>
+    </div>`;
+  }).join('') : '<div class="muted" style="padding:6px 0 12px">还没有自己的模型。不配置也完全能用（走共享模型）。</div>';
+}
+
+$('#myList').onclick = async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  try {
+    if (b.dataset.muse) {
+      const r = await api('/api/my/model', { method: 'POST', body: { action: 'activate', key: b.dataset.muse } });
+      if (!r.ok) { toast(r.message || '切换失败', 'bad'); return; }
+      await loadMy(); toast('已切换为我的当前模型');
+    } else if (b.dataset.mdel) {
+      if (!confirm('确定删除这个我自己的模型？')) return;
+      const r = await api('/api/my/model', { method: 'POST', body: { action: 'delete', key: b.dataset.mdel } });
+      if (!r.ok) { toast(r.message || '删除失败', 'bad'); return; }
+      await loadMy(); toast('已删除');
+    } else if (b.dataset.medit) {
+      const p = (MINE.profiles || {})[b.dataset.medit] || {};
+      myEditKey = b.dataset.medit;
+      $('#m_name').value = p.name || ''; $('#m_base').value = p.base_url || '';
+      $('#m_model').value = p.model || ''; $('#m_temp').value = p.temperature || 0;
+      $('#m_key').value = '';
+      $('#myFold').open = true;
+      $('#m_msg').textContent = '正在编辑：' + (p.name || myEditKey) + '（Key 留空表示不修改）';
+    }
+  } catch (err) { toast(err.message, 'bad'); }
+};
+
+function formMy() {
+  return {
+    name: $('#m_name').value.trim(),
+    base_url: $('#m_base').value.trim(),
+    api_key: $('#m_key').value.trim(),
+    model: $('#m_model').value.trim(),
+    temperature: num($('#m_temp').value),
+  };
+}
+
+$('#m_test').onclick = async () => {
+  const p = formMy();
+  if (!p.base_url || !p.model) { toast('请填 Base URL 和模型名', 'warn'); return; }
+  $('#m_msg').textContent = '测试中…';
+  try {
+    const r = await api('/api/my/model', { method: 'POST', body: { action: 'test', key: myEditKey || '', profile: p } });
+    $('#m_msg').innerHTML = r.ok
+      ? '<span style="color:var(--jade)">✓ ' + esc(r.message || '连接成功') + '</span>'
+      : '<span style="color:var(--rust)">✗ ' + esc(r.message || '连接失败') + '</span>';
+  } catch (e) { $('#m_msg').textContent = e.message; }
+};
+
+$('#m_save').onclick = async () => {
+  const p = formMy();
+  if (!p.base_url || !p.model) { toast('请填 Base URL 和模型名', 'warn'); return; }
+  const key = myEditKey || (p.name || p.model).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 24) || 'model';
+  try {
+    const r = await api('/api/my/model', { method: 'POST', body: { action: 'save', key, profile: p, activate: true } });
+    if (!r.ok) { toast(r.message || '保存失败', 'bad'); return; }
+    myEditKey = null;
+    ['m_name', 'm_base', 'm_key', 'm_model'].forEach(i => { $('#' + i).value = ''; });
+    $('#m_temp').value = 0;
+    $('#m_msg').textContent = '';
+    $('#myFold').open = false;
+    await loadMy();
+    toast('已保存并启用（仅对你生效）');
   } catch (e) { toast(e.message, 'bad'); }
 };
 
 // ---------- 初始化 ----------
 (async () => {
-  try { await loadCfg(); } catch (e) { toast(e.message, 'bad'); }
-  refreshMasterStat();
+  try {
+    await loadMe();
+    if (ME.role === 'admin') {
+      try { await loadCfg(); } catch (e) { toast(e.message, 'bad'); }
+      refreshMasterStat();
+    }
+    await loadMy();
+  } catch (e) { toast(e.message, 'bad'); }
   const erpLink = document.getElementById('erpLink');
   if (erpLink) erpLink.href = location.protocol + '//' + location.hostname + ':8080';
 })();

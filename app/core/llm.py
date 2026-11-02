@@ -296,6 +296,7 @@ def _record_usage(prof, purpose, usage, latency_ms):
             "profile": prof.get("name") or prof.get("key") or "",
             "model": prof.get("model", ""),
             "purpose": purpose or "",
+            "user": cfgmod.current_request_user() or "",   # 登录者归因：谁的调用记谁头上
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "completion_tokens": usage.get("completion_tokens", 0),
             "estimated": bool(usage.get("estimated")),

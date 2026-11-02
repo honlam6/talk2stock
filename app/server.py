@@ -13,12 +13,16 @@
     GET    /dashboard             → 经营看板
     GET    /settings              → 设置（ERP 连接 + 模型档案）
     GET    /static/*              → 静态文件（app/web/ 下）
-    GET    /api/config            → 读配置（脱敏）
-    POST   /api/config/erp        → 保存 ERP 连接
-    GET    /api/config/llm        → LLM 档案列表
-    POST   /api/config/llm        → 新增/更新/切换启用（action=save|activate|delete）
-    DELETE /api/config/llm?key=x  → 删除档案
-    POST   /api/config/llm/test   → 测试档案连通性
+    GET    /api/config            → 读配置（脱敏；仅管理员）
+    POST   /api/config/erp        → 保存 ERP 连接（仅管理员）
+    GET    /api/config/llm        → 共享 LLM 档案列表（仅管理员）
+    POST   /api/config/llm        → 新增/更新/切换启用（action=save|activate|delete；仅管理员）
+    DELETE /api/config/llm?key=x  → 删除档案（仅管理员）
+    POST   /api/config/llm/test   → 测试档案连通性（仅管理员）
+    POST   /api/auth/login        → ERP 账号登录 → 会话令牌（无需凭证）
+    GET    /api/auth/me           → 当前登录者与角色
+    GET    /api/my/model          → 我的模型档案（私有，key 脱敏）+ 共享档案只读状态
+    POST   /api/my/model          → 我的模型管理（action=save|activate|delete|test）
     POST   /api/parse             → 自然语言 → draft + 预览 + 确认令牌
     POST   /api/resolve           → draft → 预览（只读）+ 确认令牌
     POST   /api/commit            → draft + 确认令牌 → 真正写入 ERP（无令牌一律拒绝）
@@ -36,6 +40,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,6 +51,7 @@ if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
 from core import config as cfgmod          # noqa: E402
+from core import auth as authmod           # noqa: E402
 from core import draft as draftmod          # noqa: E402
 from core import erp as erpmod              # noqa: E402
 from core import gate as gatemod            # noqa: E402
@@ -195,6 +201,112 @@ def api_llm_test(_q, body):
     return {"ok": bool(ok), "message": msg}
 
 
+# --------------------------------------------------------------------------
+# 登录 / 我的模型：ERP 账号联动 + 用户级私有档案（密钥存服务端，不出仓库）
+# --------------------------------------------------------------------------
+def api_auth_login(_q, body):
+    """ERP 账号密码登录（MD5 在服务端做，密码不落盘不进日志）。"""
+    login = (body.get("login_name") or body.get("loginName") or "").strip()
+    pwd = body.get("password") or ""
+    out = authmod.login_and_issue(login, pwd)
+    return {k: v for k, v in out.items() if k != "token"} if not out.get("ok") else out
+
+
+def api_auth_me(_q, _body):
+    """当前登录者与角色。未开启鉴权（本地模式）时返回 admin。"""
+    if not cfgmod.require_auth():
+        return {"ok": True, "role": "admin", "login": "", "username": "本地模式", "local": True}
+    return {"ok": True, "role": cfgmod.current_role(),
+            "login": cfgmod.current_request_user() or "",
+            "username": cfgmod.current_username() or ""}
+
+
+def _my_model_view():
+    login = cfgmod.current_request_user()
+    mine = authmod.masked_user_profiles(login) if login else {"profiles": {}, "active": ""}
+    g = cfgmod.load().get("llm", {})
+    gk = g.get("active") or ""
+    gp = (g.get("profiles") or {}).get(gk) or {}
+    # 共享档案只给显示名与模型名（成员不可见 base_url / key）
+    shared = {"key": gk, "name": gp.get("name") or gk, "model": gp.get("model") or ""} if gk else None
+    return {"ok": True, "mine": mine, "shared": shared, "role": cfgmod.current_role()}
+
+
+def api_my_model_get(_q, _body):
+    return _my_model_view()
+
+
+def api_my_model_post(_q, body):
+    login = cfgmod.current_request_user()
+    if not login:
+        return {"ok": False, "message": "请先登录后再管理我的模型"}
+    action = (body.get("action") or "save").strip()
+    key = (body.get("key") or "").strip()
+
+    if action == "save":
+        prof = body.get("profile") if isinstance(body.get("profile"), dict) else {}
+        name = (prof.get("name") or "").strip()
+        base_url = (prof.get("base_url") or "").strip()
+        model = (prof.get("model") or "").strip()
+        api_key = prof.get("api_key") or ""
+        if "****" in api_key:      # 前端回传的脱敏串 → 视为不修改
+            api_key = ""
+        if not base_url:
+            return {"ok": False, "message": "请填写 Base URL（如 https://api.openai.com/v1）"}
+        if not model:
+            return {"ok": False, "message": "请填写模型名（如 gpt-4o-mini）"}
+        try:
+            temp = float(prof.get("temperature", 0) or 0)
+        except Exception:
+            temp = 0.0
+        key = (authmod._pf_key(key) or authmod._pf_key(name)
+               or authmod._pf_key(model) or "model")
+        old = (authmod.user_profiles(login).get("profiles") or {}).get(key) or {}
+        if not api_key and not old.get("api_key"):
+            return {"ok": False, "message": "请填写 API Key（编辑时留空表示不修改）"}
+        ok, msg = authmod.save_user_profile(login, key, {
+            "name": name or key, "base_url": base_url, "api_key": api_key,
+            "model": model, "temperature": temp,
+        })
+        if not ok:
+            return {"ok": False, "message": msg or "保存失败"}
+        if body.get("activate"):
+            authmod.set_user_active(login, key)
+        return {"ok": True, "message": "已保存到「我的模型」", **_my_model_view()}
+
+    if action == "activate":
+        if not key or not authmod.set_user_active(login, key):
+            return {"ok": False, "message": "没有这个档案"}
+        return {"ok": True, "message": "已切换为我的当前模型", **_my_model_view()}
+
+    if action == "delete":
+        ok, msg = authmod.delete_user_profile(login, key)
+        if not ok:
+            return {"ok": False, "message": msg}
+        return {"ok": True, "message": "已删除", **_my_model_view()}
+
+    if action == "test":
+        prof = body.get("profile") if isinstance(body.get("profile"), dict) else dict(body)
+        stored = (authmod.user_profiles(login).get("profiles") or {}).get(key) or {}
+        api_key = prof.get("api_key") or ""
+        if not api_key or "****" in api_key:
+            api_key = stored.get("api_key") or ""
+        merged = {
+            "base_url": (prof.get("base_url") or stored.get("base_url") or "").strip(),
+            "model": (prof.get("model") or stored.get("model") or "").strip(),
+            "api_key": api_key,
+            "temperature": prof.get("temperature", stored.get("temperature", 0)),
+        }
+        if not merged["base_url"] or not merged["model"]:
+            return {"ok": False, "message": "请先填写 Base URL 和模型名"}
+        if not merged["api_key"]:
+            return {"ok": False, "message": "缺少 API Key，请填写后再测试"}
+        ok, msg = llmmod.test_profile(merged)
+        return {"ok": bool(ok), "message": msg}
+
+    return {"ok": False, "message": "未知操作：%s" % action}
+
+
 def api_master(_q, _body):
     erp = _erp()
     def names(rows, field):
@@ -285,6 +397,27 @@ def api_resolve(_q, body):
     return {"ok": True, "draft": d, "preview": preview}
 
 
+def _erp_operator_log(erp, operator, d, res):
+    """向 ERP /log/add 写操作日志，归因到真实登录者（原 ERP「日志」页按人可查）。"""
+    biz = (getattr(draftmod, "BIZ_LABEL", {}) or {}).get(d.get("biz"), d.get("biz") or "")
+    op = operator or cfgmod.current_username() or "管理员"
+    content = "Talk2Stock 录单：操作人 %s，%s，单据编号 %s，金额 %s 元" % (
+        op, biz, res.get("number") or "-", res.get("total") or "-")
+    body = {
+        "operation": "Talk2Stock 录单",
+        "content": content[:490],
+        "clientIp": "talk2stock-agent",
+        "createTime": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "status": 0,
+    }
+    uid = cfgmod.current_erp_uid()
+    if uid:
+        body["userId"] = int(uid)
+    # 注意：不要传 tenantId——jshERP 的租户拦截器会在 INSERT 里自动补 tenant_id，
+    # 请求体再带一次会触发 "Column 'tenant_id' specified twice"（实测踩过）
+    erp._req("/log/add", "POST", body)
+
+
 def api_commit(_q, body):
     d = _pick_draft(body)
     if not d:
@@ -305,6 +438,14 @@ def api_commit(_q, body):
     if res.get("ok"):
         diff = gatemod.diff_drafts(meta.get("draft_resolved") or {}, d)
         gatemod.log_write(meta, d, res, diff=diff, source=source, raw_text=raw_text, operator=operator)
+        # ERP 侧留痕：往 ERP 自带日志模块写一条「谁通过 Talk2Stock 录的单」。
+        # 单据 creator 跟写入 token 走（= 服务账号，ERP 机制限制），但日志按
+        # userId 展示操作人——成员登录时其 ERP userId 已签进会话令牌。
+        # 留痕失败不阻断业务（Agent 侧 audit.jsonl 有完整记录），静默即可。
+        try:
+            _erp_operator_log(erp, operator, d, res)
+        except Exception:
+            pass
     # 写库后主数据/单据可能变了，清缓存让下次预览和看板拿到最新
     try:
         erp.invalidate("")
@@ -500,6 +641,10 @@ ROUTES = {
     ("POST", "/api/config/llm"): api_llm_post,
     ("DELETE", "/api/config/llm"): api_llm_delete,
     ("POST", "/api/config/llm/test"): api_llm_test,
+    ("POST", "/api/auth/login"): api_auth_login,
+    ("GET", "/api/auth/me"): api_auth_me,
+    ("GET", "/api/my/model"): api_my_model_get,
+    ("POST", "/api/my/model"): api_my_model_post,
     ("GET", "/api/master"): api_master,
     ("GET", "/api/dashboard"): api_dashboard,
     ("GET", "/api/history"): api_history,
@@ -531,7 +676,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-T2S-Pass, X-Operator")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
@@ -546,13 +691,24 @@ class Handler(BaseHTTPRequestHandler):
         self._send(302, b"", "text/plain; charset=utf-8", {"Location": to})
 
     # ---- 鉴权 ----
-    def _auth_ok(self):
+    def _session(self):
+        """解析当前请求凭证 → (role, login, username) 或 None。
+
+        优先级：会话令牌（/api/auth/login 用 ERP 账号签发的 HMAC 令牌）
+        → 静态口令 T2S_DEMO_PASS（视为管理员后备通道）。
+        """
         given = self.headers.get("X-T2S-Pass") or ""
         if not given:
             auth = self.headers.get("Authorization") or ""
             if auth.lower().startswith("bearer "):
                 given = auth[7:].strip()
-        return cfgmod.check_pass(given)
+        p = authmod.verify_session(given)
+        if p:
+            return (p.get("r") or "member"), (p.get("u") or ""), \
+                   (p.get("n") or p.get("u") or ""), (p.get("uid") or None)
+        if cfgmod.check_pass(given):
+            return "admin", "", "管理员", None
+        return None
 
     # ---- 输入 ----
     def _body(self):
@@ -626,10 +782,32 @@ class Handler(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(parsed.query)
 
         if path.startswith("/api"):
-            # 可选访问口令：设 T2S_REQUIRE_AUTH=1 时，所有 /api 请求必须带对口令
-            if cfgmod.require_auth() and not self._auth_ok():
-                self._json({"ok": False, "need_auth": True,
-                            "message": "该服务已开启访问口令（请检查 T2S_DEMO_PASS）"}, 401)
+            # 登录接口自身不需要凭证（拿到会话之前唯一可用的入口），必须最先放行
+            if method == "POST" and path == "/api/auth/login":
+                try:
+                    body = self._body()
+                except ValueError as e:
+                    self._json({"ok": False, "message": str(e)}, 400)
+                    return
+                self._json(api_auth_login(q, body))
+                return
+            # 鉴权：会话令牌（ERP 账号登录签发）优先，静态口令 = 管理员后备通道。
+            # T2S_REQUIRE_AUTH=1 时全部 /api 必须带凭证；未开启时视为本地模式（全权）。
+            sess = self._session()
+            if cfgmod.require_auth():
+                if not sess:
+                    self._json({"ok": False, "need_auth": True,
+                                "message": "请先登录（使用 ERP 账号）"}, 401)
+                    return
+                role, login, uname, uid = sess
+            else:
+                role, login, uname, uid = sess if sess else ("admin", "", "", None)
+            cfgmod.set_request_user(login, role, uname, uid)
+            # 管理员门禁：/api/config/* 是共享配置（ERP 连接 + 共享模型档案），
+            # 成员在接口层就被拒绝，而不是前端藏一下
+            if path.startswith("/api/config") and role != "admin":
+                self._json({"ok": False, "need_admin": True,
+                            "message": "该接口仅管理员可用（共享配置）"}, 403)
                 return
             # SSE 流式问答：agent 每步即推（事件：start/step/done/error）
             if method == "POST" and path == "/api/ask/stream":
@@ -685,8 +863,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": False, "message": str(e)}, 400)
                 return
             try:
-                # 操作人标识（基线实验归因用）：请求头优先，其次 body
-                op = (self.headers.get("X-Operator") or "").strip()[:40]
+                # 操作人标识（基线实验归因用）：登录名最可靠，其次请求头，最后 body
+                op = login or (self.headers.get("X-Operator") or "").strip()[:40]
                 if op and isinstance(body, dict):
                     body.setdefault("_operator", op)
                 self._json(fn(q, body))

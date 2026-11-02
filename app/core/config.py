@@ -19,6 +19,7 @@ config.json 结构：
   "ui": {"default_depot_in": "原料仓", "default_depot_out": "成品仓", "default_account_id": 25}
 }
 """
+import contextvars
 import json
 import os
 import threading
@@ -298,13 +299,66 @@ def set_active(key):
 
 
 def active_profile():
-    """返回当前启用的 LLM 档案；未配置返回 None。缺 Key 也返回（便于明确提示）。"""
+    """返回当前请求生效的 LLM 档案；未配置返回 None。缺 Key 也返回（便于明确提示）。
+
+    回退链：登录者的私有档案（若配了）→ 共享档案。私有档案存在请求上下文里
+    （server.py 在每个请求线程开头 set_request_user），CLI / selfcheck 等无登录
+    场景上下文为空，行为与之前完全一致。
+    """
+    u = _request_user.get()
+    if u:
+        from . import auth
+        try:
+            mine = auth.user_active_profile(u)
+        except Exception:
+            mine = None
+        if mine:
+            return mine
     cfg = load()
     key = cfg["llm"].get("active")
     prof = cfg["llm"].get("profiles", {}).get(key)
     if prof and prof.get("base_url") and prof.get("model"):
         return dict(prof, key=key)
     return None
+
+
+# --------------------------------------------------------------------------
+# 请求级用户上下文（ThreadingHTTPServer 每请求一个线程，ContextVar 线程隔离）
+# --------------------------------------------------------------------------
+_request_user = contextvars.ContextVar("t2s_request_user", default=None)
+_request_role = contextvars.ContextVar("t2s_request_role", default="")
+_request_uname = contextvars.ContextVar("t2s_request_uname", default="")
+_request_uid = contextvars.ContextVar("t2s_request_uid", default=None)
+
+
+def set_request_user(login, role="", username="", uid=None):
+    """请求处理开头调用：标记当前登录者（None = 未登录 / 本地模式）。
+
+    uid 是登录者的 ERP userId（签在会话令牌里），写 ERP 操作日志归因用。
+    静态口令通道 login 为空但 role 仍要生效（= admin 后备）。
+    """
+    _request_user.set(str(login) if login else None)
+    _request_role.set(str(role) or "")
+    _request_uname.set(str(username) or "")
+    _request_uid.set(int(uid) if uid else None)
+
+
+def current_request_user():
+    return _request_user.get()
+
+
+def current_role():
+    """当前请求的角色（'admin' / 'member'）。server 端每个请求开头都会显式设置。"""
+    return _request_role.get() or ""
+
+
+def current_username():
+    return _request_uname.get() or _request_user.get() or ""
+
+
+def current_erp_uid():
+    """当前登录者的 ERP userId（未登录 / 本地模式 / 静态口令 = None）。"""
+    return _request_uid.get()
 
 
 def public(cfg=None):

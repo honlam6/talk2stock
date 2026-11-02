@@ -50,6 +50,8 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 | 主数据候选点选 | 名字没对上时给 top3 相似候选，确认卡上点一下即重新预览，不用重新解析 |
 | 可复现评测 | `eval/` 60 条冻结语料 + 打分脚本（整单全对率 / 字段级准确率 / 幻觉字段数 / 延迟 / token 均值），一条命令跑分 |
 | 多模型档案 | 任意 OpenAI 兼容接口都能配（OpenAI / DeepSeek / 通义 / Kimi / 本地 Ollama…），页面即可配置、切换、测试；支持自签证书网关（`insecure`）与丢弃 system 角色的网关（`merge_system`） |
+| **ERP 账号联动登录 + 两级权限** | 成员用 **ERP 账号密码**登录（服务端转发 ERP 校验，密码不落盘），会话为 HMAC 无状态签名（默认 30 天）；管理员 = ERP `ismanager=1` 或 `T2S_ADMINS` 名单。共享模型档案 / ERP 连接仅管理员可见可改（接口层 403，非前端隐藏）；每人可另配**私有模型档案**（密钥存服务端本人档案，录单/问答优先用它），设置页成员只见共享模型只读状态行 |
+| **双端留痕** | Agent 侧：每次写入落 `audit.jsonl`（operator=登录名）；ERP 侧：录单成功自动往 ERP 自带日志模块写一条「操作人 X 通过 Talk2Stock 录单」（按 userId 归因，原 ERP「日志」页按人可查）；token 用量按登录者分账（usage.jsonl `user` 字段） |
 | 密钥不进仓库 | 密钥只存 `app/.env`（已 `.gitignore`）；`config.json` 也在忽略列表里，公开仓库只带 `config.example.json` 模板 |
 
 ---
@@ -250,8 +252,10 @@ cp app/.env.example app/.env
 | `T2S_ERP_PASS` | ERP 登录密码（明文，服务端会做 MD5） | 空（需填） |
 | `T2S_KEY_<档案名大写>` | 某个模型档案的 API Key，如 `T2S_KEY_DEEPSEEK` | 空 |
 | `T2S_BASE_<档案名大写>` | 覆盖某档案的网关地址（config.json 不入库，真实地址写这里） | 空 |
-| `T2S_REQUIRE_AUTH` | 设为 `1` 后所有 `/api` 接口需带访问口令 | `0`（关闭） |
-| `T2S_DEMO_PASS` | 访问口令 | `talk2stock` |
+| `T2S_REQUIRE_AUTH` | 设为 `1` 后所有 `/api` 接口需登录（ERP 账号，或管理员口令） | `0`（关闭） |
+| `T2S_DEMO_PASS` | 访问口令（开启鉴权后作为**管理员后备通道**，ERP 挂了也能进） | `talk2stock` |
+| `T2S_ADMINS` | 额外管理员名单（逗号分隔 ERP 登录名）；ERP `ismanager=1` 本来就算管理员 | 空 |
+| `T2S_SESSION_TTL_DAYS` | 登录会话有效期（天） | `30` |
 | `PORT` / `HOST` | Talk2Stock 监听端口 / 地址 | `8090` / `0.0.0.0` |
 
 ---
@@ -314,11 +318,13 @@ cd jshERP-latest/deploy && docker compose logs --tail=80 erp-backend
 
 - **密钥管理**：所有 API Key、ERP 密码只存 `app/.env`（已 `.gitignore`）。页面里配置的 Key 也会落到这里，`config.json` 永远不含密钥。**不要把填好密钥的 `.env` 提交或截图外发**；本机网关地址请配 `T2S_BASE_<档案名>` 环境变量，不要写回 `config.json`。
 - **写库闸门**：写入路径是「自然语言 → 草稿 → 确认卡 → 人工点确认 → commit」。`/api/resolve` 签发一次性确认令牌（与草稿内容 sha256 绑定，30 分钟过期），`/api/commit` 无有效令牌一律拒绝——**「无确认不写入」是服务端不变量，不是 UI 约定**；被拒的尝试同样进审计。
-- **审计与归因**：每次写入（成功或被拒）落 `app/data/audit.jsonl`，含 `operator`、原话、模型、提示词版本+hash、diff、结果。审计写入失败会打 stderr，不静默丢弃，按 10MB 轮转保留 5 份。
-- **接口鉴权**：`/api/*` 默认不鉴权（方便本地开发）。若把 8090 暴露到公网，请务必：
-  - 设 `T2S_REQUIRE_AUTH=1` 并改掉默认 `T2S_DEMO_PASS`；或
-  - 放到反向代理后用 Basic Auth / IP 白名单保护；或
-  - 直接只在内网/本机使用。
+- **审计与归因**：每次写入（成功或被拒）落 `app/data/audit.jsonl`，含 `operator`（登录后自动取 ERP 登录名）、原话、模型、提示词版本+hash、diff、结果。同时向 ERP 自带日志模块写一条「操作人 X 通过 Talk2Stock 录单」（按 userId 归因，原 ERP「日志」页可按人查）。审计写入失败会打 stderr，不静默丢弃，按 10MB 轮转保留 5 份。token 用量台账（`usage.jsonl`）带 `user` 字段，可按登录者分账。
+- **接口鉴权与登录**：`/api/*` 默认不鉴权（方便本地开发）。把 8090 暴露到公网前，**必须**设 `T2S_REQUIRE_AUTH=1` 并改掉默认 `T2S_DEMO_PASS`。开启后：
+  - **成员用 ERP 账号密码登录**（前端弹登录框；服务端转发 ERP `/user/login` 校验，MD5 在服务端做，密码不落盘、不进日志）；登录失败连续 5 次锁 60 秒，错误文案不区分「账号不存在/密码错误」；
+  - 会话令牌是 HMAC 无状态签名（复用写入闸门的密钥机制），默认 30 天，重启不失效；
+  - **两级权限**：共享模型档案与 ERP 连接（`/api/config/*`）仅管理员可用，成员在接口层收到 403；成员可配自己的私有模型档案（密钥只存服务端 `data/user_profiles.json`，0600）；
+  - **静态口令 `T2S_DEMO_PASS` = 管理员后备通道**（ERP 不可用时仍可进）；
+  - 或者退一步：放到反向代理后用 Basic Auth / IP 白名单保护，或只在内网使用。
 - **ERP 凭据**：演示账号为 `admin / cuhksz`；`jsh` 是系统自带的租户所有者（`isystem=1`），保留但不对业务开放。生产环境请再轮换。
 
 ---

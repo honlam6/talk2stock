@@ -63,19 +63,131 @@ function askInline(opt) {
 }
 async function askPass() {
   const p = await askInline({
-    title: '需要访问口令',
-    hint: '该服务开启了访问口令（T2S_DEMO_PASS）。输入后只存在本机浏览器。',
+    title: '管理员口令',
+    hint: '静态口令（T2S_DEMO_PASS）= 管理员后备通道，ERP 账号登录也可用。',
     okText: '验证并继续', password: true,
   });
   return p;
+}
+
+// ---------- 登录（ERP 账号联动） ----------
+/** 登录弹窗：默认 ERP 账号密码；可切换「管理员口令」。成功返回凭证（会话令牌/口令）。 */
+function loginModal(prefPass) {
+  return new Promise(resolve => {
+    const old = document.getElementById('__t2sLogin');
+    if (old) old.remove();
+    const mask = document.createElement('div');
+    mask.id = '__t2sLogin';
+    mask.className = 'mask show';
+    mask.setAttribute('role', 'dialog');
+    mask.setAttribute('aria-modal', 'true');
+    mask.innerHTML = `
+      <div class="modal" style="max-width:420px">
+        <button class="modal-x" aria-label="关闭">×</button>
+        <h3>登录 Talk2Stock</h3>
+        <div class="hint" style="margin-top:6px" id="__lgHint"></div>
+        <div class="pv-form" id="__lgErp">
+          <div class="pv-line"><input id="__lgUser" type="text" placeholder="ERP 账号（如 test1）"
+            autocomplete="username" spellcheck="false"
+            style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:15px"></div>
+          <div class="pv-line"><input id="__lgPwd" type="password" placeholder="ERP 密码"
+            autocomplete="current-password"
+            style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:15px"></div>
+        </div>
+        <div class="pv-form" id="__lgPassRow" hidden>
+          <div class="pv-line"><input id="__lgPass" type="password" placeholder="管理员口令"
+            autocomplete="off"
+            style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:15px"></div>
+        </div>
+        <div class="row-btns mt-4">
+          <button class="btn btn-ghost" id="__lgMode">用管理员口令登录</button>
+          <span class="hint flex-1">Enter 确认</span>
+          <button class="btn btn-primary" id="__lgOk">登录</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    let mode = prefPass ? 'pass' : 'erp';
+    const $id = s => mask.querySelector(s);
+    const user = $id('#__lgUser'), pwd = $id('#__lgPwd'), pass = $id('#__lgPass');
+    const paint = () => {
+      $id('#__lgErp').hidden = mode !== 'erp';
+      $id('#__lgPassRow').hidden = mode !== 'pass';
+      $id('#__lgHint').textContent = mode === 'erp'
+        ? '使用你的 ERP 账号登录（账号体系与 ERP 联动）。'
+        : '静态口令 = 管理员后备通道。';
+      $id('#__lgMode').textContent = mode === 'erp' ? '用管理员口令登录' : '用 ERP 账号登录';
+      (mode === 'erp' ? user : pass).focus();
+    };
+    const done = v => { if (mask._done) return; mask._done = true; if (untrap) untrap(); mask.remove(); resolve(v); };
+    const submit = async () => {
+      if (mode === 'pass') { done({ mode: 'pass', pass: pass.value }); return; }
+      if (!user.value.trim() || !pwd.value) { toast('请输入账号和密码', 'warn'); return; }
+      const ok = $id('#__lgOk');
+      ok.disabled = true; ok.classList.add('loading'); ok.textContent = '登录中…';
+      try {
+        const r = await fetch('/api/auth/login', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ login_name: user.value.trim(), password: pwd.value }) });
+        const j = await r.json();
+        if (j.ok && j.token) {
+          window.__t2sMe = { role: j.role, login: j.login, username: j.username };
+          toast('欢迎，' + (j.username || j.login), 'ok');
+          done({ mode: 'token', token: j.token });
+        } else { toast(j.message || '登录失败', 'bad'); }
+      } catch (e) { toast('登录请求失败：' + e.message, 'bad'); }
+      finally { ok.disabled = false; ok.classList.remove('loading'); ok.textContent = '登录'; }
+    };
+    $id('#__lgOk').onclick = submit;
+    $id('#__lgMode').onclick = () => { mode = mode === 'erp' ? 'pass' : 'erp'; paint(); };
+    $id('.modal-x').onclick = () => done(null);
+    mask.addEventListener('mousedown', e => { if (e.target === mask) done(null); });
+    [user, pwd, pass].forEach(inp => inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      e.stopPropagation();
+    }));
+    const untrap = trapFocus(mask.querySelector('.modal'), () => done(null));
+    paint();
+  });
+}
+
+async function askLogin() {
+  while (true) {
+    const cred = await loginModal(!!localStorage.getItem('t2s_tried_erp'));
+    if (!cred) return null;
+    if (cred.mode === 'pass') return cred.pass;
+    if (cred.mode === 'token') {
+      localStorage.setItem('t2s_tried_erp', '1');
+      return cred.token;
+    }
+  }
+}
+
+// ---------- 当前登录者徽章 ----------
+function renderUserChip() {
+  api('/api/auth/me').then(me => {
+    const el = $('#__navUser');
+    if (!el) return;
+    if (me.local) { el.innerHTML = '<span class="me-badge admin">本地模式</span>'; return; }
+    el.innerHTML = `<span class="me-name">${esc(me.username || me.login || '')}</span>` +
+      `<span class="me-badge ${me.role === 'admin' ? 'admin' : 'member'}">${me.role === 'admin' ? '管理员' : '成员'}</span>` +
+      `<a id="__navLogout" href="javascript:void 0" title="退出登录">退出</a>`;
+    const lo = $('#__navLogout');
+    if (lo) lo.onclick = () => {
+      localStorage.removeItem('t2s_pass');
+      localStorage.removeItem('t2s_tried_erp');
+      window.__t2sMe = null;
+      location.reload();
+    };
+  }).catch(() => { /* 未登录时不展示，等 401 触发登录弹窗 */ });
 }
 
 // ---------- 网络 ----------
 async function api(path, opts) {
   const o = Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts || {});
   if (!o.headers) o.headers = {};
-  const pass = localStorage.getItem('t2s_pass');
-  if (pass) o.headers['X-T2S-Pass'] = pass;
+  const cred = localStorage.getItem('t2s_pass');
+  if (cred) o.headers['X-T2S-Pass'] = cred;
   if (o.body && typeof o.body !== 'string') o.body = JSON.stringify(o.body);
   let r;
   try {
@@ -84,24 +196,28 @@ async function api(path, opts) {
     throw new Error('连接不上本地服务，请确认 server.py 还在运行');
   }
   if (r.status === 401) {
-    const p = await askPass();
-    if (p) { localStorage.setItem('t2s_pass', p); return api(path, opts); }
-    throw new Error('需要访问口令');
+    const c = await askLogin();
+    if (c) { localStorage.setItem('t2s_pass', c); renderUserChip(); return api(path, opts); }
+    throw new Error('需要登录');
   }
   const txt = await r.text();
   let j;
   try { j = JSON.parse(txt); }
   catch (e) { throw new Error('服务返回异常：' + txt.slice(0, 120)); }
+  if (r.status === 403 && j && j.need_admin) {
+    throw new Error('该页面仅管理员可用');
+  }
   return j;
 }
 
-// 操作人标识：只存本地，用于基线实验归因（写进 audit.jsonl 的 operator 字段）
+// 操作人标识：已登录时服务端以登录名为准（这里不再弹窗）；
+// 本地未登录模式下才手填一次（只存本地，用于基线实验归因，写进 audit.jsonl）
 async function ensureOperator() {
   let op = localStorage.getItem('t2s_operator');
-  if (!op) {
+  if (!op && !localStorage.getItem('t2s_pass')) {
     const v = await askInline({
       title: '你的名字或编号',
-      hint: '只存本机，用于实验记录归因（写入审计）。可留空。',
+      hint: '只存本机，用于实验记录归因（写入审计）。可留空。登录后自动使用登录名。',
       okText: '保存', maxlen: 40,
     });
     op = (v || '').trim().slice(0, 40);
@@ -971,6 +1087,7 @@ function shell(active) {
     <a class="nav-item" id="__navCmd" href="javascript:void 0" title="快捷键 Ctrl/⌘ + K"><span class="ico">⌘</span>命令面板</a>
     <div class="nav-foot">
       <div><span class="nav-dot" id="__navDot"></span><span id="__navStat">连接检查中…</span></div>
+      <div id="__navUser" class="me-chip"></div>
       <div>说一句话 · 变成一张 <b>ERP 单据</b></div>
     </div>`;
   document.body.prepend(nav);
@@ -1000,6 +1117,9 @@ function shell(active) {
     if (d) d.className = 'nav-dot bad';
     if (s) s.textContent = 'ERP 未连接';
   });
+
+  // 登录者徽章（401 时 api() 会先弹登录框，成功后再回来刷新）
+  renderUserChip();
 
   return main;
 }
