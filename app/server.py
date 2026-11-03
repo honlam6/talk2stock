@@ -56,6 +56,7 @@ from core import draft as draftmod          # noqa: E402
 from core import erp as erpmod              # noqa: E402
 from core import gate as gatemod            # noqa: E402
 from core import llm as llmmod              # noqa: E402
+from core import oplog as oplogmod          # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8090"))
 HOST = os.environ.get("HOST", "0.0.0.0")
@@ -84,6 +85,35 @@ def friendly(e):
     if "urlopen error" in low or "connection refused" in low or "timed out" in low:
         return "无法连接 ERP 服务（%s），请确认 Docker 容器已启动。" % cfgmod.load()["erp"]["base"]
     return msg
+
+
+def _log_api_call(path, t0, body, res, login):
+    """基线实验埋点：记服务端耗时与结果元数据，不记原话（原话在 audit.jsonl）。"""
+    try:
+        fields = {
+            "path": path,
+            "user": login or "",
+            "duration_ms": int((time.time() - t0) * 1000),
+        }
+        if isinstance(res, dict):
+            fields["ok"] = bool(res.get("ok"))
+            fields["message"] = str(res.get("message") or "")[:200]
+            fields["clarify"] = bool(res.get("need_clarification"))
+            if res.get("number"):
+                fields["bill_no"] = res.get("number")
+        if isinstance(body, dict):
+            text = body.get("text")
+            if isinstance(text, str):
+                fields["text_len"] = len(text)
+            d = body.get("draft")
+            if isinstance(d, dict):
+                fields["biz"] = d.get("biz") or ""
+                fields["party"] = d.get("party") or ""
+            if body.get("source"):
+                fields["source"] = str(body.get("source"))[:20]
+        oplogmod.append("api", **fields)
+    except Exception:
+        pass
 
 
 def _erp():
@@ -862,15 +892,20 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 self._json({"ok": False, "message": str(e)}, 400)
                 return
+            t0 = time.time()
             try:
                 # 操作人标识（基线实验归因用）：登录名最可靠，其次请求头，最后 body
                 op = login or (self.headers.get("X-Operator") or "").strip()[:40]
                 if op and isinstance(body, dict):
                     body.setdefault("_operator", op)
-                self._json(fn(q, body))
+                res = fn(q, body)
+                _log_api_call(path, t0, body, res, login)
+                self._json(res)
             except Exception as e:
                 sys.stderr.write(traceback.format_exc())
-                self._json({"ok": False, "message": friendly(e)}, 200)
+                msg = friendly(e)
+                _log_api_call(path, t0, body, {"ok": False, "message": msg}, login)
+                self._json({"ok": False, "message": msg}, 200)
             return
 
         if method != "GET":
