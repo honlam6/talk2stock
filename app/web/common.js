@@ -1092,6 +1092,8 @@ document.addEventListener('keydown', e => {
 
 // 首次访问给一次轻提示，4.5s 后自动消失（sessionStorage 记住，不重复骚扰）
 (function cmdkTip() {
+  // 手机端没有物理键盘：快捷提示无意义，且会盖住底部 Tab —— 直接不生成
+  if (window.matchMedia && window.matchMedia('(max-width: 900px)').matches) return;
   try {
     if (sessionStorage.getItem('t2s_cmdk_tip')) return;
     sessionStorage.setItem('t2s_cmdk_tip', '1');
