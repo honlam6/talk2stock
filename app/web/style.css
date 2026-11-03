@@ -150,6 +150,16 @@ a:focus-visible, button:focus-visible, select:focus-visible, summary:focus-visib
 .me-chip a { color: rgba(215, 220, 206, .55); text-decoration: none; }
 .me-chip a:hover { color: var(--gold-soft); }
 
+/* 账号面板（手机端「账号」Tab） */
+.acct-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.acct-name { font-size: 19px; font-weight: 700; color: var(--ink-900); }
+
+/* 窄屏：卡片标题允许换行，右上角说明落到第二行，避免「我的模\n型」式挤压 */
+@media (max-width: 640px) {
+  .card > h2 { flex-wrap: wrap; row-gap: 2px; }
+  .card > h2 .hint { flex-basis: 100%; margin-left: 20px; }
+}
+
 .shell-main { margin-left: var(--nav-w); min-height: 100vh; }
 .wrap { max-width: 1060px; margin: 0 auto; padding: 34px 30px 90px; }
 

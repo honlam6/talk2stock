@@ -160,6 +160,56 @@ async function askLogin() {
   }
 }
 
+// ---------- 账号面板（手机端「账号」Tab 入口；桌面侧边另有常驻徽章） ----------
+async function accountSheet() {
+  let me = null;
+  try { me = await api('/api/auth/me'); } catch (e) { /* 未登录时 api 已弹登录框 */ }
+  const old = document.getElementById('__t2sAcct');
+  if (old) old.remove();
+  const mask = document.createElement('div');
+  mask.id = '__t2sAcct';
+  mask.className = 'mask show';
+  mask.setAttribute('role', 'dialog');
+  mask.setAttribute('aria-modal', 'true');
+  const admin = !!(me && me.role === 'admin');
+  mask.innerHTML = `
+    <div class="modal" style="max-width:400px">
+      <button class="modal-x" aria-label="关闭">×</button>
+      <h3>账号</h3>
+      ${me ? (me.local
+        ? '<div class="hint" style="margin-top:10px">本地模式（未开启鉴权）</div>'
+        : `<div class="acct-row">
+             <div class="acct-name">${esc(me.username || me.login || '')}</div>
+             <span class="me-badge ${admin ? 'admin' : 'member'}">${admin ? '管理员' : '成员'}</span>
+           </div>
+           <div class="hint">登录名 ${esc(me.login || '')} · ERP 账号</div>`)
+        : '<div class="hint" style="margin-top:10px">未登录</div>'}
+      <div class="row-btns mt-4">
+        ${me && !me.local ? '<button class="btn btn-ghost" id="__acctOut">退出登录</button>' : ''}
+        <span class="flex-1"></span>
+        <button class="btn btn-primary" id="__acctClose">关闭</button>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  const done = () => {
+    if (mask._done) return;
+    mask._done = true;
+    if (untrap) untrap();
+    mask.remove();
+  };
+  const untrap = trapFocus(mask.querySelector('.modal'), done);
+  mask.querySelector('.modal-x').onclick = done;
+  mask.querySelector('#__acctClose').onclick = done;
+  mask.addEventListener('mousedown', e => { if (e.target === mask) done(); });
+  const out = mask.querySelector('#__acctOut');
+  if (out) out.onclick = () => {
+    done();
+    localStorage.removeItem('t2s_pass');
+    localStorage.removeItem('t2s_tried_erp');
+    location.reload();
+  };
+}
+
 // ---------- 当前登录者徽章 ----------
 function renderUserChip() {
   api('/api/auth/me').then(me => {
@@ -1094,12 +1144,15 @@ function shell(active) {
   while (document.body.children.length > 1) main.appendChild(document.body.children[1]);
   document.body.appendChild(main);
 
-  // 手机底部 Tab
+  // 手机底部 Tab（第 6 项「账号」：窄屏侧边栏隐藏，身份徽章/退出要在这里可达）
   const tab = document.createElement('div');
   tab.className = 'tabbar';
   tab.innerHTML = NAV_ITEMS.slice(0, 5).map(([h, t, i]) =>
-    `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="ico">${i}</span>${t}</a>`).join('');
+    `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="ico">${i}</span>${t}</a>`).join('')
+    + '<a href="javascript:void 0" id="__tabAcct"><span class="ico">◉</span>账号</a>';
   document.body.appendChild(tab);
+  const tabAcct = $('#__tabAcct');
+  if (tabAcct) tabAcct.onclick = () => accountSheet();
 
   const navCmd = $('#__navCmd');
   if (navCmd) navCmd.onclick = () => commandPalette();
