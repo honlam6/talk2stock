@@ -76,6 +76,29 @@ class TestGateToken(unittest.TestCase):
             ok, _, _ = self.gate.check(junk, self.DRAFT)
             self.assertFalse(ok, junk)
 
+    def test_int_float_drift_accepted(self):
+        """浏览器 JSON 往返：整数值的浮点会被收敛成整数（100.0→100），
+        令牌不得因此误判「草稿被改动」——这是线上首次确认必被拒的根因。"""
+        parsed = {"biz": "purchase_in", "party": "农夫山泉", "depot": "",
+                  "items": [{"name": "矿泉水", "qty": 100.0, "unit": "瓶",
+                             "price": 2.0, "tax_rate": 0.0}],
+                  "oper_time": "", "remark": "", "pay_amount": None}
+        from_browser = {"biz": "purchase_in", "party": "农夫山泉", "depot": "",
+                        "items": [{"name": "矿泉水", "qty": 100, "unit": "瓶",
+                                   "price": 2, "tax_rate": 0}],
+                        "oper_time": "", "remark": "", "pay_amount": None}
+        t = self.gate.issue(parsed, {"raw_text": "从农夫山泉进矿泉水100瓶"})
+        ok, _, reason = self.gate.check(t, from_browser)
+        self.assertTrue(ok, reason)
+
+    def test_float_drift_still_detects_tampering(self):
+        """数值归一不能削弱篡改检测：改了价格照样拒绝。"""
+        parsed = {"items": [{"qty": 2.0, "price": 3.5}]}
+        tampered = {"items": [{"qty": 2, "price": 999}]}
+        ok, _, r = self.gate.check(self.gate.issue(parsed), tampered)
+        self.assertFalse(ok)
+        self.assertIn("改动", r)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,9 +31,30 @@ TOKEN_TTL = 1800  # 确认令牌有效期（秒）
 _lock = threading.Lock()   # 审计日志写入锁（_append 用）
 
 
+def _canon(v):
+    """草稿规范形：把 JSON 数值类型漂移吃掉。
+
+    浏览器 JSON 往返会把整数值的浮点收敛成整数——Python 侧签发令牌时
+    qty/price/tax_rate 是 float（100.0/2.0/0.0，llm._to_num 恒返回 float），
+    经 HTTP→JS→HTTP 后前端提交的是 100/2/0。直接 json.dumps 序列化两者
+    文本不同（"100.0" vs "100"），sha256 必然不等 → 闸门误判成
+    「草稿在确认后被改动」，首次确认必被拒。这里统一把整数值浮点收敛成 int，
+    非整数值浮点保持原样（3.5 两侧本就一致）。
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    if isinstance(v, dict):
+        return {k: _canon(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_canon(x) for x in v]
+    return v
+
+
 def digest_of(draft):
     """草稿的规范哈希（键排序、紧凑分隔符），用于把令牌绑定到具体内容。"""
-    canon = json.dumps(draft, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    canon = json.dumps(_canon(draft), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
