@@ -55,6 +55,7 @@ DEFAULTS = {
     "llm": {
         "active": "",
         "profiles": {},
+        "agent_model": "",   # 问答 agent 决策专用模型（低延迟）；空 = 沿用档案模型
     },
     "ui": {
         "default_depot_in": "原料仓",
@@ -320,6 +321,30 @@ def active_profile():
     if prof and prof.get("base_url") and prof.get("model"):
         return dict(prof, key=key)
     return None
+
+
+def agent_profile():
+    """问答 agent 的决策档案：登录者显式配过私有模型时尊重其选择；
+    否则用共享档案，并可用 llm.agent_model 把决策换到低延迟模型。
+
+    推理模型在 agent loop 里实测会烧掉上万 token 做思考（单步 120s+，
+    甚至空输出），而每轮只需一个短 JSON 动作；决策与长文本生成分模型是
+    刻意的性能隔离，parse / insight 仍用用户选的档案。
+    """
+    u = _request_user.get()
+    if u:
+        from . import auth
+        try:
+            mine = auth.user_active_profile(u)
+        except Exception:
+            mine = None
+        if mine:
+            return mine
+    prof = active_profile()
+    if not prof:
+        return None
+    am = (load().get("llm") or {}).get("agent_model") or ""
+    return dict(prof, model=am) if am else prof
 
 
 # --------------------------------------------------------------------------

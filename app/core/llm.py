@@ -384,6 +384,12 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None):
     }
     if force_json:
         base["response_format"] = {"type": "json_object"}
+    # agent 每轮只输出一个短 JSON 动作；推理模型不设输出上限时实测会烧掉
+    # 上万 token 做思考（单步 120~170 秒，甚至问答整体超时）。按 purpose 给
+    # 决策类调用封顶，可用档案 agent_max_tokens 覆盖；长文本生成（parse /
+    # insight）不受影响。
+    if purpose == "agent":
+        base["max_tokens"] = int(prof.get("agent_max_tokens") or 800)
     ctx = _insecure_context() if prof.get("insecure") else None
     extra_headers = prof.get("extra_headers") or None   # 档案级自定义头（如 X-Prompt-Mode 分流）
 

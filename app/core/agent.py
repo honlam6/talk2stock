@@ -22,8 +22,8 @@ import time
 from . import config as cfgmod
 from . import llm as llmmod
 
-OBS_MAX_CHARS = 2600   # 单步观察喂回 prompt 的上限（token 预算；trace 里存全量）
-DEFAULT_MAX_STEPS = 4
+OBS_MAX_CHARS = 3000   # 单步观察喂回 prompt 的上限（token 预算；trace 里存全量）
+DEFAULT_MAX_STEPS = 6
 # token 预算只是防失控保险丝，步数预算才是主约束——必须放宽到容得下
 # 网关侧固定注入（实测 custom 模式每请求 ~8.5K 人格前缀，6000 会让第一步就熔断）
 DEFAULT_MAX_TOKENS = 40000
@@ -41,6 +41,9 @@ LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用
 信息已足够：{{"thought":"...","final":"给用户的中文最终回答"}}
 
 # 规则
+0. 你对整个 ERP 数据库有只读权限：sql_query 能查任意表（表结构见上下文）。
+   凡涉及清单、数量、计数、明细、汇总、排名、时间区间、系统配置、用户/角色等
+   专用工具没覆盖的问题，第一步就直接用 sql_query，不要在无关工具上反复试探。
 1. 最多 {max_steps} 轮工具调用，先想清楚一共需要哪几个数据，再按顺序调用。
 1a. 用户问题常包含多个子问题：每个子问题都必须有对应的工具观察支撑，全部查完
     才允许 final；只查了一部分就作答、或声称"没有记录"而实际没查，都是不允许的。
@@ -48,6 +51,9 @@ LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用
 3. final 先直接回答问题，再给关键数字（带单位），不超过四句话。
 4. 观察里没有的信息可以再调工具；确实查不到就明说「系统里没有记录」。
 5. 工具名和 args 的键必须与工具目录完全一致。
+6. sql_query 只写单条 SELECT：软删除表加 delete_flag='0'，大表带 LIMIT；
+   不确定字段名或枚举取值先用 db_schema 或 SELECT DISTINCT 探查；
+   SQL 报错就按错误信息改一次，不要放弃。
 
 # 用户问题
 {goal}"""
@@ -94,7 +100,7 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         {"type":"action","tool":..,"args":..} 决策出要调的工具、执行前推（前端显示"正在查询…"）
         {"type":"step", ...完整 step 记录}  该步执行完、trace 落定后推。
     """
-    prof = cfgmod.active_profile()
+    prof = cfgmod.agent_profile()
     if not prof:
         return {"ok": False, "message": "尚未配置 AI 模型，请先在「设置」里添加。",
                 "steps": [], "tokens": {}}
@@ -115,9 +121,12 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         prompt = LOOP_PROMPT.format(
             tool_catalog=catalog, history="\n".join(history_lines) or "（还没有）",
             max_steps=max_steps, goal=goal) + extra
+        # 全库表结构/主数据只在第一轮注入：后续轮靠 history 里的观察继续，
+        # 否则推理模型在重复的长上下文里会过度思考（实测单步 120s+ / 空输出）。
+        ctx = context_block if not history_lines else ""
         raw = llmmod._chat(prof, [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": (context_block + "\n请给出下一轮动作。").strip()},
+            {"role": "user", "content": (ctx + "\n请给出下一轮动作。").strip()},
         ], purpose="agent", collect=u)
         tokens["prompt"] += u.get("prompt_tokens", 0)
         tokens["completion"] += u.get("completion_tokens", 0)
@@ -131,9 +140,14 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         try:
             act = decide()
         except Exception as e:
-            return {"ok": False, "message": "AI 决策失败：%s" % str(e)[:120],
-                    "steps": steps, "tokens": tokens,
-                    "meta": {"model": prof.get("model", "")}}
+            # 单轮决策失败（推理模型偶发把预算烧在思考上、正文为空）不直接放弃：
+            # 把错误当观察喂回让下一轮自我纠正，步数耗尽仍可用工具模板句兜底。
+            obs = {"error": "AI 决策失败：%s" % str(e)[:120]}
+            rec = {"step": i, "thought": "", "tool": None, "ok": False, "observation": obs}
+            steps.append(rec)
+            _emit(on_event, {"type": "step", "step": rec})
+            history_lines.append(_hist(i, "上一轮决策失败，重试", "decide", {}, obs))
+            continue
 
         thought = str(act.get("thought") or "")[:200]
         final = act.get("final")

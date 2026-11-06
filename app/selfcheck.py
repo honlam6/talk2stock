@@ -53,6 +53,17 @@ def main():
     check("结算账户", lambda: "、".join(a["name"] for a in c.accounts()[:4]))
     check("单据查询", lambda: f"{len(c.all_bills())} 张")
 
+    from core import dbread
+    def _db():
+        tables = dbread.table_names()
+        if not tables:
+            raise RuntimeError("读不到表结构（erp-mysql 容器在吗？）")
+        data, _ = dbread.sql_query({"sql": "SELECT COUNT(*) AS c FROM jsh_supplier"})
+        if data.get("error"):
+            raise RuntimeError(data["error"])
+        return f"{len(tables)} 张表，SELECT 只读通道正常"
+    check("全库只读通道", _db)
+
     from core import draft
     d = {"biz": "purchase_in", "party": "自检用供应商", "depot": "原料仓",
          "items": [{"name": "自检用商品", "qty": 1, "unit": "个", "price": 1}]}

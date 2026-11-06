@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """只读问答智能体（/api/ask）—— 三层递进架构。
 
-第 1 层 规则直答（0 token）：高频统计问句（今天买了多少 / 谁欠我钱 / 什么货快没了）
-        由确定性路由直连只读工具，模板句作答——LLM 不参与，零成本零幻觉零延迟。
+第 1 层 规则直答（0 token）：高频统计问句（今天买了多少 / 谁欠我钱 / 什么货快没了 /
+        多少个供应商）由确定性路由直连只读工具，模板句作答——零成本零幻觉零延迟。
 第 2 层 agent loop（多步取证）：自然语言 / 复合问题交给手写 function-calling
         循环（core/agent.py：决策 {thought,tool,args} → 执行 → observation 回喂），
         支持跨工具链式取证（「上月谁买得最多？他欠我多少？」）。
+        工具箱含 sql_query / db_schema（core/dbread.py）：对 ERP 全库 32 张表有只读
+        权限，表结构从 information_schema 动态读取并注入上下文，任何清单/计数/明细/
+        排名/配置类问题都能查，不再局限于预置的几个统计工具。
 第 3 层 确定性兜底：LLM 作答必须通过数字接地校验——答案里每个数字都要来自
         某步观察 JSON，不通过退回模板句拼接，回答永远可追溯到 ERP 真实值。
 
@@ -17,10 +20,11 @@
 import re
 
 from . import config as cfgmod
+from . import dbread as dbmod
 from .report import official_stats, recent_bills as _rb, stock_overview, summary
 from .erp import get_client
 
-PROMPT_VERSION = "ask-v2-20261024"
+PROMPT_VERSION = "ask-v3-20261106"
 
 # --------------------------------------------------------------------------
 # 第 1 层：规则直答（0 token）。只收录无参数的统计意图，带参数的查询
@@ -51,7 +55,29 @@ def _rule_route(text):
     for pat, tool in _RULES:
         if re.search(pat, t):
             return tool, {}
+    ent = _master_entity(t)
+    if ent:
+        return "master_count", {"entity": ent}
     return None
+
+
+# 主数据计数问句（「有多少个供应商」）——必须保守：带买卖/金额/欠/库存等
+# 动词的一律不截胡，交给 agent loop（「这个月卖了多少商品」问的是销量不是商品总数）。
+_MASTER_ENTITIES = "供应商|客户|商品|产品|仓库|账户|单位|收支项目|分类"
+_MASTER_EXCLUDE = re.compile(r"买|卖|采购|销售|进货|出货|营收|流水|钱|元|金额|欠|库存|值|录|单")
+
+
+def _master_entity(t):
+    if not re.search(r"(多少|几)", t):
+        return None
+    if _MASTER_EXCLUDE.search(t):
+        return None
+    hits = re.findall(_MASTER_ENTITIES, t)
+    # 复合问题（「供应商和客户各有几家」）一律交给 agent loop 用 SQL 一次查全——
+    # 规则直答只服务单一实体，宁缺勿滥（历史教训：复合问句被截胡只答一半）。
+    if len(set(hits)) != 1:
+        return None
+    return hits[0]
 
 
 def _compound_hints(text):
@@ -74,10 +100,18 @@ def _context(erp):
             mo = str(m.get("model") or "").strip()
             mats.append(f"{nm} {mo}" if nm and mo else nm)
         deps = [d.get("name") for d in erp.depots()][:20]
-        return ("# 系统主数据参考（工具参数尽量用这里的写法，商品带型号的整串照抄）\n商品："
-                + "、".join(filter(None, mats)) + "\n仓库：" + "、".join(filter(None, deps)))
+        out = ("# 系统主数据参考（工具参数尽量用这里的写法，商品带型号的整串照抄）\n商品："
+               + "、".join(filter(None, mats)) + "\n仓库：" + "、".join(filter(None, deps)))
     except Exception:
-        return ""
+        out = ""
+    # 全库表结构动态注入：数据库不可达时为空串，旧工具照常可用
+    try:
+        brief = dbmod.schema_brief()
+        if brief:
+            out = (out + "\n\n" + brief).strip()
+    except Exception:
+        pass
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -179,10 +213,38 @@ def _stock_value(_args, erp):
                   f"（{sm.get('total_stock'):g} 件，按当前成本价估算）。")
 
 
-# 规则直答层允许的工具（全部无参数）
+def _master_count(args, erp):
+    """主数据计数（走 ERP REST 业务口径：自动排除软删除/停用档案）。"""
+    ent = str(args.get("entity") or "").strip()
+    fetch = {
+        "供应商": lambda: erp.suppliers("供应商"),
+        "客户": lambda: erp.suppliers("客户"),
+        "商品": erp.materials, "产品": erp.materials,
+        "仓库": erp.depots, "账户": erp.accounts,
+        "单位": erp.units, "分类": erp.categories,
+        "收支项目": erp.in_out_items,
+    }
+    rows = (fetch.get(ent) or erp.materials)() or []
+    unit = {"供应商": "家", "客户": "家", "商品": "种", "产品": "种",
+            "分类": "类"}.get(ent, "个")
+    def label(r):
+        for k in ("supplier", "name", "userName"):
+            if r.get(k):
+                return str(r[k])
+        return ""
+    names = [x for x in (label(r) for r in rows) if x][:6]
+    data = {"entity": ent, "count": len(rows), "sample": names}
+    tpl = f"系统里共有 {len(rows)} {unit}{ent}。"
+    if names:
+        tpl += "例如：" + "、".join(names) + ("等。" if len(rows) > len(names) else "。")
+    return data, tpl
+
+
+# 规则直答层允许的工具
 _RULE_TOOLS = {
     "today_stats": _today_stats, "month_stats": _month_stats, "debts": _debts,
     "recent_bills": _recent_bills, "low_stock": _low_stock, "stock_value": _stock_value,
+    "master_count": _master_count,
 }
 
 
@@ -213,6 +275,12 @@ def _tools(erp):
         "search_history": {"desc": "搜历史单据（上次/之前跟谁买过什么、某商品进过几次货、原话找单）",
                            "args_hint": '{"query":"检索词，如商品名或往来单位"}',
                            "run": lambda a: rmod.search_history(str(a.get("query") or ""))},
+        "sql_query": {"desc": "对 ERP 全库只读 SQL 查询：任意表的清单/数量/明细/汇总/排名/时间区间，专用工具没覆盖的问题一律用它",
+                      "args_hint": '{"sql":"单条 SELECT；表结构见上下文；软删除表加 delete_flag 为 0 的条件；大表带 LIMIT"}',
+                      "run": lambda a: dbmod.sql_query(a)},
+        "db_schema": {"desc": "看某张表的全部字段与取值样本（写 SQL 前不确定字段/枚举值先查它）",
+                      "args_hint": '{"table":"表名，如 jsh_supplier"}',
+                      "run": lambda a: dbmod.db_schema(a)},
     }
 
 
@@ -223,7 +291,7 @@ def ask(text, erp=None, on_event=None):
     """只读问答。返回 {ok, answer, tool, route, steps, tokens, meta}。
     on_event：SSE 流式回调——规则直答发一条 step，agent loop 发 action/step 序列。"""
     erp = erp or get_client()
-    prof = cfgmod.active_profile()
+    prof = cfgmod.agent_profile()
     if not prof:
         return {"ok": False, "message": "尚未配置 AI 模型，请先在「设置」里添加。"}
     meta = {"model": prof.get("model", ""), "prompt_version": PROMPT_VERSION}
@@ -254,7 +322,7 @@ def ask(text, erp=None, on_event=None):
     # ---- 第 2 层：agent loop（多步取证 + 第 3 层接地兜底在 loop 内）----
     from . import agent as agentmod
     out = agentmod.run_agent(text + _compound_hints(text), _tools(erp),
-                             max_steps=4, context_block=_context(erp),
+                             max_steps=6, context_block=_context(erp),
                              on_event=on_event)
     if not out.get("ok"):
         out["meta"] = meta
