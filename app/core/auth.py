@@ -66,6 +66,12 @@ def erp_login(login_name, password):
     d = j["data"]
     u = d.get("user") or {}
     if not isinstance(u, dict) or not u.get("loginName"):
+        # jshERP 实测：密码错误/账号不存在也回 HTTP 200 + code=200，错误信号只在
+        # data.msgTip（"user password error" / "user is not exist"）——不认 msgTip
+        # 会把一切凭据被拒说成「ERP 返回异常」。走到这里说明 code=200 但没有合法
+        # user：msgTip 非空 = ERP 明确拒绝（统一文案不帮猜号）；空 = 怪形态才算异常。
+        if str(d.get("msgTip") or "").strip():
+            return None, "账号或密码不对"
         return None, "ERP 返回异常，请稍后再试"
     # 租户绑定：只认与服务账号同租户的账号（防止登进同机其他租户实例）
     try:
