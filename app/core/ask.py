@@ -24,7 +24,7 @@ from . import dbread as dbmod
 from .report import official_stats, recent_bills as _rb, stock_overview, summary
 from .erp import get_client
 
-PROMPT_VERSION = "ask-v3-20261106"
+PROMPT_VERSION = "ask-v4-20261109"   # v4: 越界问题出口规则（rule 7）+ 分仓仓库过滤走 find_depot（F11）
 
 # --------------------------------------------------------------------------
 # 第 1 层：规则直答（0 token）。只收录无参数的统计意图，带参数的查询

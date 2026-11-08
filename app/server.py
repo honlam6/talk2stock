@@ -489,11 +489,24 @@ def api_commit(_q, body):
     return res
 
 
+MAX_ASK_CHARS = 500   # 问答输入上限，与录单侧 A15 同口径：复合问题拆开问，超长贴段浪费 token
+
+
+def _ask_text_guard(text):
+    if not text:
+        return {"ok": False, "message": "请输入问题，例如「可乐还有多少库存？」"}
+    if len(text) > MAX_ASK_CHARS:
+        return {"ok": False, "message":
+                "问题太长了（%d 字）——单次最多 %d 字，多个问题请拆开问" % (len(text), MAX_ASK_CHARS)}
+    return None
+
+
 def api_ask(_q, body):
     """只读问答：选工具 → 查数据 → 依数据作答。绝不写库。"""
     text = (body.get("text") or "").strip()
-    if not text:
-        return {"ok": False, "message": "请输入问题，例如「可乐还有多少库存？」"}
+    guard = _ask_text_guard(text)
+    if guard:
+        return guard
     if not llmmod.is_configured():
         return {"ok": False, "need_config": True,
                 "message": "尚未配置 AI 模型，请点右上角「设置」添加。"}
@@ -774,8 +787,9 @@ class Handler(BaseHTTPRequestHandler):
         """SSE 流式问答：start → step(每步工具调用) → done(最终结果)。
         HTTP/1.1 无 Content-Length，以 Connection: close 界定响应结束（纯标准库写法）。"""
         text = (body.get("text") or "").strip()
-        if not text:
-            self._json({"ok": False, "message": "请输入问题，例如「可乐还有多少库存？」"}, 400)
+        guard = _ask_text_guard(text)
+        if guard:
+            self._json(guard, 400)
             return
         if not llmmod.is_configured():
             self._json({"ok": False, "need_config": True,
