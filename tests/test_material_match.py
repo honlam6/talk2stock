@@ -241,7 +241,7 @@ class TestPromptV4(unittest.TestCase):
     """提示词回归：规格规则改动后再动 SYSTEM_PROMPT，这里会先红。"""
 
     def test_version_bumped(self):
-        self.assertEqual(llmmod.PROMPT_VERSION, "v4-20261025")
+        self.assertEqual(llmmod.PROMPT_VERSION, "v5-20261109")   # v5 多单契约（v4 规格规则全部保留）
 
     def test_spec_rule_present_old_rule_gone(self):
         p = llmmod.SYSTEM_PROMPT

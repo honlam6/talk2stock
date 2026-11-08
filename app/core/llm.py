@@ -36,13 +36,16 @@ TIMEOUT = 120
 #                型号规格必须保留（M8螺丝/6号电池/2.5平方电线，旧规则会把数字全剥掉）；
 #                主数据名单带型号展示照抄；「各N」多规格拆多行；一句话多笔业务只处理
 #                第一笔并压低 confidence
-PROMPT_VERSION = "v4-20261025"
+#   v5-20261109  多单契约：输出 {"bills": [...]}——一句话多笔业务（分号分段/又买又卖/
+#                多个往来单位）拆成多张草稿，每单独立 confidence/note，字段绝不跨单搬用；
+#                normalize 兼容旧版单对象/裸数组回退。图片与表格入口共用本契约。
+PROMPT_VERSION = "v5-20261109"
 
 BIZ_ENUM = list(BILL_TYPES.keys())
 
-SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用户的一句话业务描述，转成一张单据的 JSON。
+SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用户的业务描述（一句话/一段话/一张单据照片的内容），转成单据 JSON。输出永远是 {"bills": [...]} 数组——哪怕只有一张单。
 
-# 你只需要提取 4 类信息
+# 你只需要提取 4 类信息（每张单）
 1. 业务类型（买/卖/退）
 2. 往来单位（供应商或客户的名字）
 3. 商品明细（名称、数量、单位、单价）
@@ -60,7 +63,16 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 - other_in        其他入库：无供应商的入库，如盘盈、领用退回
 - other_out       其他出库：无客户的出库，如报损、领用
 
-# 输出 JSON 格式（严格遵守，不要加任何其他键）
+# 多笔业务拆分（本版本核心规则）
+输入里含多笔不同业务时（分号「；」分段、句号分成几段、又买又卖、不同往来单位的几段话、
+照片里不止一张单），必须拆成 bills 数组里的多张单：
+- 每张单独立抽取全部字段，后一笔的往来单位/商品/单价/金额绝不搬给前一笔；
+- 分段依据是业务边界（换了往来单位/换了业务方向/出现分号或明显的另一笔），不是逗号；
+- 同一笔业务里的多行明细（同一往来单位）仍是一张单的多行 items；
+- 每张单有自己的 confidence 和 note；某一张信息不全只压低那一张，不影响别张；
+- 单笔业务就是 bills 里只有一张，不要硬拆。
+
+# 每张单的输出格式（严格遵守，不要加任何其他键）
 {
   "biz": "purchase_in",
   "party": "美宜佳",
@@ -78,8 +90,7 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 # 字段规则
 - party：只写单位名称本身，不要带"供应商"、"客户"、"从"、"给"等字。
 - items[].name：只写商品名本身，不要把数量/单价混进名字（"3瓶可乐"→name是"可乐"，qty是3，unit是"瓶"）。但商品名自带的型号、规格必须完整保留——型号里的数字是名字的一部分："M8螺丝"→"M8螺丝"、"6号电池"→"6号电池"、"2.5平方电线"→"2.5平方电线"、"304不锈钢管"→"304不锈钢管"，绝不能缩成"螺丝/电池/电线/钢管"。主数据名单里怎么写（含型号）就照抄。
-- 同一句话里同一商品多个规格各来N个（"4分和6分的PPR管各20根"）→ items 拆成多行，每行一个完整规格名，qty 各自 N，单价对应各自的。
-- 一句话里含多笔不同业务（又买又卖、又进又退）→ 只处理语序上的第一笔，confidence 填 low，note 写"检测到多笔业务，已只处理第一笔，其余请分开逐笔录入"；后一笔提到的单价/金额属于后一笔，第一笔没说的字段照旧留空（price 留 0）。
+- 同一笔业务里同一商品多个规格各来N个（"4分和6分的PPR管各20根"）→ items 拆成多行，每行一个完整规格名，qty 各自 N，单价对应各自的。
 - qty / price：纯数字，不带单位不带"元"。price 是单价不是总价；若用户只说了总价，用 总价÷数量 算单价。
 - unit：中文量词，如 个/瓶/箱/kg/卷/台。没说就填"个"。箱/盒这类副单位要原样保留，系统会按单位组自动折算基本数量。
 - items[].tax_rate：税率百分比数字。"含税13%"→13，"13个点"→13，"不含税"或没提→0。不要自己算税额。
@@ -90,22 +101,22 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 
 # 示例
 输入：从美宜佳买了3瓶可乐，单价3块5
-输出：{"biz":"purchase_in","party":"美宜佳","items":[{"name":"可乐","qty":3,"unit":"瓶","price":3.5}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
+输出：{"bills":[{"biz":"purchase_in","party":"美宜佳","items":[{"name":"可乐","qty":3,"unit":"瓶","price":3.5}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}]}
 
 输入：卖给永辉超市200个纸箱，一个5块，从成品仓出，先付了500
-输出：{"biz":"sale_out","party":"永辉超市","items":[{"name":"纸箱","qty":200,"unit":"个","price":5}],"depot":"成品仓","oper_time":"","remark":"","pay_amount":500,"confidence":"high","note":""}
+输出：{"bills":[{"biz":"sale_out","party":"永辉超市","items":[{"name":"纸箱","qty":200,"unit":"个","price":5}],"depot":"成品仓","oper_time":"","remark":"","pay_amount":500,"confidence":"high","note":""}]}
+
+输入：从美宜佳进3瓶可乐单价3块5；卖给张记便利店2箱方便面单价45
+输出：{"bills":[{"biz":"purchase_in","party":"美宜佳","items":[{"name":"可乐","qty":3,"unit":"瓶","price":3.5}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""},{"biz":"sale_out","party":"张记便利店","items":[{"name":"方便面","qty":2,"unit":"箱","price":45}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}]}
+
+输入：今天从日化批发部进6号电池100节每节2块5，昨天卖给永辉超市纸箱200个单价5块从成品仓出
+输出：{"bills":[{"biz":"purchase_in","party":"日化批发部","items":[{"name":"6号电池","qty":100,"unit":"节","price":2.5}],"depot":"","oper_time":"<今天的日期 00:00:00>","remark":"","pay_amount":null,"confidence":"high","note":""},{"biz":"sale_out","party":"永辉超市","items":[{"name":"纸箱","qty":200,"unit":"个","price":5}],"depot":"成品仓","oper_time":"<昨天的日期 00:00:00>","remark":"","pay_amount":null,"confidence":"high","note":""}]}
 
 输入：玖龙纸业那批牛皮纸有问题，退10卷回去，每卷80
-输出：{"biz":"purchase_return","party":"玖龙纸业","items":[{"name":"牛皮纸","qty":10,"unit":"卷","price":80}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
-
-输入：从美宜佳进2箱可乐，一箱含税120，13个点
-输出：{"biz":"purchase_in","party":"美宜佳","items":[{"name":"可乐","qty":2,"unit":"箱","price":120,"tax_rate":13}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
-
-输入：从日化批发部进6号电池100节，每节2块5
-输出：{"biz":"purchase_in","party":"日化批发部","items":[{"name":"6号电池","qty":100,"unit":"节","price":2.5}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
+输出：{"bills":[{"biz":"purchase_return","party":"玖龙纸业","items":[{"name":"牛皮纸","qty":10,"unit":"卷","price":80}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}]}
 
 输入：卖给张记便利店4分和6分的PPR管各20根，4分的一根3块，6分的一根4块
-输出：{"biz":"sale_out","party":"张记便利店","items":[{"name":"4分PPR管","qty":20,"unit":"根","price":3},{"name":"6分PPR管","qty":20,"unit":"根","price":4}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}
+输出：{"bills":[{"biz":"sale_out","party":"张记便利店","items":[{"name":"4分PPR管","qty":20,"unit":"根","price":3},{"name":"6分PPR管","qty":20,"unit":"根","price":4}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}]}
 
 只输出 JSON，不要 markdown 代码块，不要解释。"""
 
@@ -355,15 +366,24 @@ def usage_summary():
 
 def _merge_system(messages):
     """部分 OpenAI 兼容网关会丢弃 system 角色（请求被转给自带人格的 agent，返回闲聊）。
-    把 system 内容并入首条 user 消息，保证抽取指令能真正到达模型。"""
+    把 system 内容并入首条 user 消息，保证抽取指令能真正到达模型。
+    user content 为部件数组（视觉消息）时，把规则并进首个 text 部件，图片部件原样保留。"""
     sys_parts = [(m.get("content") or "") for m in messages if m.get("role") == "system"]
     rest = [m for m in messages if m.get("role") != "system"]
     if not sys_parts:
         return messages
     head = "\n\n".join(p for p in sys_parts if p)
     if rest and rest[0].get("role") == "user":
-        rest[0] = {"role": "user",
-                   "content": head + "\n\n# 用户输入\n" + (rest[0].get("content") or "")}
+        c = rest[0].get("content")
+        if isinstance(c, list):
+            first_text = next((p.get("text") or "" for p in c
+                               if isinstance(p, dict) and p.get("type") == "text"), "")
+            others = [p for p in c if not (isinstance(p, dict) and p.get("type") == "text")]
+            rest[0] = {"role": "user", "content":
+                       [{"type": "text", "text": head + "\n\n# 用户输入\n" + first_text}] + others}
+        else:
+            rest[0] = {"role": "user",
+                       "content": head + "\n\n# 用户输入\n" + (c or "")}
     else:
         rest.insert(0, {"role": "user", "content": head})
     return rest
@@ -681,37 +701,177 @@ def _clarify_question(draft):
     return None
 
 
+def vision_profile():
+    """挑一个支持视觉的档案：当前档案声明 vision 直接用；否则退而找任意开了
+    vision 的共享档案。都没有就返回 None（调用方给出可执行的中文指引）。
+    生产换模型=改档案配置，代码零改动（能力位路由，不写死任何模型名）。"""
+    p = cfgmod.active_profile()
+    if p and p.get("vision"):
+        return p
+    for pr in (cfgmod.load().get("llm", {}).get("profiles") or {}).values():
+        if isinstance(pr, dict) and pr.get("vision") and pr.get("base_url"):
+            return pr
+    return None
+
+
+def normalize_bills(raw):
+    """LLM 原始输出 → [ {draft, confidence, note, problems}, ... ]（多单契约）。
+
+    兼容三种形状（老网关/老模型可能回退）：
+    - {"bills": [...]}   v5 正式输出
+    - 单张草稿对象        自动包成单元素数组
+    - 裸数组              原样当 bills
+    每张单独立 normalize + 收集问题；整段无有效输出时返回带问题的空壳单，
+    让上层出「解析失败」而不是 KeyError。"""
+    if isinstance(raw, dict) and isinstance(raw.get("bills"), list) and raw["bills"]:
+        arr = raw["bills"]
+    elif isinstance(raw, list):
+        arr = [x for x in raw if isinstance(x, dict)]
+    elif isinstance(raw, dict):
+        arr = [raw]
+    else:
+        arr = []
+    out = []
+    for el in arr:
+        if not isinstance(el, dict):
+            continue
+        d, problems = normalize(el)
+        out.append({"draft": d,
+                    "confidence": str(el.get("confidence") or ""),
+                    "note": str(el.get("note") or ""),
+                    "problems": problems})
+    if not out:
+        d, problems = normalize({})
+        problems = problems or ["没有解析出任何单据"]
+        out = [{"draft": d, "confidence": "low", "note": "未能识别出单据内容", "problems": problems}]
+    return out
+
+
+def _bills_meta_from(bills, prof, u, prev_draft, raw=None):
+    """parse / parse_images 共用的 meta 组装。多单时不做主动澄清
+    （跨单追问会把人绕晕，缺信息在确认卡上逐单标出来改）。"""
+    cl = None
+    if len(bills) == 1:
+        c = _clarify_question(bills[0]["draft"])
+        if c:
+            cl = {"question": c[0], "missing": c[1]}
+    return {
+        "model": prof["model"],
+        "profile": prof.get("name") or prof.get("key"),
+        "confidence": bills[0]["confidence"] if bills else "",
+        "note": bills[0]["note"] if bills else "",
+        "problems": bills[0]["problems"] if bills else [],
+        "bills": bills,
+        "count": len(bills),
+        "revision": bool(prev_draft),
+        "raw": raw,
+        "tokens": u,
+        "clarify": cl,
+    }
+
+
 def parse(text, erp=None, prev_draft=None):
-    """自然语言 → (draft, meta)。未配置模型或调用失败时抛 RuntimeError。
-    prev_draft 非空时表示多轮修正：本轮输入是对该草稿的增量修改。
-    meta.clarify 非空时表示草稿缺关键信息，建议上层主动追问（可跳过）。"""
+    """自然语言 → (drafts, meta)。drafts 是草稿数组（多单契约，通常 1 张）。
+    未配置模型或调用失败时抛 RuntimeError。
+    prev_draft 非空时表示多轮修正：本轮输入是对该草稿的增量修改（单张语义不变）。"""
     prof = cfgmod.active_profile()
     if not prof:
         raise RuntimeError("尚未配置 AI 模型，请在「设置」里添加一个模型档案")
     sys_prompt = SYSTEM_PROMPT + _date_block() + (_context_block(erp, text) if erp else "")
     rev_block, prev_ids = _revision_block(prev_draft) if prev_draft else ("", {})
-    user_content = text + rev_block
     u = {}
     content = _chat(prof, [
         {"role": "system", "content": sys_prompt},
-        {"role": "user", "content": user_content},
+        {"role": "user", "content": text + rev_block},
     ], purpose="parse", collect=u)
     raw = _extract_json(content)
-    draft, problems = normalize(raw)
-    _carry_material_ids(draft, prev_ids)
-    cl = _clarify_question(draft)
-    meta = {
-        "model": prof["model"],
-        "profile": prof.get("name") or prof.get("key"),
-        "confidence": raw.get("confidence") or "",
-        "note": raw.get("note") or "",
-        "problems": problems,
-        "revision": bool(prev_draft),
-        "raw": raw,
-        "tokens": u,
-        "clarify": {"question": cl[0], "missing": cl[1]} if cl else None,
-    }
-    return draft, meta
+    bills = normalize_bills(raw)
+    if prev_draft and len(bills) == 1:
+        _carry_material_ids(bills[0]["draft"], prev_ids)
+    return [b["draft"] for b in bills], _bills_meta_from(bills, prof, u, prev_draft, raw)
+
+
+def parse_images(images, text="", erp=None):
+    """单据照片 → (drafts, meta)。images 是 data URL 列表（前端已压缩）。
+    视觉请求走同一份 v5 契约：一张照片多张单也直接拆 bills。
+    档案按能力位路由：当前档案开了 vision 用当前的，否则找任意开了 vision 的档案。"""
+    prof = vision_profile()
+    if not prof:
+        raise RuntimeError(
+            "当前模型档案不支持图片识别：请在「设置」里给模型档案勾选「支持图片识别」"
+            "（视觉模型如 hy4 / DeepSeek 视觉版均可），再重试拍照录入")
+    sys_prompt = SYSTEM_PROMPT + _date_block() + (_context_block(erp, text) if erp else "")
+    hint = (text or "").strip()
+    parts = [{"type": "text", "text": hint or "请把图片里的单据内容识别出来，按规则输出单据 JSON。"}]
+    for du in images:
+        parts.append({"type": "image_url", "image_url": {"url": du}})
+    u = {}
+    content = _chat(prof, [
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": parts},
+    ], purpose="parse_image", collect=u)
+    raw = _extract_json(content)
+    bills = normalize_bills(raw)
+    return [b["draft"] for b in bills], _bills_meta_from(bills, prof, u, None, raw)
+
+
+# --------------------------------------------------------------------------
+# 表格导入：表头映射（AI 只做这一步；行→草稿是确定性变换，见 sheet.py）
+# --------------------------------------------------------------------------
+SHEET_MAP_PROMPT = """你是进销存数据导入的列映射助手。用户的 Excel/CSV 来自任意系统（金蝶、用友、
+手工流水表、其他 ERP 导出……），格式事先未知。给你工作表名、原始前几行和每列的样本值，
+输出一个 JSON 映射，把列对到进销存单据字段。
+
+输出 JSON（严格遵守，不要多余键）：
+{
+  "header_row": 1,
+  "mode": "per_row",
+  "group_col": "",
+  "file_biz": "purchase_in",
+  "biz_col": "",
+  "biz_values": {},
+  "cols": {"A": "item_name"},
+  "date_format": "auto",
+  "confidence": "high",
+  "notes": ""
+}
+
+各键含义：
+- header_row：表头所在行（1-based）。第一行是「XX公司送货单」这类标题时后移到真正的列名行。
+- mode："per_row"=每行数据就是独立一笔业务；"group"=有单号列，多行共用一个单号，属于同一张单。
+- group_col：mode=group 时必填，分组列的列号（如 "B"）。
+- file_biz：整表默认业务类型，取值 purchase_in / sale_out / purchase_return / sale_return / other_in / other_out。
+- biz_col：表里若有「类型/出入库」列（值如 入库/出库/退货），填其列号；没有则 ""。
+- biz_values：biz_col 取值 → biz 的对照表（如 {"入库":"purchase_in","出库":"sale_out"}）。
+- cols：数据列号 → 字段名。字段枚举（只能取这些值）：
+    party=往来单位(供应商/客户名)  item_name=商品名(含规格型号整串保留)  qty=数量(可能带单位如"30瓶")
+    unit=单位列(数量里已带单位且无独立单位列时不映射)  price=单价  amount=金额/总价
+    depot=仓库名  oper_time=日期/单据日期  pay_amount=实付金额  tax_rate=税率(如13或13%)
+    remark=备注  bill_no=原单号  ignore=与本系统无关
+- date_format：日期列的样本格式，照实写（"auto" / "2024.1.5" / "2024/1/5" / "20240105" / "2024年1月5日"）。
+- confidence：high/medium/low；判断拿不准就压低并在 notes 里说明。
+- notes：一句话说明判断依据（给用户看，如「表头在第2行；有单号列C，按单号分组」）。
+
+判断要领：
+- 价格相关：单价（price，一件多少钱）与金额/总价（amount，一行合计）通常只有一个；两个都在时都照实映射。
+- 金额带 ¥/元/千分位逗号、数量带单位，照实映射，解析层会统一清洗，不要因格式脏就标 ignore。
+- 名称列叫「品名/货品/材料/规格」都可能是 item_name；「供货商/供应商/客户/往来单位」都可能是 party。
+- 没把握的列宁可信度压低也不要瞎映射。
+只输出 JSON，不要解释。"""
+
+
+def map_sheet(sheet_name, grid_desc, extra=""):
+    """表格 → 列映射 JSON。grid_desc 是服务端排好的「列号+表头+样本」文本。
+    extra 供修复环传失败样本（「B 列日期解析失败，样本：…」）。"""
+    prof = cfgmod.active_profile()
+    if not prof:
+        raise RuntimeError("尚未配置 AI 模型，请在「设置」里添加一个模型档案")
+    content = _chat(prof, [
+        {"role": "system", "content": SHEET_MAP_PROMPT},
+        {"role": "user", "content": "工作表名：%s\n\n%s%s" % (
+            sheet_name, grid_desc, ("\n\n# 修正上一轮映射\n" + extra) if extra else "")},
+    ], purpose="sheet_map")
+    return _extract_json(content)
 
 
 def test_profile(prof):
