@@ -65,6 +65,12 @@
 
 ## 2026-11-09
 
+### F12 线上问一问决策模型被 agent_model 覆盖，「用的什么模型」口径对不上（P2，已修复）
+- **现象**：admin 已把共享档案切到 `global:hy4free`，`/api/ask` 的 meta.model 却一直显示 `global:default-model`——答辩问「线上用的什么模型」时与设置页口径矛盾（服务器真机 + 网关回显实测定位）。
+- **根因**：F10 修复时把 `llm.agent_model` 配成了 `global:default-model`（决策专用低延迟模型），`agent_profile()` 用它覆盖档案模型；这个覆盖对「默认跟随 admin 全局设置」的产品语义是隐形的。
+- **修复**：①线上 `agent_model` 清空（服务器备份 `config.json.bak-20261109-hy4`），决策跟随全局；②agent 决策步默认附 `reasoning_effort=low`（档案显式设置优先）——用参数控制思考深度，替代「另配一个决策模型」的粗粒度隔离，与 `agent_max_tokens` 输出封顶互补；③档案级新增 `reasoning_effort` / `extra_body`（Qwen enable_thinking、Claude thinking 等厂商私有参数透传，厂商叫法不一时走后者），设置页共享/我的模型两个表单均可配，端点不认的参数 400 一次后自动摘除（同 stream_options quirk 先例）。单测 9 条（tests/test_llm_reasoning.py）。
+- **教训**：「决策用哪个模型」这类横切配置，meta 里必须可见且与设置页口径一致——否则答辩/审计场景第一句就被问倒。
+
 ### F11 分仓库存查问：仓库过滤精确匹配查空 → 误报「没有库存记录」（P1，已修复）
 - **现象**：「可乐在原料仓库还有多少？」（比档案名「原料仓」多一个字）→ depot 过滤归一化精确匹配查空 → 答「可乐在系统里没有库存记录」——货明明有库存，属误导性错误答案（评审视角下比崩溃更伤信任）。
 - **根因**：`_stock_query` 自行用 `_norm` 相等过滤仓库，没走 `find_depot` 的模糊匹配；且查空后的措辞模板不区分「无此仓」与「无库存」。
