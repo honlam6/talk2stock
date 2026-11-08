@@ -369,33 +369,62 @@ def _merge_system(messages):
     return rest
 
 
-def _chat(prof, messages, force_json=True, purpose="", collect=None):
-    """单次对话调用（三级降级 + 重试 + 用量记录），返回模型文本。
-    purpose 标记调用来源（parse/ask_select/ask_answer/agent/insight/test），进用量台账。
-    collect 传入 dict 时，把本次 usage 写入其中（调用方做会话级合计/预算用）。"""
-    started = time.time()
-    if prof.get("merge_system"):
-        messages = _merge_system(messages)
-    url = prof["base_url"].rstrip("/") + "/chat/completions"
-    base = {
+# extra_body 里不许覆盖的请求体保留键
+_RESERVED_BODY_KEYS = {"model", "messages", "temperature", "stream", "response_format",
+                       "stream_options", "reasoning_effort", "max_tokens"}
+
+
+def _base_payload(prof, messages, force_json=True, purpose="", extra_effort=None):
+    """构造 chat 请求体：模型/温度 + 可选推理强度与档案级参数透传。
+
+    推理强度两个旋钮的分工（厂商叫法不一）：
+    - reasoning_effort：OpenAI 系 minimal/low/medium/high 已成事实标准
+      （vLLM/SGLang/聚合网关多认此名）；档案显式设置优先，否则用调用方建议
+      extra_effort——agent 决策步传 "low"，与 agent_max_tokens 输出封顶互补
+      （F10：推理模型决策步实测烧 9k~13k 思考 token）。
+    - extra_body：只有「开/关思考」开关或私有命名的厂商走这里原样透传
+      （Qwen {"enable_thinking": false}、Claude 系 thinking 配置等），保留键不覆盖。
+    端点不认的参数在首个 400 后记入 _quirks 自动摘除（同 stream_options 先例）。
+    """
+    payload = {
         "model": prof["model"],
         "messages": messages,
         "temperature": prof.get("temperature", 0),
     }
     if force_json:
-        base["response_format"] = {"type": "json_object"}
+        payload["response_format"] = {"type": "json_object"}
     # agent 每轮只输出一个短 JSON 动作；推理模型不设输出上限时实测会烧掉
     # 上万 token 做思考（单步 120~170 秒，甚至问答整体超时）。按 purpose 给
     # 决策类调用封顶，可用档案 agent_max_tokens 覆盖；长文本生成（parse /
     # insight）不受影响。
     if purpose == "agent":
-        base["max_tokens"] = int(prof.get("agent_max_tokens") or 800)
+        payload["max_tokens"] = int(prof.get("agent_max_tokens") or 800)
+    eff = str(prof.get("reasoning_effort") or "").strip() or extra_effort
+    if eff and "no_reasoning_effort" not in _quirks:
+        payload["reasoning_effort"] = str(eff)
+    if "no_extra_body" not in _quirks:
+        for k, v in (prof.get("extra_body") or {}).items():
+            if k not in _RESERVED_BODY_KEYS and v is not None:
+                payload.setdefault(k, v)
+    return payload
+
+
+def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_effort=None):
+    """单次对话调用（三级降级 + 重试 + 用量记录），返回模型文本。
+    purpose 标记调用来源（parse/ask_select/ask_answer/agent/insight/test），进用量台账。
+    collect 传入 dict 时，把本次 usage 写入其中（调用方做会话级合计/预算用）。
+    reasoning_effort：调用方建议的推理强度（档案显式设置优先），见 _base_payload。"""
+    started = time.time()
+    if prof.get("merge_system"):
+        messages = _merge_system(messages)
+    url = prof["base_url"].rstrip("/") + "/chat/completions"
     ctx = _insecure_context() if prof.get("insecure") else None
     extra_headers = prof.get("extra_headers") or None   # 档案级自定义头（如 X-Prompt-Mode 分流）
-
     text, usage, last_err = None, None, None
 
     # 1) 流式 + response_format（优先；很多推理端点非流式会挂起）+ include_usage
+    base = _base_payload(prof, messages, force_json=force_json, purpose=purpose,
+                         extra_effort=reasoning_effort)
     try:
         payload = dict(base, stream=True)
         if "no_stream_options" not in _quirks:
@@ -405,12 +434,20 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None):
         detail = e.read().decode("utf-8", "replace")[:300]
         if "stream_options" in detail:
             _quirks.add("no_stream_options")   # 该端点不认此参数，记住并立即降级
+        if "reasoning" in detail.lower():
+            _quirks.add("no_reasoning_effort")   # 端点不认推理强度参数：记下自动摘除
+        for k in (prof.get("extra_body") or {}):
+            if k and str(k) in detail:
+                _quirks.add("no_extra_body")
+                break
         last_err = "HTTP %s %s" % (e.code, detail)
     except Exception as e:
         last_err = e
 
     # 2) 流式，不带 response_format / stream_options（兼容不支持这些参数的端点）
     if not (text and text.strip()):
+        base = _base_payload(prof, messages, force_json=force_json, purpose=purpose,
+                             extra_effort=reasoning_effort)   # 重建：quirks 可能刚记上
         try:
             payload = {k: v for k, v in base.items() if k != "response_format"}
             payload["stream"] = True
@@ -420,6 +457,8 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None):
 
     # 3) 非流式兜底
     if not (text and text.strip()):
+        base = _base_payload(prof, messages, force_json=force_json, purpose=purpose,
+                             extra_effort=reasoning_effort)
         try:
             payload = {k: v for k, v in base.items() if k != "response_format"}
             text, usage = _post_retry(url, payload, prof["api_key"], stream=False, ssl_context=ctx, extra_headers=extra_headers)

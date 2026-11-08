@@ -130,7 +130,8 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         raw = llmmod._chat(prof, [
             {"role": "system", "content": prompt},
             {"role": "user", "content": (ctx + "\n请给出下一轮动作。").strip()},
-        ], purpose="agent", collect=u)
+        ], purpose="agent", collect=u,
+            reasoning_effort="low")   # 决策只需短 JSON：默认压低推理强度（档案显式设置优先；配合 max_tokens 封顶，见 F10/F12）
         tokens["prompt"] += u.get("prompt_tokens", 0)
         tokens["completion"] += u.get("completion_tokens", 0)
         tokens["estimated"] = tokens["estimated"] or bool(u.get("estimated"))
