@@ -160,6 +160,28 @@ def api_llm_get(_q, _body):
             "profiles": pub["llm"].get("profiles", {})}
 
 
+def _effort_xbody(prof):
+    """校验推理强度与高级参数（共享档案 / 我的模型两个保存口共用）。"""
+    # 推理强度：OpenAI 系 minimal/low/medium/high（事实标准名）；留空 = 跟随模型默认
+    effort = str(prof.get("reasoning_effort") or "").strip()
+    if effort and effort not in ("minimal", "low", "medium", "high"):
+        return None, None, "推理强度只支持 minimal/low/medium/high 或留空"
+    # 高级参数：厂商私有参数透传口（Qwen enable_thinking / Claude thinking 等开关式参数）
+    xbody = prof.get("extra_body") or {}
+    if isinstance(xbody, str):
+        xbody = xbody.strip()
+        if not xbody:
+            xbody = {}
+        else:
+            try:
+                xbody = json.loads(xbody)
+            except Exception:
+                return None, None, '高级参数必须是合法 JSON 对象，如 {"enable_thinking": false}'
+    if not isinstance(xbody, dict):
+        return None, None, "高级参数必须是 JSON 对象（键值对）"
+    return effort, xbody, ""
+
+
 def api_llm_post(_q, body):
     action = (body.get("action") or "save").strip()
     key = (body.get("key") or "").strip()
@@ -173,7 +195,10 @@ def api_llm_post(_q, body):
             return {"ok": False, "message": "缺少要删除的模型档案"}
         cfgmod.delete_profile(key)
         return {"ok": True, "message": "已删除模型档案", **api_llm_get(None, None)}
+    return api_llm_save(key, body)
 
+
+def api_llm_save(key, body):
     prof = body.get("profile") if isinstance(body.get("profile"), dict) else body
     name = (prof.get("name") or "").strip()
     base_url = (prof.get("base_url") or "").strip()
@@ -193,9 +218,13 @@ def api_llm_post(_q, body):
         temp = float(prof.get("temperature", 0) or 0)
     except Exception:
         temp = 0.0
+    effort, xbody, err = _effort_xbody(prof)
+    if err:
+        return {"ok": False, "message": err}
     cfgmod.upsert_profile(key, {
         "name": name or key, "base_url": base_url, "api_key": api_key,
         "model": model, "temperature": temp,
+        "reasoning_effort": effort, "extra_body": xbody,
     })
     if body.get("activate"):
         cfgmod.set_active(key)
@@ -223,6 +252,12 @@ def api_llm_test(_q, body):
         "api_key": api_key,
         "temperature": prof.get("temperature", stored.get("temperature", 0)),
     }
+    # 推理强度 / 高级参数跟着档案走，「测试连接」才测得到真实请求形态
+    if str(prof.get("reasoning_effort") or stored.get("reasoning_effort") or "").strip():
+        merged["reasoning_effort"] = str(prof.get("reasoning_effort") or stored.get("reasoning_effort")).strip()
+    eb = prof.get("extra_body") if isinstance(prof.get("extra_body"), dict) else stored.get("extra_body")
+    if isinstance(eb, dict) and eb:
+        merged["extra_body"] = eb
     if not merged["base_url"] or not merged["model"]:
         return {"ok": False, "message": "请先填写 Base URL 和模型名"}
     if not merged["api_key"]:
@@ -289,6 +324,9 @@ def api_my_model_post(_q, body):
             temp = float(prof.get("temperature", 0) or 0)
         except Exception:
             temp = 0.0
+        effort, xbody, err = _effort_xbody(prof)
+        if err:
+            return {"ok": False, "message": err}
         key = (authmod._pf_key(key) or authmod._pf_key(name)
                or authmod._pf_key(model) or "model")
         old = (authmod.user_profiles(login).get("profiles") or {}).get(key) or {}
@@ -297,6 +335,7 @@ def api_my_model_post(_q, body):
         ok, msg = authmod.save_user_profile(login, key, {
             "name": name or key, "base_url": base_url, "api_key": api_key,
             "model": model, "temperature": temp,
+            "reasoning_effort": effort, "extra_body": xbody,
         })
         if not ok:
             return {"ok": False, "message": msg or "保存失败"}

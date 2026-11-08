@@ -293,6 +293,20 @@ def _norm_prof(key, profile, old=None):
             prof[opt] = old[opt]
         elif profile.get(opt):
             prof[opt] = profile[opt]
+    # reasoning_effort / extra_body 在「我的模型」表单里可编辑：本次提交携带该键
+    # 即以本次为准（空值=清除），未携带（旧客户端）才从旧档案继承
+    if "reasoning_effort" in profile:
+        prof["reasoning_effort"] = str(profile.get("reasoning_effort") or "").strip()
+    elif "reasoning_effort" in old:
+        prof["reasoning_effort"] = old["reasoning_effort"]
+    if isinstance(profile.get("extra_body"), dict):
+        eb = {k: v for k, v in profile["extra_body"].items() if v is not None}
+        if eb:
+            prof["extra_body"] = eb
+        else:
+            prof.pop("extra_body", None)
+    elif isinstance(old.get("extra_body"), dict):
+        prof["extra_body"] = old["extra_body"]
     return prof
 
 

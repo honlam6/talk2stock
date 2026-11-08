@@ -1,5 +1,5 @@
 {
-  "_comment": "config.json 已被 .gitignore 排除（含本机网关地址）。本模板是组员克隆仓库后的初始配置：复制为 config.json 后按需修改；密钥一律不写这里，放 app/.env 的 T2S_KEY_<档案名大写>。真实网关地址写 .env 的 T2S_BASE_<档案名大写>。llm.agent_model 可选：问答 agent 的决策模型（建议填低延迟的非推理模型，推理模型在 agent 循环里会因长思考拖到分钟级）；留空则沿用 active 档案的模型。",
+  "_comment": "config.json 已被 .gitignore 排除（含本机网关地址）。本模板是组员克隆仓库后的初始配置：复制为 config.json 后按需修改；密钥一律不写这里，放 app/.env 的 T2S_KEY_<档案名大写>。真实网关地址写 .env 的 T2S_BASE_<档案名大写>。llm.agent_model 可选：问答 agent 的决策模型覆盖（留空 = 沿用 active 档案的模型，即「全局跟随 admin 设置」的默认语义）。档案级 reasoning_effort：推理强度（minimal/low/medium/high，OpenAI 系事实标准；留空跟随模型默认）。档案级 extra_body：厂商私有参数透传（如 Qwen 的 {\"enable_thinking\": false} 开关、Claude 系 thinking 配置）——端点不认的参数会自动摘除不影响请求。",
   "erp": {
     "base": "http://localhost:9999/jshERP-boot",
     "user": "jsh",
@@ -15,6 +15,8 @@
         "api_key": "",
         "model": "global:deepseek-v4.1-flash",
         "temperature": 0,
+        "reasoning_effort": "",
+        "extra_body": {},
         "insecure": true,
         "merge_system": true
       },

@@ -272,6 +272,21 @@ def upsert_profile(key, profile):
         prof_new["extra_headers"] = old["extra_headers"]
     elif isinstance(profile.get("extra_headers"), dict) and profile["extra_headers"]:
         prof_new["extra_headers"] = profile["extra_headers"]
+    # reasoning_effort / extra_body：推理强度与厂商私有参数透传（设置页可配）。
+    # 本次提交携带该键即以本次为准（空值=清除，表单里改回「默认」要能生效）；
+    # 未携带（CLI / 旧客户端）则从旧档案继承。
+    if "reasoning_effort" in profile:
+        prof_new["reasoning_effort"] = str(profile.get("reasoning_effort") or "").strip()
+    elif "reasoning_effort" in old:
+        prof_new["reasoning_effort"] = old["reasoning_effort"]
+    if isinstance(profile.get("extra_body"), dict):
+        eb = {k: v for k, v in profile["extra_body"].items() if v is not None}
+        if eb:
+            prof_new["extra_body"] = eb
+        else:
+            prof_new.pop("extra_body", None)
+    elif isinstance(old.get("extra_body"), dict):
+        prof_new["extra_body"] = old["extra_body"]
     profiles[key] = prof_new
     if not cfg["llm"].get("active"):
         cfg["llm"]["active"] = key
