@@ -124,6 +124,25 @@ def match_material_rows(rows, name):
     return None, "none"
 
 
+def match_depot_rows(rows, name):
+    """在 rows 里找仓库。返回 (row, kind)：exact / fuzzy / none。
+    双向包含：「原料仓库」（多一个字）也能命中档案「原料仓」——实测教训：
+    单向包含会让用户多打一个字就查空，问答层误报「没有库存记录」。"""
+    if not name:
+        return None, "none"
+    n = _norm_text(name)
+    exact = [r for r in rows if _norm_text(r.get("name")) == n]
+    if len(exact) == 1:
+        return exact[0], "exact"
+    if len(exact) > 1:
+        return exact[0], "exact"   # 仓库名极少同名；同名时取第一个（与旧 find_depot 行为一致）
+    cands = [r for r in rows
+             if n and (n in _norm_text(r.get("name")) or _norm_text(r.get("name")) in n)]
+    if len(cands) == 1:
+        return cands[0], "fuzzy"
+    return None, "none"
+
+
 def rank_material_rows(rows, name, n=3, min_score=0.35):
     """候选排序（供点选）：对「名字」与「名字×型号」合成串各算编辑相似度取高者。
     与输入完全同名的档案（同名不同规格）全部进候选且排最前——必须让人看全。"""
@@ -412,17 +431,8 @@ class JshERP:
         return match_material_rows(self.materials(), name)
 
     def find_depot(self, name):
-        if not name:
-            return None, "none"
-        rows = self.depots()
-        n = self._norm(name)
-        for r in rows:
-            if self._norm(r.get("name")) == n:
-                return r, "exact"
-        cands = [r for r in rows if n and n in self._norm(r.get("name"))]
-        if len(cands) == 1:
-            return cands[0], "fuzzy"
-        return None, "none"
+        """委托纯函数 match_depot_rows：exact / fuzzy / none（双向包含）。"""
+        return match_depot_rows(self.depots(), name)
 
     # ---------- 主数据创建（ensure_*） ----------
     def ensure_unit(self, name):

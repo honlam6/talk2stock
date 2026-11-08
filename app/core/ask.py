@@ -133,12 +133,24 @@ def _stock_query(args, erp):
         return {"material": name, "found": False, "candidates": cands}, \
             f"系统里没有查到「{name}」的唯一档案" + (
                 f"，最接近的档案：{'、'.join(labels)}，请说明要哪个规格" if labels else "")
-    deps = erp.depots()
     depot_filter = str(args.get("depot") or "").strip()
+    if depot_filter:
+        # 仓库过滤走 find_depot（exact/模糊/双向包含），与商品匹配同口径。
+        # 查无此仓必须明说——旧实现精确匹配查空后误报「没有库存记录」（失败案例 F10）。
+        drow, dkind = erp.find_depot(depot_filter)
+        if not drow:
+            cands = erp._ranked_candidates(erp.depots(), "name", depot_filter, n=3)
+            data = {"material": mrow.get("name"), "depot": depot_filter,
+                    "found_depot": False, "candidates": cands}
+            note = (f"系统里没有叫「{depot_filter}」的仓库"
+                    + (f"，最接近的仓库：{'、'.join(cands)}" if cands else "。")
+                    + f"。要查「{mrow.get('name')}」库存请用正确的仓库名，或不指定仓库查各仓合计。")
+            return data, note
+        deps = [drow]
+    else:
+        deps = erp.depots()
     rows, total = [], 0.0
     for d in deps:
-        if depot_filter and erp._norm(d.get("name")) != erp._norm(depot_filter):
-            continue
         st = erp.stock(mrow["id"], d["id"])
         if st is None:
             continue
@@ -147,6 +159,8 @@ def _stock_query(args, erp):
     unit = mrow.get("unit") or ""
     data = {"material": mrow.get("name"), "unit": unit, "by_depot": rows,
             "total": round(total, 2), "matched": kind or "exact"}
+    if depot_filter:
+        data["depot_matched"] = dkind
     detail = "；".join(f"{r['depot']} {r['stock']:g}" for r in rows) if rows else "各仓均无库存记录"
     return data, (f"「{mrow.get('name')}」当前库存 {total:g}{unit}。{detail}。"
                   if rows else f"「{mrow.get('name')}」在系统里没有库存记录。")
