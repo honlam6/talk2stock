@@ -23,10 +23,14 @@ from . import config as cfgmod
 from . import llm as llmmod
 
 OBS_MAX_CHARS = 3000   # 单步观察喂回 prompt 的上限（token 预算；trace 里存全量）
-DEFAULT_MAX_STEPS = 6
+DEFAULT_MAX_STEPS = 4   # v4 实测专用工具 1~2 步即答；6 是 SQL 探查时代的余量，只会拖长废轮次
 # token 预算只是防失控保险丝，步数预算才是主约束——必须放宽到容得下
 # 网关侧固定注入（实测 custom 模式每请求 ~8.5K 人格前缀，6000 会让第一步就熔断）
 DEFAULT_MAX_TOKENS = 40000
+# 决策输出封顶：F10 用 800 是给短思考 flash 模型调的；换 hy4（默认高推理）后
+# 思考就能烧满 800，正文 JSON 还没出口就被截断 → 连环「解析失败」烧完步数
+# （v1 评测实测 a8/a11/a12/c3 全栽在这）。2000 给思考留够余量。
+DEFAULT_AGENT_MAX_TOKENS = 2000
 
 LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用工具收集数据，回答用户问题。
 
@@ -41,22 +45,30 @@ LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用
 信息已足够：{{"thought":"...","final":"给用户的中文最终回答"}}
 
 # 规则
-0. 你对整个 ERP 数据库有只读权限：sql_query 能查任意表（表结构见上下文）。
-   凡涉及清单、数量、计数、明细、汇总、排名、时间区间、系统配置、用户/角色等
-   专用工具没覆盖的问题，第一步就直接用 sql_query，不要在无关工具上反复试探。
+0. 工具目录里的专用工具能用就用（更快更准，结果已按业务口径算好）；
+   只有专用工具覆盖不了的问题（清单/明细/排名/时间区间的自由组合）才用
+   sql_query 直接查业务表（表结构见上下文）。不要在无关工具上反复试探。
 1. 最多 {max_steps} 轮工具调用，先想清楚一共需要哪几个数据，再按顺序调用。
 1a. 用户问题常包含多个子问题：每个子问题都必须有对应的工具观察支撑，全部查完
     才允许 final；只查了一部分就作答、或声称"没有记录"而实际没查，都是不允许的。
 2. final 里的每个数字、每个名称都必须来自上面某步的观察 JSON，禁止编造、禁止心算新数字。
 3. final 先直接回答问题，再给关键数字（带单位），不超过四句话。
 4. 观察里没有的信息可以再调工具；确实查不到就明说「系统里没有记录」。
+   观察已经足够回答（候选名单、无结果、单条数据）就立即 final——不要换工具
+   反复试探，一步查到就一步答。
+4a. 观察里带 candidates（同名多档案）时，必须把候选列给用户请其说明规格，
+    不得用 SQL 把各档案数量合并成一个总数代替用户选择。recent_bills 只返回
+    最近几张、不代表全量：问单据总数用 sql_query 的 COUNT(*)。
 5. 工具名和 args 的键必须与工具目录完全一致。
-6. sql_query 只写单条 SELECT：软删除表加 delete_flag='0'，大表带 LIMIT；
-   不确定字段名或枚举取值先用 db_schema 或 SELECT DISTINCT 探查；
-   SQL 报错就按错误信息改一次，不要放弃。
+6. sql_query 只写单条 SELECT：软删除表加 delete_flag='0'，大表带 LIMIT。
+   业务表结构已经写在你的上下文里——直接写业务表的 SQL，不要查询
+   information_schema（会被拒绝），也不要用 db_schema 逐表探查，除非 SQL
+   报错提示字段不存在；SQL 报错就按错误信息改一次，不要放弃。
 7. 只处理工具目录能查的范围（经营数据、系统操作方法）。与此无关的问题
    （闲聊/天气/常识/写文案等）不要调用任何工具，直接 final：「我只能查本系统
    的进销存数据，比如『可乐还有多少库存』『本月卖了多少』『谁欠我钱』。」
+8. 问答是只读的：用户要求改库存/删单据/录单等写操作时不要调用任何工具，
+   直接 final 说明「问一问只能查询，不能改数据；录单请用对话录单入口」。
 
 # 用户问题
 {goal}"""
@@ -224,8 +236,12 @@ def _emit(on_event, evt):
 
 
 def _finish(goal, final, steps, tokens, started, observations, notes, prof, forced=False):
-    """数字接地校验 + 汇总。final 不可信时退回模板句拼接（保留原 final 供审计）。"""
-    grounded = numeric_grounded(final, observations)
+    """数字接地校验 + 汇总。final 不可信时退回模板句拼接（保留原 final 供审计）。
+
+    没有任何观察（越界出口 / 只读拒绝等无工具 final）时跳过数字接地：
+    接地校验的职责是「答案数字可追溯到 ERP 数据」，零观察时无可追溯对象，
+    硬判反而误杀回绝语里复述的用户数字（v2 评测 d5 实测）。"""
+    grounded = numeric_grounded(final, observations) if observations else True
     answer = final
     if not grounded and notes:
         answer = "；".join(dict.fromkeys(notes))   # 模板句去重保序；本身只用观察里的数字，天然接地

@@ -18,13 +18,14 @@
 一律交给 agent loop（参数抽取交给模型更可靠）。
 """
 import re
+import time
 
 from . import config as cfgmod
 from . import dbread as dbmod
 from .report import official_stats, recent_bills as _rb, stock_overview, summary
-from .erp import get_client
+from .erp import get_client, parallel
 
-PROMPT_VERSION = "ask-v4-20261109"   # v4: 越界问题出口规则（rule 7）+ 分仓仓库过滤走 find_depot（F11）
+PROMPT_VERSION = "ask-v7-20261109"   # v7: 步数预算 6→4（专用工具 1~2 步即答）+ 歧义候选不许 SQL 合并 + recent_bills 非全量语义（F11）
 
 # --------------------------------------------------------------------------
 # 第 1 层：规则直答（0 token）。只收录无参数的统计意图，带参数的查询
@@ -40,18 +41,42 @@ _RULES = [
 ]
 
 
-def _rule_route(text):
+def _master_names(erp):
+    """主数据名集合（归一化，len>=2），供规则路由的实体护栏。读缓存列表，成本可忽略。"""
+    names = set()
+    try:
+        for row in (erp.materials() or []):
+            n = str(row.get("name") or "").strip()
+            if len(n) >= 2:
+                names.add(erp._norm(n))
+        for ptype in ("供应商", "客户"):
+            for row in (erp.suppliers(ptype) or []):
+                n = str(row.get("supplier") or "").strip()
+                if len(n) >= 2:
+                    names.add(erp._norm(n))
+    except Exception:
+        pass
+    return names
+
+
+def _rule_route(text, erp=None):
     """命中返回 (tool, {})，未命中返回 None。
 
-    两道护栏：长句（>24 字）与复合意图（含「另外/还有/顺便」等连接词或多个
-    分句）一律交给 agent loop——规则直答只服务单一意图的统计问句，宁缺勿滥。
-    （实测教训：「今天卖了多少？另外库存值多少钱？」曾被截胡只答一半。）
+    三道护栏：长句（>24 字）、复合意图（含「另外/还有/顺便」等连接词）、
+    实体参数（文本含主数据名——「电池今天卖了多少」today_stats 答不了「电池」，
+    v1 评测实测截胡：参数化问题一律交 agent loop 抽参）。
+    规则直答只服务无参数的整句统计问句，宁缺勿滥。
     """
     t = (text or "").strip()
     if not t or len(t) > 24:
         return None
     if re.search(r"另外|还有|以及|顺便|然后|同时|再问|还想知道", t):
         return None
+    if erp is not None:
+        tn = erp._norm(t)
+        for name in _master_names(erp):
+            if name and name in tn:
+                return None
     for pat, tool in _RULES:
         if re.search(pat, t):
             return tool, {}
@@ -212,7 +237,7 @@ def _debts(_args, erp):
 
 def _recent_bills(_args, erp):
     bills = _rb(erp, limit=6)
-    data = {"bills": bills}
+    data = {"bills": bills, "count": len(bills)}
     if not bills:
         return data, "系统里还没有单据。"
     lines = "；".join(f"{b['time']} {b['type']} {b['party']} {b['total']:,.2f}元" for b in bills[:5])
@@ -254,6 +279,67 @@ def _master_count(args, erp):
     return data, tpl
 
 
+def _query_bills(args, erp):
+    """按往来单位/日期/商品查单据明细（v3 评测补的工具面：「谁买了什么/某天卖了
+    什么/某商品最近进出」这类多跳问题此前只能靠模型拼多表 SQL，实测反复失败）。"""
+    party = str(args.get("party") or "").strip()
+    date_s = str(args.get("date") or "").strip()   # YYYY-MM-DD / 今天 / 昨天
+    material = str(args.get("material") or "").strip()
+    today = time.strftime("%Y-%m-%d")
+    alias = {"今天": today, "昨天": time.strftime("%Y-%m-%d", time.localtime(time.time() - 86400))}
+    day = alias.get(date_s, date_s)
+    if day and not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
+        return {"error": "date 要用 YYYY-MM-DD（或「今天」「昨天」）", "got": date_s}, \
+            "date 参数没认出来（%s），请用 YYYY-MM-DD" % date_s
+    bills = erp.bills(page_size=500)
+    rows, matched_ids = [], []
+    for b in bills:
+        if str(b.get("deleteFlag")) == "1":
+            continue
+        t = str(b.get("operTime") or "")[:10]
+        if day and t != day:
+            continue
+        if party and erp._norm(party) not in erp._norm(b.get("organName") or ""):
+            continue
+        goods = str(b.get("materialsList") or "")
+        if material and erp._norm(material) not in erp._norm(goods):
+            continue
+        rows.append({"number": b.get("number"), "time": t,
+                     "type": (b.get("type") or "") + "·" + (b.get("subType") or ""),
+                     "party": b.get("organName") or "—",
+                     "goods": goods.strip()[:60], "total": float(b.get("totalPrice") or 0),
+                     "debt": float(b.get("debt") or 0)})
+        matched_ids.append(b.get("id"))
+        if len(rows) >= 20:
+            break
+    # 补明细行（materialsList 只有商品名没有数量；「电池今天卖了多少」要的是数量）
+    if rows:
+        bc2name = {}
+        for m in erp.materials():
+            bc = str(m.get("mBarCode") or m.get("barCode") or "")
+            if bc:
+                bc2name[bc] = (str(m.get("name") or ""), str(m.get("unit") or ""))
+        details = parallel([lambda i=i: erp._bill_details(i) for i in matched_ids], workers=6)
+        for row, drows in zip(rows, details):
+            items = []
+            for dr in (drows or [])[:10]:
+                name, unit = bc2name.get(str(dr.get("barCode") or ""), ("?", ""))
+                try:
+                    qty = float(dr.get("operNumber") or 0)
+                except (TypeError, ValueError):
+                    qty = 0.0
+                items.append({"name": name, "qty": qty, "unit": unit})
+            row["items"] = items
+    data = {"filters": {"party": party, "date": day, "material": material},
+            "count": len(rows), "bills": rows}
+    scope = "、".join(x for x in ((party or ""), (day or ""), ("含" + material) if material else "") if x)
+    if not rows:
+        return data, "没有查到符合条件（%s）的单据（最近 %d 张里）。" % (scope or "给定条件", len(bills))
+    lines = "；".join("%s %s %s %s %g元" % (r["time"], r["party"], r["goods"][:20], r["type"], r["total"])
+                      for r in rows[:5])
+    return data, "查到 %d 张：%s。" % (len(rows), lines)
+
+
 # 规则直答层允许的工具
 _RULE_TOOLS = {
     "today_stats": _today_stats, "month_stats": _month_stats, "debts": _debts,
@@ -279,7 +365,7 @@ def _tools(erp):
                         "run": bind(_month_stats)},
         "debts": {"desc": "谁欠我钱、我欠谁钱（应收应付）", "args_hint": "{}",
                   "run": bind(_debts)},
-        "recent_bills": {"desc": "最近录了哪些单", "args_hint": "{}",
+        "recent_bills": {"desc": "最近录了哪些单（最多 6 张，不是全量；问单据总数用 sql_query COUNT）", "args_hint": "{}",
                          "run": bind(_recent_bills)},
         "stock_value": {"desc": "库存里的货总共值多少钱", "args_hint": "{}",
                         "run": bind(_stock_value)},
@@ -289,6 +375,9 @@ def _tools(erp):
         "search_history": {"desc": "搜历史单据（上次/之前跟谁买过什么、某商品进过几次货、原话找单）",
                            "args_hint": '{"query":"检索词，如商品名或往来单位"}',
                            "run": lambda a: rmod.search_history(str(a.get("query") or ""))},
+        "query_bills": {"desc": "按条件查单据明细（谁买了什么/某天卖了什么/某商品最近进出/某单位欠款单）",
+                        "args_hint": '{"party":"往来单位，可空","date":"YYYY-MM-DD或今天/昨天，可空","material":"商品名，可空"}',
+                        "run": lambda a: _query_bills(a, erp)},
         "sql_query": {"desc": "对 ERP 全库只读 SQL 查询：任意表的清单/数量/明细/汇总/排名/时间区间，专用工具没覆盖的问题一律用它",
                       "args_hint": '{"sql":"单条 SELECT；表结构见上下文；软删除表加 delete_flag 为 0 的条件；大表带 LIMIT"}',
                       "run": lambda a: dbmod.sql_query(a)},
@@ -318,7 +407,7 @@ def ask(text, erp=None, on_event=None):
                 pass
 
     # ---- 第 1 层：规则直答（0 token）----
-    hit = _rule_route(text)
+    hit = _rule_route(text, erp)
     if hit:
         tool, args = hit
         try:
