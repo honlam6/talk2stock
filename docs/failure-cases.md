@@ -65,10 +65,10 @@
 
 ## 2026-11-09
 
-### F12 线上问一问决策模型被 agent_model 覆盖，「用的什么模型」口径对不上（P2，已修复）
-- **现象**：admin 已把共享档案切到 `global:hy4free`，`/api/ask` 的 meta.model 却一直显示 `global:default-model`——答辩问「线上用的什么模型」时与设置页口径矛盾（服务器真机 + 网关回显实测定位）。
-- **根因**：F10 修复时把 `llm.agent_model` 配成了 `global:default-model`（决策专用低延迟模型），`agent_profile()` 用它覆盖档案模型；这个覆盖对「默认跟随 admin 全局设置」的产品语义是隐形的。
-- **修复**：①线上 `agent_model` 清空（服务器备份 `config.json.bak-20261109-hy4`），决策跟随全局；②agent 决策步默认附 `reasoning_effort=low`（档案显式设置优先）——用参数控制思考深度，替代「另配一个决策模型」的粗粒度隔离，与 `agent_max_tokens` 输出封顶互补；③档案级新增 `reasoning_effort` / `extra_body`（Qwen enable_thinking、Claude thinking 等厂商私有参数透传，厂商叫法不一时走后者），设置页共享/我的模型两个表单均可配，端点不认的参数 400 一次后自动摘除（同 stream_options quirk 先例）。单测 9 条（tests/test_llm_reasoning.py）。
+### F12 线上问一问决策模型被旧的 agent_model 覆盖，「用的什么模型」口径对不上（P2，已修复）
+- **现象**：admin 已把共享模型切成 hy4，`/api/ask` 的 meta.model 却一直显示另一个网关默认别名——答辩问「线上用的什么模型」时与设置页口径矛盾（服务器真机 + 网关回显实测定位）。
+- **根因**：F10 修复时配置了「决策专用低延迟模型」（llm.agent_model），它会覆盖档案模型；这个覆盖对「默认跟随 admin 全局设置」的产品语义是隐形的。
+- **修复**：①线上 agent_model 清空（服务器留有 config.json.bak-20261109-hy4 备份），决策跟随全局 hy4；②agent 决策步默认附 `reasoning_effort=low`（档案显式设置优先）——用参数控制思考深度，替代「另配一个决策模型」的粗粒度隔离，与 `agent_max_tokens` 输出封顶互补；③档案级新增 `reasoning_effort` / `extra_body`（Qwen enable_thinking、Claude thinking 等厂商私有参数透传，厂商叫法不一时走后者），设置页共享/我的模型两个表单均可配，端点不认的参数 400 一次后自动摘除（同 stream_options quirk 先例）。单测 9 条（tests/test_llm_reasoning.py）。
 - **教训**：「决策用哪个模型」这类横切配置，meta 里必须可见且与设置页口径一致——否则答辩/审计场景第一句就被问倒。
 
 ### F11 分仓库存查问：仓库过滤精确匹配查空 → 误报「没有库存记录」（P1，已修复）
@@ -77,5 +77,6 @@
 - **修复**：`erp.py` 抽纯函数 `match_depot_rows`（exact + **双向包含**：「原料仓库」也能命中「原料仓」；多命中交上层，绝不静默挑第一个）；`_stock_query` 改走 `find_depot`，查无此仓时明说「没有叫 X 的仓库」并按编辑相似度给相近候选；单测 9 条（`tests/test_depot_match.py`，含「误导句不许再出现」断言）。
 - **状态**：已修复，单测过；真机回归待本地 ERP 容器恢复后跑一次黄金数据（原料仓 50 / 成品仓 52 / 总 102）。
 
-## 待验证
+## 待验证 / Open Items
+- **P4 单据列表规模边界（open，2026-11-09 规模基准实测）**：`/depotHead/list` 带 search 时翻页不可靠（`currentPage` 翻页空、`pageNo` 重复第一页），时间窗二分 sweep 亦未收敛（大窗口探测单点失效导致整树塌空，已回滚）——单类单据超 200 张时 `all_bills` 只覆盖最新一页，**欠款合计漏老账**（260 张真路径未付单实测只进 200 张，漏 23%）。主数据侧已由自适应翻页修复（812=812 三次实证）；单据侧的可行方向：①按 `beginTime/endTime` 时间桶逐段查询（参数已验证有效，桶内 <200 张免翻页；递归塌空问题待解）②官方聚合接口（getNeedCount 语义不符已排除）。触发条件：单类单据量接近 200 或欠款数字对不上时必须修。证据：`eval/results/stress_*.md`，复现：`python3 eval/stress_scale.py`。
 - F5 修复后的复合问题多步取证稳定性（需网关 + 真机）。
