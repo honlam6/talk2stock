@@ -1,0 +1,35 @@
+{"_comment": "问一问冻结评测语料 v1.2-20261109（判定精化：d2 期望从硬措辞改为 contains_any——v2 实测模型会把「二号仓库」语义解析成「仓库2」查真值，两条诚实路径都该得分，唯一禁的是误导句「没有库存记录」；c3 的「各买了多少」按采购者自然读法取商品数量而非金额——v5 实测模型答数量更贴题）。前置：必须当天先跑 eval/seed_demo.py --yes 播种受控数据集（本语料全部 gold 数字派生自 seed_demo.py 的 DATASET，数据集改动则语料作废重标）。跑法：cd app && python3 ../eval/run_ask.py。type: rule=规则直答 / agent=单工具 / compound=复合多步 / boundary=边界对抗。判定字段：route 期望路由；numbers 答案必须出现的数字（归一化后容差 0.01）；contains / not_contains 子串；contains_any 任一命中；no_tools 不得调用任何工具；min_tools 至少调用 N 个工具；tools_any 使用的工具须含其一。"}
+{"id": "r1", "type": "rule", "text": "今天买和卖了多少", "expect": {"route": "rule", "numbers": [0, 222]}}
+{"id": "r2", "type": "rule", "text": "本月采购和销售各多少", "expect": {"route": "rule", "numbers": [3270, 1062]}}
+{"id": "r3", "type": "rule", "text": "谁欠我钱", "expect": {"route": "rule", "numbers": [100], "contains": ["永辉超市"]}}
+{"id": "r4", "type": "rule", "text": "最近录了哪些单", "expect": {"route": "rule", "numbers": [230], "contains": ["校园超市"]}}
+{"id": "r5", "type": "rule", "text": "什么货快没了", "expect": {"route": "rule", "numbers": [12, 8], "contains": ["6号电池"]}}
+{"id": "r6", "type": "rule", "text": "库存里的货总共值多少钱", "expect": {"route": "rule", "numbers": [2381]}}
+{"id": "r7", "type": "rule", "text": "系统里有多少个供应商", "expect": {"route": "rule", "numbers": [4]}}
+{"id": "r8", "type": "rule", "text": "有多少种商品", "expect": {"route": "rule", "numbers": [12]}}
+{"id": "r9", "type": "rule", "text": "我欠谁钱", "expect": {"route": "rule", "numbers": [0]}}
+{"id": "a1", "type": "agent", "text": "可乐还有多少库存", "expect": {"route": "agent", "numbers": [52]}}
+{"id": "a2", "type": "agent", "text": "可乐在成品仓还剩多少瓶", "expect": {"route": "agent", "numbers": [52]}}
+{"id": "a3", "type": "agent", "text": "矿泉水在原料仓库还有多少", "expect": {"route": "agent", "numbers": [0], "not_contains": ["没有库存记录"]}}
+{"id": "a4", "type": "agent", "text": "牛皮纸还有多少", "expect": {"route": "agent", "numbers": [10]}}
+{"id": "a5", "type": "agent", "text": "方便面还剩多少箱", "expect": {"route": "agent", "numbers": [10]}}
+{"id": "a6", "type": "agent", "text": "螺丝还有多少库存", "expect": {"route": "agent", "contains": ["M8", "M10"]}}
+{"id": "a7", "type": "agent", "text": "现在库存紧张的商品有哪些", "expect": {"route": "agent", "contains": ["6号电池"]}}
+{"id": "a8", "type": "agent", "text": "谁是欠款最多的客户", "expect": {"route": "agent", "numbers": [100], "contains": ["永辉超市"]}}
+{"id": "a9", "type": "agent", "text": "上次可乐是跟谁买的", "expect": {"route": "agent", "tools_any": ["search_history"], "contains": ["美宜佳"]}}
+{"id": "a10", "type": "agent", "text": "在系统里怎么录单", "expect": {"route": "agent", "tools_any": ["search_docs"]}}
+{"id": "a11", "type": "agent", "text": "一共录了多少张单", "expect": {"route": "agent", "numbers": [9]}}
+{"id": "a12", "type": "agent", "text": "校园超市今天买了什么", "expect": {"route": "agent", "contains": ["电池", "矿泉水"]}}
+{"id": "a13", "type": "agent", "text": "电池今天卖了多少", "expect": {"route": "agent", "numbers": [30]}}
+{"id": "a14", "type": "agent", "text": "螺丝M8还有多少盒", "expect": {"route": "agent", "numbers": [0]}}
+{"id": "a15", "type": "agent", "text": "最近一张单是什么", "expect": {"route": "agent", "contains": ["校园超市"], "numbers": [230]}}
+{"id": "a16", "type": "agent", "text": "我该去哪个仓库找可乐", "expect": {"route": "agent", "numbers": [52], "contains": ["成品仓"]}}
+{"id": "c1", "type": "compound", "text": "今天卖了多少？另外库存值多少钱", "expect": {"route": "agent", "numbers": [222, 2381], "min_tools": 2}}
+{"id": "c2", "type": "compound", "text": "可乐和方便面各剩多少", "expect": {"route": "agent", "numbers": [52, 10]}}
+{"id": "c3", "type": "compound", "text": "昨天谁买了东西各买了多少", "expect": {"route": "agent", "numbers": [10, 50, 80], "contains": ["永辉超市", "张记便利店"]}}
+{"id": "d1", "type": "boundary", "text": "雪碧还有多少", "expect": {"route": "agent", "contains": ["雪碧"], "contains_any": ["没有查到", "没有", "记录"]}}
+{"id": "d2", "type": "boundary", "text": "可乐在二号仓库还有多少", "expect": {"route": "agent", "contains_any": ["仓库2", "没有叫"], "not_contains": ["没有库存记录"]}}
+{"id": "d3", "type": "boundary", "text": "今天天气怎么样", "expect": {"route": "agent", "no_tools": true, "contains": ["进销存"]}}
+{"id": "d4", "type": "boundary", "text": "帮我写一首关于库存的诗", "expect": {"route": "agent", "no_tools": true, "contains": ["进销存"]}}
+{"id": "d5", "type": "boundary", "text": "把可乐的库存改成999", "expect": {"route": "agent", "contains_any": ["只读", "不能", "无法", "查询"]}}
+{"id": "d6", "type": "boundary", "text": "你是谁", "expect": {"route": "agent"}}

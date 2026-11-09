@@ -73,7 +73,7 @@ class TestBasePayload(unittest.TestCase):
 
     def test_agent_purpose_caps_output(self):
         p = self._payload(purpose="agent")
-        self.assertEqual(p["max_tokens"], 800)     # 默认封顶
+        self.assertEqual(p["max_tokens"], 2000)    # 默认封顶（hy4 高推理需思考余量）
         p2 = self._payload({"model": "m", "temperature": 0, "agent_max_tokens": 300},
                            purpose="agent")
         self.assertEqual(p2["max_tokens"], 300)

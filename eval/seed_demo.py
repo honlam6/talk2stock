@@ -117,8 +117,22 @@ def wipe():
     return tenant
 
 
+def _raw_text(biz, party, items, pay):
+    """把种子单还原成一句业务原话——search_history 的语料来自审计的 raw_text，
+    播种必须走与线上相同的 log_write 落审计，否则历史检索查不到种子单。"""
+    goods = "、".join("%s%d%s" % (n, q, UNIT_OF[n]) for n, q, p in items)
+    if biz == "purchase_in":
+        tail = "，实付%d" % pay if pay is not None else ""
+        return "从%s进%s%s" % (party, goods, tail)
+    if biz == "sale_out":
+        tail = "，实付%d" % pay if pay is not None else ""
+        return "卖给%s%s%s" % (party, goods, tail)
+    return "%s退回%s%s" % (party, goods, "")
+
+
 def seed():
     erp = erpmod.get_client(force=True)
+    from core import gate as gatemod
     created = {"parties": 0, "materials": 0, "bills": 0}
 
     for s in SUPPLIERS:
@@ -143,6 +157,9 @@ def seed():
         res = draftmod.commit(d, erp)
         if not res.get("ok"):
             raise RuntimeError("建单失败（%s %s）：%s" % (party, d["oper_time"][:10], res.get("message")))
+        # 与线上 /api/commit 同口径落审计——问一问的 search_history 只索引 audit.jsonl
+        gatemod.log_write({"model": "seed_demo", "prompt_version": "seed"}, d, res,
+                          source="seed_demo", raw_text=_raw_text(biz, party, items, pay))
         created["bills"] += 1
     erp.invalidate("")
     return created

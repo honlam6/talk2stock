@@ -55,3 +55,30 @@ class TestRuleRoute(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEntityGuard(unittest.TestCase):
+    """实体护栏（v1 评测 a13 教训）：「电池今天卖了多少」是参数化问题，
+    today_stats 答不了「电池」——文本含主数据名必须放行 agent loop。"""
+
+    class _Stub:
+        @staticmethod
+        def _norm(s):
+            return (str(s or "")).strip().lower().replace(" ", "")
+        @staticmethod
+        def materials():
+            return [{"id": 1, "name": "电池"}, {"id": 2, "name": "可乐"}]
+        @staticmethod
+        def suppliers(ptype=None):
+            return [{"id": 3, "supplier": "美宜佳"}]
+
+    def test_entity_question_defers_to_agent(self):
+        self.assertIsNone(askmod._rule_route("电池今天卖了多少", self._Stub()))
+
+    def test_whole_sentence_stats_still_hit(self):
+        self.assertEqual(askmod._rule_route("今天买和卖了多少", self._Stub()), ("today_stats", {}))
+
+    def test_master_count_unaffected(self):
+        """「多少个供应商」的供应商是类型词不是档案名，仍走规则直答。"""
+        self.assertEqual(askmod._rule_route("系统里有多少个供应商", self._Stub()),
+                         ("master_count", {"entity": "供应商"}))

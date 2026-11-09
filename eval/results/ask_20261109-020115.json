@@ -1,0 +1,85 @@
+{
+ "summary": {
+  "corpus_version": "ask-v1-20261109",
+  "model": "hy4",
+  "n": 4,
+  "acc": 1.0,
+  "by_type": {
+   "rule": 1.0
+  },
+  "route_acc": 1.0,
+  "latency_avg_s": 0.36,
+  "latency_p95_s": 0.55,
+  "agent_latency_avg_s": 0,
+  "agent_tokens_avg": 0,
+  "rule_tokens": 0
+ },
+ "results": [
+  {
+   "id": "r1",
+   "type": "rule",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true
+   },
+   "latency_s": 0.55,
+   "tokens": 0,
+   "route": "rule",
+   "grounded": true,
+   "answer": "今天采购 0.00 元（0 笔），销售 222.00 元（3 笔），现金流差额 222.00 元（销售-采购，非毛利）。",
+   "error": ""
+  },
+  {
+   "id": "r2",
+   "type": "rule",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true
+   },
+   "latency_s": 0.38,
+   "tokens": 0,
+   "route": "rule",
+   "grounded": true,
+   "answer": "本月采购 3,270.00 元（6 笔），销售 1,062.00 元（4 笔），现金流差额 -2,208.00 元（销售-采购，非毛利）。",
+   "error": ""
+  },
+  {
+   "id": "r3",
+   "type": "rule",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "contains": true
+   },
+   "latency_s": 0.28,
+   "tokens": 0,
+   "route": "rule",
+   "grounded": true,
+   "answer": "客户共欠我 100.00 元（永辉超市 100.00）；我欠供应商 0.00 元（无）。",
+   "error": ""
+  },
+  {
+   "id": "r4",
+   "type": "rule",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "contains": true
+   },
+   "latency_s": 0.22,
+   "tokens": 0,
+   "route": "rule",
+   "grounded": true,
+   "answer": "最近 6 张单：2026-11-09 出库·销售 校园超市 230.00元；2026-11-09 入库·销售退货 永辉超市 8.00元；2026-11-08 出库·销售 张记便利店 440.00元；2026-11-08 出库·销售 永辉超市 400.00元；2026-11-07 入库·采购 美宜佳 ",
+   "error": ""
+  }
+ ]
+}
