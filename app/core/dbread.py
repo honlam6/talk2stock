@@ -165,7 +165,7 @@ def validate_sql(sql):
     if _DENY.search(s):
         raise DbError("只允许只读查询（检测到写操作或危险函数）")
     if _SYS_DB.search(s):
-        raise DbError("只允许查 ERP 业务库的表")
+        raise DbError("业务表结构已在上下文里，直接写业务表（jsh_*）的 SQL；information_schema 不可查，也不要再用探查语句")
     # 无 LIMIT 且非聚合的大结果集，自动加 LIMIT，避免拖垮 / 撑爆上下文
     if not re.search(r"\blimit\b", s, re.I) and not re.search(
             r"\b(count|sum|avg|min|max|group\s+by)\b", s, re.I):

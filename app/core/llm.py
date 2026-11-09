@@ -396,9 +396,11 @@ def _base_payload(prof, messages, force_json=True, purpose="", extra_effort=None
     # agent 每轮只输出一个短 JSON 动作；推理模型不设输出上限时实测会烧掉
     # 上万 token 做思考（单步 120~170 秒，甚至问答整体超时）。按 purpose 给
     # 决策类调用封顶，可用档案 agent_max_tokens 覆盖；长文本生成（parse /
-    # insight）不受影响。
+    # insight）不受影响。默认值取 agent.DEFAULT_AGENT_MAX_TOKENS（2000）——
+    # hy4 默认高推理，800 连思考都装不下，正文 JSON 会被截断（F12 评测实测）。
     if purpose == "agent":
-        payload["max_tokens"] = int(prof.get("agent_max_tokens") or 800)
+        from . import agent as _agentmod
+        payload["max_tokens"] = int(prof.get("agent_max_tokens") or _agentmod.DEFAULT_AGENT_MAX_TOKENS)
     eff = str(prof.get("reasoning_effort") or "").strip() or extra_effort
     if eff and "no_reasoning_effort" not in _quirks:
         payload["reasoning_effort"] = str(eff)
