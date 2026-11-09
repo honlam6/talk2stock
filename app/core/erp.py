@@ -240,18 +240,48 @@ class JshERP:
         if not self.token:
             self.login()
 
-    # ---------- 列表查询（带 60s 缓存） ----------
-    def list(self, path, search=None, page_size=500, use_cache=True):
+    # ---------- 列表查询（带 60s 缓存；自动翻页取全量） ----------
+    def _list_page(self, path, search, page, page_size, param):
+        url = path
+        if search:
+            url += "?search=" + urllib.parse.quote(json.dumps(search, ensure_ascii=False))
+        sep = "&" if "?" in url else "?"
+        url += f"{sep}{param}={page}&pageSize={page_size}"
+        return self._req(url).get("data") or {}
+
+    def list(self, path, search=None, page_size=500, use_cache=True, max_pages=20):
+        """列表查询。⚠ 历史教训（规模基准 P2/P4 实测）：只取第一页时，商品超 500
+        静默丢 38%、真实欠款单漏 23%。且两个端点认的分页参数不同——/material/list
+        认 currentPage（pageNo 会重复第一页）、/depotHead/list 认 pageNo（currentPage
+        翻第二页直接空）——这里自适应：空页续翻失败或整页重复时换参数重跑。
+        total 只作提前停的双保险（backend 偶发少报 total，信它会丢最后一页）。"""
         ck = f"{path}|{json.dumps(search or {}, sort_keys=True, ensure_ascii=False)}"
         now = time.time()
         if use_cache and ck in self._cache and now - self._cache_at.get(ck, 0) < 60:
             return self._cache[ck]
         self.ensure_login()
-        url = path
-        if search:
-            url += "?search=" + urllib.parse.quote(json.dumps(search, ensure_ascii=False))
-        url += ("&" if "?" in url else "?") + f"pageNo=1&pageSize={page_size}"
-        rows = (self._req(url).get("data") or {}).get("rows") or []
+        rows = []
+        for param in ("currentPage", "pageNo"):
+            rows, seen_ids, total = [], set(), None
+            stuck = False
+            for page in range(1, max_pages + 1):
+                data = self._list_page(path, search, page, page_size, param)
+                batch = data.get("rows") or []
+                rows.extend(batch)
+                if total is None:
+                    try:
+                        total = int(data.get("total"))
+                    except (TypeError, ValueError):
+                        total = None
+                ids = {str(r.get("id")) for r in batch if r.get("id") is not None}
+                if page > 1 and (not batch or ids and ids.issubset(seen_ids)):
+                    stuck = True   # 空页（参数不认）或整页重复 → 换分页参数重来
+                    break
+                seen_ids |= ids
+                if not batch or len(batch) < page_size or (total is not None and len(rows) >= total):
+                    break
+            if not stuck:
+                break
         self._cache[ck] = rows
         self._cache_at[ck] = now
         return rows
@@ -760,7 +790,11 @@ class JshERP:
         """查单据。
         ⚠️ subType 必传！后端 getBillCategory() 对 subType 直接 .equals()，
         为 null 时抛 NullPointerException → 返回 code:300 数据查询异常。
-        不指定 sub_type 时自动遍历该 type 下所有子类型（并行请求）。"""
+        不指定 sub_type 时自动遍历该 type 下所有子类型（并行请求）。
+        ⚠️ 规模边界（stress_scale P4，2026-11-09 实测）：/depotHead/list 带
+        search 时 currentPage/pageNo 翻页均不可靠（page2 空/重复）+ 时间窗
+        二分 sweep 也未收敛——单类超 200 张时本查询只覆盖最新一页，欠款合计
+        会漏老账（open item，见 eval/results/stress_*.md）。"""
         search = dict(extra)
         if btype:
             search["type"] = btype
@@ -781,7 +815,7 @@ class JshERP:
         return out
 
     def all_bills(self, page_size=200, **extra):
-        """全部单据（并行遍历所有 type/subType 组合）。"""
+        """全部单据（并行遍历所有 type/subType 组合）。规模边界同 bills()。"""
         results = parallel([
             lambda st=st: self.list("/depotHead/list", dict(extra, subType=st),
                                     page_size=page_size, use_cache=False)
