@@ -58,7 +58,7 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 | **双端留痕** | Agent 侧：每次写入落 `audit.jsonl`（operator=登录名）；ERP 侧：录单成功自动往 ERP 自带日志模块写一条「操作人 X 通过 Talk2Stock 录单」（按 userId 归因，原 ERP「日志」页按人可查）；token 用量按登录者分账（usage.jsonl `user` 字段） |
 | **列表全量拉取（自适应翻页）** | 两个列表端点认不同分页参数（`/material/list` 认 `currentPage`、`/depotHead/list` 认 `pageNo`），客户端按「空页 / 整页重复」自动换参续翻：主数据超过 500 条不再静默截断（规模基准 812 条商品计数 = SQL 真实值，三次复测一致）；单据侧超 200 张的边界见[已知边界](#已知边界与未解问题) |
 | **推理强度与厂商参数可配** | 模型档案新增 `reasoning_effort`（minimal/low/medium/high）、`extra_body`（原样透传厂商私有参数，如 Qwen 的 `enable_thinking`）与 `extra_headers`（网关分流头）；agent 决策步建议 `low` + 2000 token 输出封顶，避免推理模型把预算烧在思考上（F10/F12 失败案例） |
-| **问答评测驱动调优** | `eval/ask_cases.jsonl` 34 条冻结问句 + `eval/run_ask.py` 跑分器（分类统计 + 未通过逐条归因）：v1→v5 通过率 **76.5% → 94.1%**，每一版改动都有失败用例支撑（实体护栏、步数预算 6→4、`query_bills` 工具） |
+| **问答评测驱动调优** | `eval/ask_cases.jsonl` 34 条冻结问句 + `eval/run_ask.py` 跑分器（分类统计 + 未通过逐条归因）：v1→v5 通过率 **76.5% → 94.1%**，每一版改动都有失败用例支撑（实体护栏、收紧步数预算、`query_bills` 工具） |
 | 密钥不进仓库 | 密钥只存 `app/.env`（已 `.gitignore`）；`config.json` 也在忽略列表里，公开仓库只带 `config.example.json` 模板 |
 
 ---
@@ -491,7 +491,7 @@ python3 eval/run_ask.py --tag smoke     # 冒烟
 
 v1→v5 的有效改动（全部由失败用例驱动）：规则路由加**实体护栏**（问句含主数据名时不许
 `today_stats` 截胡，交 agent 抽参）、步数预算 6→4（专用工具 1~2 步即答，多余步数只烧钱）、
-新增 `query_bills` 工具（按时间窗/往来单位查单据明细）、决策输出封顶 800→2000（推理模型
+新增 `query_bills` 工具（按时间窗/往来单位查单据明细）、收紧决策步数预算与决策输出封顶（800→2000，推理模型
 思考占满预算会导致正文 JSON 截断 → 连环解析失败）、歧义候选禁止用 SQL 合并成一个总数。
 
 ### 规模基准（`eval/stress_scale.py`）
