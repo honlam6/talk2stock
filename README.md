@@ -11,6 +11,8 @@
 
 Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出草稿、标出「哪些档案要新建」，人确认后才真正落库。写错的成本被拦在写入之前，录入的点击次数从约 25 次降到约 4 次。
 
+> **在线演示**：<http://111.91.30.23:8090/>（云服务器实测部署，已开启 ERP 账号登录鉴权；演示账号由管理员分配。部署与运维细节见 [生产部署与运维](#生产部署与运维)）。
+
 ---
 
 ## 目录
@@ -21,6 +23,7 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 - [Agent 架构决策](#agent-架构决策为什么-tool-use-而不是-rag)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
+- [生产部署与运维](#生产部署与运维)
 - [配置你的 AI 解析模型](#配置你的-ai-解析模型)
 - [环境变量](#环境变量)
 - [端到端验证](#端到端验证)
@@ -53,6 +56,9 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 | 多模型档案 | 任意 OpenAI 兼容接口都能配（OpenAI / DeepSeek / 通义 / Kimi / 本地 Ollama…），页面即可配置、切换、测试；支持自签证书网关（`insecure`）与丢弃 system 角色的网关（`merge_system`） |
 | **ERP 账号联动登录 + 两级权限** | 成员用 **ERP 账号密码**登录（服务端转发 ERP 校验，密码不落盘），会话为 HMAC 无状态签名（默认 30 天）；管理员 = ERP `ismanager=1` 或 `T2S_ADMINS` 名单。共享模型档案 / ERP 连接仅管理员可见可改（接口层 403，非前端隐藏）；每人可另配**私有模型档案**（密钥存服务端本人档案，录单/问答优先用它），设置页成员只见共享模型只读状态行 |
 | **双端留痕** | Agent 侧：每次写入落 `audit.jsonl`（operator=登录名）；ERP 侧：录单成功自动往 ERP 自带日志模块写一条「操作人 X 通过 Talk2Stock 录单」（按 userId 归因，原 ERP「日志」页按人可查）；token 用量按登录者分账（usage.jsonl `user` 字段） |
+| **列表全量拉取（自适应翻页）** | 两个列表端点认不同分页参数（`/material/list` 认 `currentPage`、`/depotHead/list` 认 `pageNo`），客户端按「空页 / 整页重复」自动换参续翻：主数据超过 500 条不再静默截断（规模基准 812 条商品计数 = SQL 真实值，三次复测一致）；单据侧超 200 张的边界见[已知边界](#已知边界与未解问题) |
+| **推理强度与厂商参数可配** | 模型档案新增 `reasoning_effort`（minimal/low/medium/high）、`extra_body`（原样透传厂商私有参数，如 Qwen 的 `enable_thinking`）与 `extra_headers`（网关分流头）；agent 决策步建议 `low` + 2000 token 输出封顶，避免推理模型把预算烧在思考上（F10/F12 失败案例） |
+| **问答评测驱动调优** | `eval/ask_cases.jsonl` 34 条冻结问句 + `eval/run_ask.py` 跑分器（分类统计 + 未通过逐条归因）：v1→v5 通过率 **76.5% → 94.1%**，每一版改动都有失败用例支撑（实体护栏、步数预算 6→4、`query_bills` 工具） |
 | 密钥不进仓库 | 密钥只存 `app/.env`（已 `.gitignore`）；`config.json` 也在忽略列表里，公开仓库只带 `config.example.json` 模板 |
 
 ---
@@ -136,16 +142,25 @@ OpenAI function-calling 协议，任意兼容端点行为一致）：
 │   ├── selfcheck.py         #   应用层自检：直连 core 模块验逻辑
 │   ├── core/
 │   │   ├── config.py        #   配置与多模型档案（密钥只从 .env 读）
-│   │   ├── erp.py           #   jshERP REST 客户端（登录/主数据/建单/附件）
-│   │   ├── llm.py           #   LLM 解析层：口语 → 严格 JSON 草稿
+│   │   ├── erp.py           #   jshERP REST 客户端（登录/主数据/建单/自适应翻页）
+│   │   ├── llm.py           #   LLM 调用层：多档案、推理强度、参数透传、用量计量
 │   │   ├── draft.py         #   主数据匹配 + 建单（两段式 resolve/commit）
+│   │   ├── gate.py          #   一次性确认令牌（HMAC 无状态 + nonce 黑名单）
+│   │   ├── auth.py          #   ERP 账号联动登录 + 两级权限（管理员/成员）
+│   │   ├── agent.py         #   手写 function-calling loop（步数 + token 双预算 + 数字接地）
+│   │   ├── ask.py           #   三层问答路由：规则直答 / agent loop / 模板兜底
+│   │   ├── insight.py       #   经营洞察、主动预警、每日日报
+│   │   ├── retrieve.py      #   BM25 轻检索（操作文档 + 历史单据）
+│   │   ├── dbread.py        #   只读 SQL（单条 SELECT 校验 + 只读事务 + 行数护栏）
+│   │   ├── oplog.py         #   /api 耗时与结果埋点（oplog.jsonl）
 │   │   └── report.py        #   经营看板数据
 │   ├── web/                 #   前端页面（home / new / ask / dashboard / settings）
 │   ├── config.example.json  #   配置模板；首启自动复制为 config.json（config.json 已被忽略）
 │   └── .env.example         #   密钥模板；复制成 .env 后填真实值（.env 已被忽略）
 ├── jshERP-latest/           # 上游 jshERP 源码副本（Apache-2.0，含 deploy/ 编排）
 │   └── deploy/              #   docker-compose.yml + Dockerfile + nginx.conf
-├── docs/                    # 设计 / 部署验证 / 接口清单文档
+├── docs/                    # 设计 / 部署运维 / 接口清单 / 失败案例文档
+├── eval/                    # 冻结语料 + 跑分脚本（run.py 解析 / run_ask.py 问答 / stress_scale.py 规模）
 ├── start-all.sh             # 一键拉起：容器 + ERP 四容器 + Talk2Stock 服务
 ├── verify-local.sh          # 端到端验证：运行时 → 容器 → HTTP → 登录 → AI 链路
 └── LICENSE                  # MIT（仅覆盖自研部分）
@@ -197,6 +212,89 @@ python3 app/server.py             # 默认 0.0.0.0:8090，Ctrl-C 停止
 
 ---
 
+## 生产部署与运维
+
+### 本实例（在线演示）
+
+| 项 | 值 |
+|---|---|
+| Talk2Stock | <http://111.91.30.23:8090/> · 云服务器 Debian 12，2 vCPU / 2 GB，已开 `T2S_REQUIRE_AUTH=1` |
+| 原版 ERP | <http://111.91.30.23:8080/>（容器 `erp-web`，报表/权限/财务等仍回原系统） |
+| ERP 接口 | <http://111.91.30.23:9999/jshERP-boot> · Swagger `/doc.html` |
+| 进程守护 | systemd `talk2stock.service`（`Restart=always`，`ExecStart=/usr/bin/python3 /opt/talk2stock/app/server.py`） |
+| 日志 | `/opt/logs/talk2stock.log`（stdout + stderr 追加） |
+| 留痕数据 | `app/data/audit.jsonl`（写入/被拒）· `oplog.jsonl`（接口耗时与结果）· `usage.jsonl`（token 分账） |
+| 数据库 | 容器 `erp-mysql`（MySQL 8.0，库 `jsh_erp`，卷 `mysql-data`）· 容器 `erp-redis` |
+
+### 从零部署到一台 Linux 服务器
+
+```bash
+git clone https://github.com/honlam6/talk2stock.git && cd talk2stock
+cp app/.env.example app/.env && $EDITOR app/.env        # ERP 账号密码 + 模型 Key
+docker compose -f jshERP-latest/deploy/docker-compose.yml up -d
+python3 app/server.py                                    # 前台跑，或交给 systemd（见下）
+```
+
+systemd 单元（`/etc/systemd/system/talk2stock.service`，本实例即用此配置）：
+
+```ini
+[Unit]
+Description=Talk2Stock Conversational ERP Agent
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/talk2stock
+ExecStart=/usr/bin/python3 /opt/talk2stock/app/server.py
+Restart=always
+RestartSec=3
+StandardOutput=append:/opt/logs/talk2stock.log
+StandardError=append:/opt/logs/talk2stock.log
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+systemctl daemon-reload && systemctl enable --now talk2stock
+```
+
+### 日常运维
+
+```bash
+systemctl status talk2stock            # 运行状态
+systemctl restart talk2stock           # 改完 app/ 下代码后重启（web/ 静态文件改动免重启）
+tail -f /opt/logs/talk2stock.log       # 访问日志 / 异常栈
+docker ps --format '{{.Names}}\t{{.Status}}'   # erp-web / erp-backend / erp-mysql / erp-redis
+curl -s localhost:8090/api/health      # 返回 need_auth=true 且有 401 = 进程活着且鉴权生效
+python3 app/selfcheck.py               # 应用层自检（直连 core 模块）
+```
+
+### 公网暴露前置清单
+
+- [x] `T2S_REQUIRE_AUTH=1`：所有 `/api` 需登录（本实例已开）
+- [ ] 改掉默认 `T2S_DEMO_PASS`（管理员后备通道口令；默认值等同于公开后门）
+- [ ] ERP 初始账号改密：初始化 SQL 自带 `jsh/123456`、`admin/123456`，公网实例必须更换
+- [ ] 前置 Caddy/Nginx 做 HTTPS + 限流；不裸奔 HTTP 端口（本实例当前为 IP:8090 直连，仅作演示）
+- [ ] 生产库与演示数据分离：`eval/seed_demo.py` 会清场重建，**绝不能在真实业务库上跑**
+
+### 备份与恢复
+
+```bash
+# 1) ERP 业务库（结构与数据，在线一致性快照）
+docker exec erp-mysql mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction \
+  jsh_erp > backups/jsh_erp-$(date +%F).sql
+# 2) 不入库的留痕与配置（含 .env 密钥，注意保管）
+tar czf backups/t2s-state-$(date +%F).tar.gz app/data app/config.json app/.env
+# 3) 恢复业务库
+docker exec -i erp-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD" jsh_erp < backups/jsh_erp-YYYY-MM-DD.sql
+```
+
+本实例 `backups/` 已有历史快照（`seed-backup-*.sql`，演示数据重置前自动备份）；详细运维记录见 [`docs/生产部署与运维.md`](docs/生产部署与运维.md)。
+
+---
+
 ## 配置你的 AI 解析模型
 
 AI 录入需要**任意一个 OpenAI 兼容接口**。两种配置方式，任选其一：
@@ -214,6 +312,8 @@ AI 录入需要**任意一个 OpenAI 兼容接口**。两种配置方式，任�
    | API Key | 密钥 | `sk-…` |
    | 模型名 | 该接口的 model id | `deepseek-chat` |
    | temperature | 抽取任务建议 0～0.3 | `0.2` |
+   | 推理强度 | `reasoning_effort`：minimal / low / medium / high；留空用端点默认。推理模型跑抽取/决策建议 low | `low` |
+   | 高级参数 | `extra_body`：厂商私有参数原样进请求体（如 `{"enable_thinking": false}`）；`extra_headers`：附加请求头（网关按头分流时用）；`merge_system`：网关丢弃 system 角色时开；`insecure`：自签证书网关 | 按需 |
 
 4. 点 **「测试连接」** 确认连通 → **「保存」** → 在列表里点 **「启用」**
 
@@ -372,6 +472,42 @@ python3 eval/run.py --limit 8 --tag smoke  # 冒烟
   [`docs/基线对比实验手册.md`](docs/基线对比实验手册.md)，记录表模板 `eval/baseline_timing.csv`。
 - 历次结果在 `eval/results/`（JSON + Markdown）。
 
+### 问一问评测（34 条冻结问句）
+
+```bash
+python3 eval/run_ask.py                 # 全量（含 agent 多步取证，耗时随模型而定）
+python3 eval/run_ask.py --tag smoke     # 冒烟
+```
+
+语料 `eval/ask_cases.jsonl`（`ask-v1-20261109` 冻结，34 条）分四类：`rule`（规则直答）、
+`agent`（需多工具取证）、`compound`（复合问题）、`boundary`（越界/拒答）。
+打分口径：答案是否正确 + 数字是否全部来自工具观察（接地）+ 数字集合是否齐全。
+每次改动提示词/工具都留档在 `eval/results/ask_*.md`，这是 v1→v5 的完整证据链：
+
+| 版本 | 提示词 | 总通过率 | rule / agent / compound / boundary | agent 均值延迟 | agent token/问 |
+|---|---|---|---|---|---|
+| v1 | ask-v1 | 76.5% | 100% / 62% / 67% / 83% | 130.0s | 10774 |
+| v5（当前） | ask-v7-20261109 | **94.1%** | 100% / 94% / 67% / 100% | 63.2s | 7685 |
+
+v1→v5 的有效改动（全部由失败用例驱动）：规则路由加**实体护栏**（问句含主数据名时不许
+`today_stats` 截胡，交 agent 抽参）、步数预算 6→4（专用工具 1~2 步即答，多余步数只烧钱）、
+新增 `query_bills` 工具（按时间窗/往来单位查单据明细）、决策输出封顶 800→2000（推理模型
+思考占满预算会导致正文 JSON 截断 → 连环解析失败）、歧义候选禁止用 SQL 合并成一个总数。
+
+### 规模基准（`eval/stress_scale.py`）
+
+800 商品 / 120 供应商 / 1200 单据的一次实测（`eval/results/stress_*.md`）：
+主数据计数 812 = SQL 真实值（自适应翻页修复后三次复测一致）；
+`P5` 分仓聚合 1200 张单据 0.71s；`P6` 端到端问答 67.4s 且数字接地通过。
+
+### 已知边界与未解问题
+
+- **单据列表规模边界（open）**：`/depotHead/list` 带 `search` 时翻页不可靠（`currentPage`
+  翻页为空、`pageNo` 重复第一页），单类单据超约 200 张时只覆盖最新一页 → 欠款合计会漏老账
+  （260 张真实未付单实测漏 23%）。主数据侧已修；单据侧可行方向与触发条件记录在
+  `docs/failure-cases.md`（P4）。
+- 复合问句（一句话里问两件事）通过率 67%，是当前最弱的一类，失败样本见 `eval/results/ask_*-v5.md`。
+
 ---
 
 ## 路线图
@@ -388,12 +524,18 @@ python3 eval/run.py --limit 8 --tag smoke  # 冒烟
 - ~~token 用量台账~~：usage.jsonl 精确计量 + 设置页成本条 + /api/usage。
 - ~~主数据候选匹配~~：匹配失败时给 top3 相似候选，确认卡上点选后自动重新预览。
 - ~~单位换算与含税口径~~：商品建档带 `unitId`，`unit` 传用户单位，后端 `DepotItemService` 按单位组 ratio 自动折算 `basicNumber`；行级 `tax_rate` 落 `taxRate / taxMoney / taxLastMoney`，含税/未税口径跟随 ERP 的 `materialPriceTaxFlag`。
-- ~~CI~~：GitHub Actions（py_compile + unittest 31 项 + 前端内联 JS node --check）。
+- ~~CI~~：GitHub Actions（`py_compile` + unittest **112 项** + 前端内联 JS `node --check`）。
+- ~~公网部署~~：云服务器实例 <http://111.91.30.23:8090/>，systemd 守护 + 鉴权开启，见[生产部署与运维](#生产部署与运维)。
+- ~~登录与权限~~：ERP 账号联动登录（密码不落盘）+ 管理员/成员两级权限 + 私有模型档案 + 防爆破。
+- ~~推理强度/厂商参数~~：档案级 `reasoning_effort` / `extra_body` / `extra_headers`，agent 决策步默认 low。
+- ~~列表全量拉取~~：主数据自适应翻页（修 500 条截断）；单据侧仍有规模边界（见[已知边界](#已知边界与未解问题)）。
+- ~~问答评测体系~~：34 条冻结问句 + `run_ask.py`，通过率 76.5% → 94.1%；规模基准 `stress_scale.py`。
 
 下一步（按对答辩的价值排序）：
-1. **基线实验落地**：按 `docs/基线对比实验手册.md` 跑两场景计时（半天）。
-2. **公网部署 + 备份录屏**：IP+端口或海外节点，暴露前开 `T2S_REQUIRE_AUTH=1`。
-3. 语音输入（浏览器转写，计划书里是可选项）。
+1. **基线实验落地**：`docs/基线对比实验手册.md` 的两场景计时（`eval/baseline_timing_slim.csv` 仍是空模板，需人工录两遍同一批单）。
+2. **单据侧规模边界**：按 `docs/failure-cases.md` P4 的时间桶方案收口，让欠款合计在 1000+ 单据下也可信。
+3. **复合问句**：67% 通过率是问答侧最后一块短板，先把「一句话两件事」拆解做完。
+4. 语音输入（浏览器转写，计划书里是可选项）。
 
 ---
 
@@ -404,3 +546,8 @@ python3 eval/run.py --limit 8 --tag smoke  # 冒烟
 - `docs/API端点全清单.md` — jshERP 接口实测清单与必填参数坑
 - `docs/字段必填清单.md` — 单据字段哪些可自动生成
 - `docs/项目合规评估与改进建议.md` — 对照课程要求的完成度评估与改进路线图
+- `docs/architecture.md` — 分层架构与三大不变量的完整说明
+- `docs/交互流程与边界情况.md` — 从输入到落库的每条分支与边界（A/B/C 编号案例）
+- `docs/failure-cases.md` — 失败案例库（含 F10/F11/F12 与 P4 规模边界）
+- `docs/证据索引.md` — 每条结论对应的代码位置与实验数据
+- `docs/生产部署与运维.md` — 本实例的部署、端口、备份、运维排障记录
