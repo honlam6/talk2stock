@@ -330,6 +330,7 @@ function renderConv() {
            <button class="btn btn-sm btn-ghost" data-correct="${i}">继续修正</button></div>` : '';
       return `<div class="turn-card" data-turn="${i}">
         <div class="turn-hd">${esc((BIZ[d.biz] || {}).label || d.biz || '草稿')} ${STATE_TAG[t.state] || ''}</div>
+        ${checkTraceShell(t, i)}
         <div class="ln"><span class="k">${esc((BIZ[d.biz] || {}).party || '往来单位')}</span>${esc(d.party || '—')}${t.revision ? ' <span class="tag tag-fuzzy">多轮修正</span>' : ''}</div>
         <div class="ln"><span class="k">仓库</span>${esc(d.depot || '默认仓')}</div>
         <div class="ln-items">${items || '<span class="muted">无明细</span>'}</div>
@@ -350,6 +351,7 @@ function renderConv() {
       const pending = (t.bills || []).some(b => b.state !== 'committed');
       return `<div class="turn-card" data-turn="${i}">
         <div class="turn-hd">批量草稿 · ${(t.bills || []).length} 张单</div>
+        ${checkTraceShell(t, i)}
         ${lines}
         ${pending ? `<div class="row-btns" style="margin-top:8px"><button class="btn btn-sm" data-multi-open="${i}">打开批量预览 / 继续写入</button></div>` : ''}
       </div>`;
@@ -371,8 +373,105 @@ function renderConv() {
     }
     return '';
   }).join('');
+  hydrateTrace();
   el.scrollTop = el.scrollHeight;
   saveConv();
+}
+
+// ---------- 校验轨迹（P-B）：录单校验 agent 的取证步骤可见可展开 ----------
+const CHECK_LABEL = { stock_check: '库存核对', last_price: '历史成交价',
+  habit_defaults: '习惯默认值', party_history: '往来单位近况' };
+
+function checkTraceShell(t, i) {
+  const ck = t.check || {};
+  const steps = (ck.steps || []).filter(s => s.tool);
+  const nApplied = (ck.patches_applied || []).length;
+  const nRejected = (ck.patches_rejected || []).length;
+  if (!steps.length && !nApplied && !t.checkNote && !(ck.risks || '').trim()) return '';
+  const bits = [];
+  if (steps.length) bits.push(steps.length + ' 步取证');
+  if (nApplied) bits.push('自动补全 ' + nApplied + ' 项');
+  if (nRejected) bits.push(nRejected + ' 项依据不足未采纳');
+  const head = bits.length ? bits.join(' · ') : '校验完成';
+  const note = t.checkNote ? `<div class="alert alert-info mt-1">❓ ${esc(t.checkNote)}</div>` : '';
+  const risk = (ck.risks || '').trim() ? `<div class="alert alert-warn mt-1">⚠ ${esc(ck.risks)}</div>` : '';
+  const applied = nApplied ? `<div class="hint mt-1">🛠 ${(ck.patches_applied || []).map(p => esc((CHECK_LABEL[p.field] || p.field) + '←' + p.value + (p.reason ? '（' + p.reason + '）' : ''))).join('；')}</div>` : '';
+  return `<details class="check-trace" data-trace="${i}"><summary>🧠 校验轨迹 · ${esc(head)}</summary>${note}${risk}${applied}<div class="al-steps"></div></details>`;
+}
+
+function hydrateTrace() {
+  $$('#conv [data-trace]').forEach(el => {
+    const t = turns[+el.dataset.trace];
+    const box = el.querySelector('.al-steps');
+    if (!box || !t || !t.check) return;
+    (t.check.steps || []).filter(s => s.tool).forEach(s => box.appendChild(stepRowCheck(s)));
+  });
+}
+
+// 步骤行与问一问同款（.al-step 全局样式）；单行 innerHTML（pre-wrap 防空行）
+function stepRowCheck(s) {
+  const row = document.createElement('div');
+  row.className = 'al-step' + (s.ok === false ? ' al-err' : '');
+  const args = s.args && Object.values(s.args).filter(v => v !== '' && v != null).join(' · ');
+  const obs = JSON.stringify(s.observation, null, 1) || '';
+  row.innerHTML = `<div class="al-hd"><span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span><span class="al-name">${esc(CHECK_LABEL[s.tool] || s.tool)}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}<span class="al-caret" aria-hidden="true">▾</span></div><div class="al-body">${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}<pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre></div>`;
+  row.querySelector('.al-hd').onclick = () => {
+    row.classList.toggle('open');
+    row.querySelector('.al-caret').textContent = row.classList.contains('open') ? '▴' : '▾';
+  };
+  return row;
+}
+
+// 流式解析：校验 agent 取证步骤逐个可见；零事件/不支持时降级一次性 /api/parse
+async function parseWithTrace(body) {
+  const pass = localStorage.getItem('t2s_pass');
+  let resp;
+  try {
+    resp = await fetch('/api/parse/stream', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, pass ? { 'X-T2S-Pass': pass } : {}),
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return api('/api/parse', { method: 'POST', body });
+  }
+  if (!resp.ok || !resp.body || !(resp.headers.get('content-type') || '').includes('event-stream')) {
+    return api('/api/parse', { method: 'POST', body });
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', result = null;
+  const stepsBox = () => {
+    const think = document.getElementById('__think');
+    if (!think) return null;
+    let box = think.querySelector('.al-steps');
+    if (!box) { box = document.createElement('div'); box.className = 'al-steps'; think.appendChild(box); }
+    return box;
+  };
+  while (true) {
+    const { done: rd, value } = await reader.read();
+    if (rd) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const line = chunk.split('\n').find(l => l.startsWith('data:'));
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
+      if (ev.type === 'step' && ev.step && ev.step.tool) {
+        const box = stepsBox();
+        if (box) box.appendChild(stepRowCheck(ev.step));
+      } else if (ev.type === 'done') {
+        result = ev.result || {};
+      } else if (ev.type === 'error') {
+        throw new Error(ev.message || '解析失败');
+      }
+    }
+  }
+  if (!result) throw new Error('连接中断，请重试');
+  return result;
 }
 
 function startStages() {
@@ -614,10 +713,10 @@ async function doParse() {
       if (text) fd.append('text', text);
       r = await apiForm('/api/parse/image', fd);
     } else {
-      const body = { text };
+      const body = { text, operator: (await ensureOperator()) || '' };
       if (prevDraft) body.draft = prevDraft;
       if (skipClarify) body.skip_clarify = true;
-      r = await api('/api/parse', { method: 'POST', body });
+      r = await parseWithTrace(body);   // 流式：校验 agent 取证步骤逐个可见
     }
     turns = turns.filter(t => t.type !== 'pending');
     if (!r.ok) {
@@ -639,6 +738,7 @@ async function doParse() {
     if ((r.count || 1) > 1 && Array.isArray(r.bills)) {
       const turn = {
         type: 'drafts', batchId: r.batch_id || '', rawText: hasImgs && !text ? '（图片录入）' : text,
+        check: r.check || null, checkNote: r.check_note || '',
         bills: r.bills.map(b => ({
           draft: b.draft, preview: b.preview,
           ai: (b.preview && b.preview.ai) || {}, attach: [], state: 'open',
@@ -655,6 +755,7 @@ async function doParse() {
     const turn = {
       type: 'draft', draft: r.draft, preview: r.preview,
       rawText: text, attach: att, state: 'open', revision: wasRevision,
+      check: r.check || null, checkNote: r.check_note || '',
     };
     turns.push(turn);
     exitClarify(true);                       // 链路走通，澄清计数归零

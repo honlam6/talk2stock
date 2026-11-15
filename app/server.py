@@ -430,6 +430,27 @@ MAX_IMAGES = 4           # 单次识别图片上限（一次调用带全部图�
 MAX_IMG_BYTES = 8 * 1024 * 1024
 
 
+def _compose_parse(out, source, raw_text, erp):
+    """billcheck.parse_and_check 的产出 → 统一 parse 响应（澄清 / 单张 / 多单三形状）。"""
+    drafts, meta, check = out["drafts"], out["meta"], out["check"]
+    if out.get("clarify"):
+        cl = out["clarify"]
+        return {"ok": True, "need_clarification": True,
+                "question": cl.get("question", ""), "missing": "",
+                "draft": drafts[0],
+                "meta": {k: meta.get(k) for k in ("model", "confidence", "note", "revision")},
+                "check": check}
+    batch_id = uuid.uuid4().hex[:12]
+    bills = _parse_to_bills(drafts, meta, erp, source, raw_text, batch_id)
+    resp = {"ok": True, "count": len(bills), "bills": bills,
+            "batch_id": batch_id, "meta": _bill_meta_public(meta), "check": check}
+    if bills:   # 单张兼容旧形状：顶层 draft/preview 指向第一张（老脚本不炸）
+        resp["draft"], resp["preview"] = bills[0]["draft"], bills[0]["preview"]
+    if out.get("clarify_all"):
+        resp["check_note"] = out["clarify_all"]   # 多单追问以提醒条展示（不阻断确认卡）
+    return resp
+
+
 def api_parse(_q, body):
     text = (body.get("text") or "").strip()
     if not text:
@@ -446,24 +467,14 @@ def api_parse(_q, body):
     # skip_clarify：用户点「跳过追问」或已达澄清轮次上限，直接出确认卡
     skip_clarify = bool(body.get("skip_clarify"))
     erp = _erp()
+    from core import billcheck as bcmod
     try:
-        drafts, meta = llmmod.parse(text, erp, prev_draft=prev)
+        out = bcmod.parse_and_check(
+            text, erp, operator=(body.get("operator") or cfgmod.current_username() or ""),
+            prev_draft=prev, skip_clarify=skip_clarify)
     except Exception as e:
         return {"ok": False, "message": "AI 解析失败：%s" % friendly(e)}
-    # 主动澄清只在单张时有意义（多单缺信息在确认卡上逐单标出来改，跨单追问会把人绕晕）
-    cl = meta.get("clarify")
-    if cl and not skip_clarify and len(drafts) == 1:
-        return {"ok": True, "need_clarification": True,
-                "question": cl.get("question", ""), "missing": cl.get("missing", ""),
-                "draft": drafts[0], "meta": {k: meta.get(k) for k in
-                                             ("model", "confidence", "note", "revision")}}
-    batch_id = uuid.uuid4().hex[:12]
-    bills = _parse_to_bills(drafts, meta, erp, "ai", text, batch_id)
-    out = {"ok": True, "count": len(bills), "bills": bills,
-           "batch_id": batch_id, "meta": _bill_meta_public(meta)}
-    if bills:   # 单张兼容旧形状：顶层 draft/preview 指向第一张（老脚本不炸）
-        out["draft"], out["preview"] = bills[0]["draft"], bills[0]["preview"]
-    return out
+    return _compose_parse(out, "ai", text, erp)
 
 
 _IMG_MIME = ((b"\x89PNG", "image/png"), (b"\xff\xd8", "image/jpeg"),
@@ -503,10 +514,13 @@ def api_parse_image(_q, body):
         drafts, meta = llmmod.parse_images(images, text, erp)
     except Exception as e:
         return {"ok": False, "message": "图片识别失败：%s" % friendly(e)}
+    # 拍照识别的草稿同样过校验 agent（习惯补默认仓/历史价）——三入口同一确认契约
+    from core import billcheck as bcmod
+    check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username() or "")
     batch_id = uuid.uuid4().hex[:12]
     bills = _parse_to_bills(drafts, meta, erp, "ai_image", text or "（图片录入）", batch_id)
     return {"ok": True, "count": len(bills), "bills": bills,
-            "batch_id": batch_id, "meta": _bill_meta_public(meta)}
+            "batch_id": batch_id, "meta": _bill_meta_public(meta), "check": check}
 
 
 BATCH_MAX = 500
@@ -774,6 +788,13 @@ def api_commit(_q, body):
     if res.get("ok"):
         diff = gatemod.diff_drafts(meta.get("draft_resolved") or {}, d)
         gatemod.log_write(meta, d, res, diff=diff, source=source, raw_text=raw_text, operator=operator)
+        # 习惯沉淀（P-B）：确认写入的单据成为操作员的默认值记忆，供校验 agent 补
+        # 默认仓/历史价。失败静默——记忆是增益不是依赖。
+        try:
+            from core import habits as habitsmod
+            habitsmod.record(operator, d, res)
+        except Exception:
+            pass
         # ERP 侧留痕：往 ERP 自带日志模块写一条「谁通过 Talk2Stock 录的单」。
         # 单据 creator 跟写入 token 走（= 服务账号，ERP 机制限制），但日志按
         # userId 展示操作人——成员登录时其 ERP userId 已签进会话令牌。
@@ -1134,6 +1155,52 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    # ---- 流式解析（SSE）：parse + 校验 agent 每步即推，done 带完整 parse 响应 ----
+    def _parse_stream(self, body):
+        """对话录单的流式版本：校验 agent 的取证步骤（查库存/查历史价/查习惯）
+        逐个推给前端（type:step），最后 done(result) 与 /api/parse 同形状。
+        仅文本路径；图片路径走 /api/parse/image（校验轨迹随响应一次性返回）。"""
+        text = (body.get("text") or "").strip()
+        if not text:
+            self._json({"ok": False,
+                        "message": "请先输入业务描述，例如「从美宜佳买3瓶可乐单价3块5；卖给张记2箱方便面单价45」"}, 400)
+            return
+        if len(text) > MAX_PARSE_CHARS:
+            self._json({"ok": False,
+                        "message": "输入太长了（%d 字）——单次最多 %d 字；多笔业务用「；」分段" % (len(text), MAX_PARSE_CHARS)}, 400)
+            return
+        if not llmmod.is_configured():
+            self._json({"ok": False, "need_config": True,
+                        "message": "尚未配置 AI 模型，请点右上角「设置」添加一个模型档案后再试。"}, 200)
+            return
+
+        def ev(obj):
+            data = json.dumps(obj, ensure_ascii=False, default=str)
+            self.wfile.write(("data: %s\n\n" % data).encode("utf-8"))
+            self.wfile.flush()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            from core import billcheck as bcmod
+            prev = body.get("draft")
+            prev = prev if isinstance(prev, dict) and prev else None
+            out = bcmod.parse_and_check(
+                text, _erp(), operator=(body.get("operator") or cfgmod.current_username() or ""),
+                prev_draft=prev, skip_clarify=bool(body.get("skip_clarify")), on_event=ev)
+            ev({"type": "done", "result": _compose_parse(out, "ai", text, _erp())})
+        except Exception as e:
+            sys.stderr.write(traceback.format_exc())
+            try:
+                ev({"type": "error", "message": friendly(e)})
+            except Exception:
+                pass
+
     # ---- 分发 ----
     def _handle(self, method):
         parsed = urllib.parse.urlparse(self.path)
@@ -1176,6 +1243,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": False, "message": str(e)}, 400)
                     return
                 self._ask_stream(body)
+                return
+            # SSE 流式解析：校验 agent 取证步骤逐推，done 与 /api/parse 同形状
+            if method == "POST" and path == "/api/parse/stream":
+                try:
+                    body = self._body()
+                except ValueError as e:
+                    self._json({"ok": False, "message": str(e)}, 400)
+                    return
+                self._parse_stream(body)
                 return
             fn = ROUTES.get((method, path))
             if not fn:

@@ -1588,3 +1588,9 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 .ad-amt { margin-left: auto; font-weight: 700; white-space: nowrap; }
 .ad-btns { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .ad-res { margin-top: 6px; }
+
+/* ---- 录单校验轨迹（P-B：校验 agent 取证步骤，对话卡内折叠条） ---- */
+.check-trace { border: 1px solid var(--paper-3); border-left: 3px solid var(--jade); border-radius: 8px; background: rgba(30, 125, 90, .05); padding: 6px 10px; margin: 6px 0; font-size: 13px; }
+.check-trace summary { cursor: pointer; color: var(--text-2); font-weight: 500; user-select: none; }
+.check-trace .al-steps { margin-top: 6px; }
+.check-trace .alert { padding: 6px 8px; }

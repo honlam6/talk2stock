@@ -145,3 +145,35 @@ API；高频主数据计数另走规则直答（0 token 秒回）。
 （同一套 UI、同一个闸门、同一种审计形状）；/new 表单模式保留为兜底。
 放弃的方案：给 agent 直接挂 create_bill 写工具（推翻人工确认不变量，否决）；
 前端把录单文本转跳 /new（体验割裂，且丢失对话上下文）。
+
+## ADR-11 · 录单校验 agent：草稿出预览前过一个只读取证 loop + 操作员习惯记忆
+
+**背景**：录单解析是「一次抽取 + 规则清洗」，缺单价时只能出规则话术追问、
+没说仓库只能落配置默认仓——模型明明能查「这个客户上次多少钱、这个人习惯用
+哪个仓」，却没被组织进流程。多步化是自然的升级，但让 agent 改单据内容
+会破坏「草稿哈希绑令牌」的闸门不变量。
+
+**决策**：`core/billcheck.py`——parse 之后、签令牌之前插入一个 max_steps=3 的
+只读取证 loop（复用 run_agent 引擎，`prompt_template` 参数换提示词）：
+
+- 工具全只读：`stock_check`（库存够不够）/ `last_price`（该往来单位该商品
+  最近真实成交价）/ `habit_defaults`（操作员习惯仓库与价格）/ `party_history`
+  （往来单位近况与欠款）；
+- 校验结论走 `submit_verdict` 工具的 args 通道而非 final——结论里的 confidence
+  等自报数字不属于 ERP 观察，走 final 会被数字接地校验整体退回（不变量不开洞）；
+- 模型只能「建议」patch，写回是确定性代码（`apply_patches`）：白名单字段
+  （depot/price）+ 置信度 ≥0.85 + 只补缺失不覆盖 + 越界拒绝；
+- patch 落定后的草稿才签令牌——令牌仍与最终草稿哈希绑定，闸门不变；
+- 习惯记忆 `core/habits.py`：commit 成功后沉淀（jsonl 只增不改），读侧按
+  操作员聚合（本人无记录退全局口径），价格习惯倒序取最近一笔；
+- 追问升级：agent 生成的自然语言追问优先，规则追问兜底；多单仍不跨单追问
+  （multi-entry 设计决策不推翻），追问内容降级为确认卡上的提醒条；
+- 校验失败/未配模型降级 skipped——校验是增益不是闸门，解析结果照常交付。
+
+**实测教训（B2）**：REST `getDetailList` 不吐真实行单价（unitPrice null，
+只有商品档案价快照 purchaseDecimal），last_price 改走 dbread 只读 SQL 直查
+`jsh_depot_item.unit_price`——护栏（SELECT 白名单 + 只读事务）原样生效。
+
+**证据**：`eval/billcheck_cases.jsonl` v1（4 条，含无历史价宁缺勿错用例）+
+`eval/run_billcheck.py`；2026-11-16 实测 4/4，SSE 取证步骤逐个可见，patch
+理由引用观察（「成品仓电池库存 70 节足够本单 10 节」）。

@@ -112,7 +112,7 @@ def _hist(i, thought, name, args, obs):
 
 
 def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_TOKENS,
-              context_block="", on_event=None):
+              context_block="", on_event=None, prompt_template=None):
     """执行一个 agent 会话。返回 {ok, answer, steps, tokens, meta}。
 
     tools: {name: {"desc": str, "args_hint": str, "run": callable(args) -> (data, note[, extra])}}
@@ -123,6 +123,9 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         {"type":"action","tool":..,"args":..} 决策出要调的工具、执行前推（前端显示"正在查询…"）
         {"type":"step", ...完整 step 记录}  该步执行完、trace 落定后推。
         {"type":"draft","payload":..}      工具产出了结构化载荷（草稿确认卡）。
+    prompt_template: 可选自定义循环提示词（占位符与 LOOP_PROMPT 一致：
+        {tool_catalog}/{history}/{max_steps}/{goal}）——录单校验/导入修复/日报
+        等专用 agent 复用同一个循环引擎，只换提示词与工具箱。
     """
     prof = cfgmod.agent_profile()
     if not prof:
@@ -142,7 +145,7 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
 
     def decide(extra=""):
         u = {}
-        prompt = LOOP_PROMPT.format(
+        prompt = (prompt_template or LOOP_PROMPT).format(
             tool_catalog=catalog, history="\n".join(history_lines) or "（还没有）",
             max_steps=max_steps, goal=goal) + extra
         # 全库表结构/主数据只在第一轮注入：后续轮靠 history 里的观察继续，

@@ -1,0 +1,106 @@
+{
+ "summary": {
+  "corpus_version": "billcheck-v1-20261116",
+  "model": "hy4",
+  "n": 4,
+  "acc": 0.75,
+  "latency_avg_s": 15.5,
+  "tokens_avg": 5146
+ },
+ "results": [
+  {
+   "id": "b1",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 14.3,
+   "tokens": 4902,
+   "applied": [
+    {
+     "bill_index": 0,
+     "field": "depot",
+     "value": "成品仓",
+     "reason": "操作员习惯数据返回 depot=成品仓",
+     "confidence": 0.95
+    },
+    {
+     "bill_index": 0,
+     "field": "price",
+     "value": 4.0,
+     "reason": "操作员习惯数据返回可乐历史单价4.0",
+     "confidence": 0.95
+    }
+   ],
+   "rejected": [],
+   "clarify": "「可乐」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  },
+  {
+   "id": "b2",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "applied_min": false,
+    "applied:price": false,
+    "steps_min": true
+   },
+   "latency_s": 12.53,
+   "tokens": 4604,
+   "applied": [],
+   "rejected": [],
+   "clarify": "「可乐」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  },
+  {
+   "id": "b3",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 13.46,
+   "tokens": 4892,
+   "applied": [
+    {
+     "bill_index": 0,
+     "field": "depot",
+     "value": "成品仓",
+     "reason": "操作员evalbot在张记便利店sale_out业务下的习惯仓库为成品仓",
+     "confidence": 0.9
+    },
+    {
+     "bill_index": 0,
+     "field": "price",
+     "value": 44.0,
+     "reason": "操作员习惯中该单位方便面历史单价为44.0",
+     "confidence": 0.85
+    }
+   ],
+   "rejected": [],
+   "clarify": "「方便面」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  },
+  {
+   "id": "b4",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "no_applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 21.71,
+   "tokens": 6184,
+   "applied": [],
+   "rejected": [],
+   "clarify": "「牛皮纸」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  }
+ ]
+}

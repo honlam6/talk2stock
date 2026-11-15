@@ -1,0 +1,5 @@
+{"_comment": "录单校验 agent 冻结语料 v1-20261116。gold 派生自 eval/seed_demo.py 的 DATASET：永辉+可乐最近售价 4.0、美宜佳+可乐最近进价 3.5、张记+方便面最近售价 44、牛皮纸无销售记录。前置：当天先跑 seed_demo.py --yes；跑分器会为操作员 evalbot 预播种 habits.jsonl（永辉/张记→成品仓）。判定：applied_min 至少 N 个补丁被采纳；applied 期望字段→数值（容差 0.01）；no_applied_fields 禁止出现该字段补丁（宁缺勿错不变量）；steps_min 校验 loop 至少 N 轮取证。"}
+{"id": "b1", "type": "habit_price", "text": "给永辉超市卖50瓶可乐", "expect": {"applied_min": 1, "applied": {"price": 4.0}, "steps_min": 1}}
+{"id": "b2", "type": "habit_price", "text": "从美宜佳买100瓶可乐", "expect": {"applied_min": 1, "applied": {"price": 3.5}, "steps_min": 1}}
+{"id": "b3", "type": "habit_price", "text": "卖20箱方便面给张记便利店", "expect": {"applied_min": 1, "applied": {"price": 44}, "steps_min": 1}}
+{"id": "b4", "type": "no_history", "text": "卖给校园超市100卷牛皮纸", "expect": {"applied_min": 0, "no_applied_fields": ["price"], "steps_min": 1}}
