@@ -166,9 +166,12 @@
 
           <div id="impStep2" style="display:none">
             <div id="impMapNote" class="alert alert-info" style="display:none"></div>
+            <div id="impQuestions" class="mt-2"></div>
+            <div id="impTrace" class="mt-2"></div>
             <div class="tbl-wrap tbl-scroll mt-2"><table class="map-table" id="impMapTable"></table></div>
             <div class="row-btns mt-3">
-              <button class="btn btn-ghost" id="impRemap">↻ AI 重新认列</button>
+              <button class="btn btn-ghost" id="impRemap">↻ 重新分析</button>
+              <button class="btn btn-ghost" id="impAnswer">按答复重算</button>
               <button class="btn btn-ghost" id="impRefile">换文件</button>
               <span class="hint" style="flex:1">下拉可改任意列；改完点右侧应用（确定性重变换，不耗 token）</span>
               <button class="btn btn-primary" id="impApply">应用映射并预览 →</button>
@@ -959,7 +962,7 @@ const IMP_FIELDS = [
   ['price', '单价'], ['amount', '金额/总价'], ['depot', '仓库'], ['oper_time', '日期'],
   ['pay_amount', '实付金额'], ['tax_rate', '税率'], ['remark', '备注'], ['bill_no', '原单号'],
 ];
-let IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false };
+let IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false, questions: [], trace: [], round: 1 };
 
 function impSetStep(n) {
   $$('#impSteps .imp-step').forEach((s, i) => s.className = 'imp-step' + (i === n ? ' on' : (i < n ? ' done' : '')));
@@ -983,7 +986,7 @@ async function impUpload(file) {
   let r;
   try { r = await apiForm('/api/sheet/inspect', fd); } catch (e) { toast(e.message, 'bad'); return; }
   if (!r.ok) { toast(r.message || '文件解析失败', 'bad'); return; }
-  IMP = { ref: r.ref, sheet: '', sheets: r.sheets, mapping: null, result: null, rows: [], busy: false };
+  IMP = { ref: r.ref, sheet: '', sheets: r.sheets, mapping: null, result: null, rows: [], busy: false, questions: [], trace: [], round: 1 };
   impSetStep(0);
   if (r.sheets.length === 1) { impPickSheet(r.sheets[0].name); return; }
   $('#impSheets').innerHTML = '<div class="hint" style="margin-bottom:6px">这个文件有多个工作表，选一个：</div>' +
@@ -996,33 +999,110 @@ $('#impSheets').onclick = e => {
 
 async function impPickSheet(name) {
   IMP.sheet = name;
-  $('#impSheets').innerHTML = `<div class="hint">已选工作表「${esc(name)}」，AI 认列中…</div>`;
-  await impMap('');
+  $('#impSheets').innerHTML = `<div class="hint">已选工作表「${esc(name)}」，正在分析表结构…</div>`;
+  await impPlan({});
 }
 
-async function impMap(extra) {
+async function impPlan(answers, round) {
   let r;
-  try { r = await api('/api/sheet/map', { method: 'POST', body: { ref: IMP.ref, sheet: IMP.sheet } }); }
-  catch (e) { toast(e.message, 'bad'); return; }
+  try {
+    r = await api('/api/sheet/plan', { method: 'POST',
+      body: { ref: IMP.ref, sheet: IMP.sheet, answers: answers || {}, round: round || 1 } });
+  } catch (e) { toast(e.message, 'bad'); return; }
   if (!r.ok) {
-    // AI 认列失败不堵流程：给一份空映射，人工在下拉里指（提示写清楚）
-    toast(r.message || 'AI 认列失败，已切换为手动指定', 'warn');
+    // 计划失败不堵流程：给一份空映射，人工在下拉里指
+    toast(r.message || '分析失败，已切换为手动指定', 'warn');
     IMP.mapping = { header_row: 1, mode: 'per_row', group_col: '', file_biz: 'purchase_in', biz_col: '', cols: {}, date_format: 'auto' };
+    IMP.questions = []; IMP.trace = [];
     $('#impMapNote').style.display = '';
-    $('#impMapNote').innerHTML = '<b>AI 认列失败：</b>' + esc(r.message || '') + '<br>请直接在下面手动指定列映射（表头行号也要核对）。';
+    $('#impMapNote').innerHTML = '<b>自动分析失败：</b>' + esc(r.message || '') + '<br>请直接在下面手动指定列映射（表头行号也要核对）。';
   } else {
     IMP.mapping = r.mapping;
+    IMP.questions = r.questions || [];
+    IMP.trace = r.trace || [];
+    IMP.round = r.round || 1;
+    IMP.result = r.result;
+    if (r.sheet && !IMP.sheet) IMP.sheet = r.sheet;
     $('#impMapNote').style.display = 'none';
   }
   renderMap();
+  renderQuestions();
+  renderTrace();
   renderRows(IMP.result);
   impSetStep(1);
-  if (r.ok) toast('AI 已认列，请核对映射再应用', 'ok');
+  if (r.ok) {
+    const n = IMP.questions.length;
+    toast(n ? `看完了，有 ${n} 处需要你确认` : '结构已认清楚，核对映射后直接应用', n ? 'warn' : 'ok');
+  }
 }
-$('#impRemap').onclick = () => impMap('');
+$('#impRemap').onclick = () => impPlan({});
+$('#impAnswer').onclick = () => impAnswerSubmit();
+
+function impGatherAnswers() {
+  const answers = {};
+  $$('#impQuestions [data-qid]').forEach(el => {
+    const qid = el.dataset.qid, kind = el.dataset.kind, v = el.value;
+    if (kind === 'text') { if (v.trim()) answers[qid] = v.trim(); return; }
+    if (kind === 'boolean') { answers[qid] = (v === 'true'); return; }
+    if (!(qid in answers) || !answers[qid]) answers[qid] = v;
+  });
+  return answers;
+}
+
+async function impAnswerSubmit() {
+  if (IMP.busy) return;
+  const answers = impGatherAnswers();
+  if (answers.sheet && answers.sheet !== IMP.sheet) {
+    IMP.sheet = answers.sheet;          // 换表：从第一轮重新看
+    await impPlan({}, 1);
+    return;
+  }
+  IMP.busy = true;
+  try { await impPlan(answers, Math.min(2, (IMP.round || 1) + 1)); }
+  finally { IMP.busy = false; }
+}
+
+function renderQuestions() {
+  const box = $('#impQuestions');
+  const qs = IMP.questions || [];
+  $('#impAnswer').style.display = qs.length ? '' : 'none';
+  if (!qs.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="imp-q-head">需要你确认 ${qs.length} 处 <span class="hint">—— 答完点「按答复重算」，不答就按默认值走</span></div>` +
+    qs.map(q => {
+      const mk = (sel) => (q.options || []).map(o => {
+        const v = String(o.value === undefined ? '' : o.value);
+        return `<option value="${esc(v)}"${v === String(sel === undefined ? q.default : sel) ? ' selected' : ''}>${esc(o.label)}</option>`;
+      }).join('');
+      let control = '';
+      if (q.kind === 'choose' || q.kind === 'boolean') {
+        control = `<select data-qid="${esc(q.id)}" data-kind="${q.kind}">${mk()}</select>`;
+        if (q.allow_text) control += `<input data-qid="${esc(q.id)}" data-kind="text" placeholder="${esc(q.text_hint || '或直接填名称')}" style="margin-left:6px;flex:1">`;
+      } else {
+        control = `<input data-qid="${esc(q.id)}" data-kind="text" value="${esc(q.default || '')}">`;
+      }
+      return `<div class="imp-q${q.blocking ? ' imp-q-hard' : ''}">
+        <div class="imp-q-ask">${esc(q.ask)}${q.blocking ? ' <span class="tr-badge tr-hard">必答</span>' : ''}</div>
+        <div class="imp-q-why">${esc(q.why || '')}</div>
+        <div class="imp-q-ctl">${control}</div></div>`;
+    }).join('');
+}
+
+function renderTrace() {
+  const ts = IMP.trace || [];
+  const box = $('#impTrace');
+  if (!ts.length) { box.innerHTML = ''; return; }
+  const S = { rule: '规则', llm: 'AI', auto: '自动修复', user: '你的回答' };
+  box.innerHTML = `<details class="imp-trace"><summary>决策过程 ${ts.length} 步 · 点开看每一步的依据</summary>` +
+    ts.map((t, i) => `<div class="tr-row"><span class="tr-no">${i + 1}</span>
+      <span class="tr-badge tr-${esc(t.source)}">${S[t.source] || esc(t.source)}</span>
+      <span class="tr-act">${esc(t.action)}</span>
+      <span class="tr-detail">${esc(t.detail)}</span></div>`).join('') + '</details>';
+}
+
 
 $('#impRefile').onclick = () => {
-  IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false };
+  IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false, questions: [], trace: [], round: 1 };
+  $('#impQuestions').innerHTML = ''; $('#impTrace').innerHTML = '';
   $('#impSheets').innerHTML = '';
   $('#impPreview').style.display = 'none';
   impSetStep(0);
@@ -1030,18 +1110,20 @@ $('#impRefile').onclick = () => {
 
 function renderMap() {
   const m = IMP.mapping || {};
-  const s = IMP.sheets.find(x => x.name === IMP.sheet) || { rows: [] };
+  const s = IMP.sheets.find(x => x.name === IMP.sheet) || { preview: [] };
   const ncol = s.total_cols || 0;
+  const headRow = s.preview && s.preview[(m.header_row || 1) - 1] ? s.preview[(m.header_row || 1) - 1] : [];
   const colOpts = (sel, any) => {
     let o = any ? `<option value="">（不使用）</option>` : '';
     for (let c = 0; c < ncol; c++) {
       const letter = colLetter(c);
-      const head = (s.rows[m.header_row ? m.header_row - 1 : 0] || [])[c] || '';
+      const head = headRow[c] || '';
       o += `<option value="${letter}"${sel === letter ? ' selected' : ''}>${letter}列 ${esc(String(head).slice(0, 12))}</option>`;
     }
     return o;
   };
-  const cur = m.cols || {};   // {字段: 列字母}（前端展示形态；后端收列字母键）
+  const cur = {};   // {字段: 列字母} —— 后端给的是 {列字母: 字段}，这里翻过来给下拉预选
+  Object.entries(m.cols || {}).forEach(([letter, f]) => { cur[f] = letter; });
   $('#impMapTable').innerHTML = `
     <tr><th>表头行</th><td><input id="im_hr" type="number" min="1" value="${m.header_row || 1}" style="width:80px"></td>
       <th>业务类型</th><td><select id="im_biz">${Object.entries(BIZ).map(([k, v]) => `<option value="${k}"${(m.file_biz || 'purchase_in') === k ? ' selected' : ''}>${v.label}</option>`).join('')}</select></td></tr>

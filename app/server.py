@@ -29,7 +29,9 @@
     POST   /api/commit            → draft + 确认令牌 → 真正写入 ERP（无令牌一律拒绝）
     POST   /api/commit/batch      → items[{draft,confirm_token}] → 逐单过闸门写入（batch_id 串联审计）
     POST   /api/sheet/inspect     → Excel/CSV（multipart）→ 工作表清单 + 前 8 行预览
-    POST   /api/sheet/map         → AI 表头映射（≤2 轮有界修复）+ 试变换结果
+    POST   /api/sheet/plan        → 导入计划：规则看结构 → 拿主意 → 拿不准出问题（多工作表选择/列歧义/失败行）
+    POST   /api/sheet/answer      → 按用户答复重算计划（answers: {问题id: 值}，≤2 轮）
+    POST   /api/sheet/map         → 兼容旧前端 = plan
     POST   /api/sheet/transform   → 人工修正映射后确定性重变换（零 LLM）
     POST   /api/sheet/resolve     → 导入草稿逐行预览 + 令牌
     GET    /api/master            → 主数据（供应商/客户/商品/仓库/账户/单位）
@@ -66,6 +68,7 @@ from core import gate as gatemod            # noqa: E402
 from core import llm as llmmod              # noqa: E402
 from core import oplog as oplogmod          # noqa: E402
 from core import sheet as sheetmod          # noqa: E402
+from core import import_agent as impmod      # noqa: E402
 from core.sheet import SheetError           # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8090"))
@@ -679,37 +682,66 @@ def api_sheet_inspect(_q, body):
     return {"ok": True, "ref": ref, "kind": wb["kind"], "sheets": sheets}
 
 
-def api_sheet_map(_q, body):
-    """AI 表头映射 + 一次确定性变换试跑；失败行占比高时带样本做一轮修复（LLM 总调用 ≤2）。"""
-    if not llmmod.is_configured():
-        return {"ok": False, "need_config": True,
-                "message": "AI 映射需要模型：请先在「设置」里配置模型档案，或直接手动指定列映射。"}
+def _sheet_meta(wb):
+    return [{"name": s["name"], "total_rows": len(s["rows"]),
+             "total_cols": max((len(r) for r in s["rows"]), default=0),
+             "truncated": bool(s.get("truncated"))} for s in wb["sheets"]]
+
+
+def _sheet_plan_run(body):
+    """导入计划：规则先看结构 → 拿主意 → 拿不准出问题 → 自修 → 变换试跑。
+
+    整个流程只在「规则缺必需列」时叫一次模型（且不让模型推翻规则）；
+    用户答完问题带 answers 再调一次，最多 2 轮，剩下的按默认值走。
+    """
     ref = body.get("ref")
+    answers = body.get("answers") if isinstance(body.get("answers"), dict) else {}
     try:
-        sheet, _ = _load_tmp_sheet(ref, body.get("sheet"))
+        round_no = max(1, min(2, int(body.get("round") or 1)))
+    except (TypeError, ValueError):
+        round_no = 1
+    want_sheet = str(body.get("sheet") or answers.get("sheet") or "").strip()
+    try:
+        sheet, wb = _load_tmp_sheet(ref, want_sheet or None)
     except SheetError as e:
         return {"ok": False, "message": str(e)}
     rows = sheet["rows"]
     if len(rows) < 2:
-        return {"ok": False, "message": "表格里没有数据行（只有表头或空表）"}
-    gd = sheetmod.grid_desc(rows)
-    try:
-        mapping = llmmod.map_sheet(sheet["name"], gd)
-    except Exception as e:
-        return {"ok": False, "message": "AI 映射失败：%s（可在下一步手动指定列映射）" % friendly(e)}
-    tr = sheetmod.transform(rows, mapping)
-    fails = [d for d in tr["drafts"] if d["problems"]]
-    if fails and tr["drafts"] and len(fails) / len(tr["drafts"]) >= _SHEET_REPAIR_THRESHOLD:
-        fs = sheetmod.failure_samples(rows, tr["drafts"], mapping)
-        if fs:
-            try:
-                mapping2 = llmmod.map_sheet(sheet["name"], gd, extra=fs)
-                tr2 = sheetmod.transform(rows, mapping2)
-                if len([d for d in tr2["drafts"] if d["problems"]]) < len(fails):
-                    mapping, tr = mapping2, tr2   # 修复轮确有改善才采纳
-            except Exception:
-                pass   # 修复轮失败不致命：第一轮结果 + 行级错误照样交付
-    return {"ok": True, "ref": ref, "sheet": sheet["name"], "mapping": mapping, "result": tr}
+        return {"ok": False, "message": "这个工作表没有数据行（只有表头或空表），换一个工作表试试"}
+
+    llm_fn = (lambda gd: llmmod.map_sheet(sheet["name"], gd)) if llmmod.is_configured() else None
+    out = impmod.build(rows, sheet_name=sheet["name"], answers=answers,
+                       round_no=round_no, llm_fn=llm_fn)
+    out.update({"ref": ref, "sheet": sheet["name"], "sheets": _sheet_meta(wb), "round": round_no})
+
+    # 多工作表且调用方还没指定：先问用哪个（结构差异大，选错等于白导）
+    usable = [s for s in wb["sheets"] if len(s["rows"]) > 1]
+    if not want_sheet and len(usable) > 1:
+        out.setdefault("questions", []).insert(0, {
+            "id": "sheet", "kind": "choose", "ask": "文件里有 %d 个工作表，用哪个导入？" % len(usable),
+            "why": "默认先看了数据最多的「%s」，其余表可能是汇总/说明页" % sheet["name"],
+            "options": [{"value": s["name"],
+                         "label": "%s（%d 行 × %d 列）" % (s["name"], len(s["rows"]),
+                                                        max((len(r) for r in s["rows"]), default=0))}
+                        for s in usable],
+            "default": sheet["name"], "blocking": False,
+        })
+    return out
+
+
+def api_sheet_plan(_q, body):
+    """导入计划 + 结构化问题（不写库，不签任何令牌）。"""
+    return _sheet_plan_run(body)
+
+
+def api_sheet_answer(_q, body):
+    """用户答题后重新计划（answers: {问题id: 选择值}）。"""
+    return _sheet_plan_run(body)
+
+
+def api_sheet_map(_q, body):
+    """兼容旧前端：等价于 plan（有模型时模型会在缺必需列时补认一次）。"""
+    return _sheet_plan_run(body)
 
 
 def api_sheet_transform(_q, body):
@@ -1035,6 +1067,8 @@ ROUTES = {
     ("POST", "/api/upload"): api_upload,
     ("POST", "/api/parse/image"): api_parse_image,
     ("POST", "/api/sheet/inspect"): api_sheet_inspect,
+    ("POST", "/api/sheet/plan"): api_sheet_plan,
+    ("POST", "/api/sheet/answer"): api_sheet_answer,
     ("POST", "/api/sheet/map"): api_sheet_map,
     ("POST", "/api/sheet/transform"): api_sheet_transform,
     ("POST", "/api/sheet/resolve"): api_sheet_resolve,

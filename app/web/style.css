@@ -1579,3 +1579,24 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
   .cam-btn { width: 44px; height: 44px; bottom: 12px; }
   .imp-summary { gap: 10px; }
 }
+
+/* ---- 表格导入：问题卡片 + 决策链 ---- */
+.imp-q-head{font-size:13px;font-weight:600;margin:10px 0 6px}
+.imp-q{border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--card,#fff)}
+.imp-q-hard{border-color:#f0b429;background:#fffbef}
+.imp-q-ask{font-size:13px;font-weight:600;margin-bottom:2px}
+.imp-q-why{font-size:12px;color:var(--muted,#6b7280);margin-bottom:6px}
+.imp-q-ctl{display:flex;gap:6px;flex-wrap:wrap}
+.imp-q-ctl select,.imp-q-ctl input{max-width:100%;padding:6px 8px;border-radius:8px;border:1px solid var(--line,#d1d5db);font-size:13px}
+.imp-trace{margin:8px 0;font-size:12px}
+.imp-trace summary{cursor:pointer;color:var(--muted,#6b7280)}
+.tr-row{display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-bottom:1px dashed var(--line,#eee)}
+.tr-no{width:18px;color:#9ca3af;text-align:right;flex:none}
+.tr-badge{flex:none;font-size:11px;padding:1px 6px;border-radius:6px;background:#eef2ff;color:#4338ca}
+.tr-badge.tr-rule{background:#eef2f7;color:#334155}
+.tr-badge.tr-llm{background:#eef2ff;color:#4338ca}
+.tr-badge.tr-auto{background:#ecfdf5;color:#047857}
+.tr-badge.tr-user{background:#fff7ed;color:#c2410c}
+.tr-badge.tr-hard{background:#fef3c7;color:#92400e}
+.tr-act{flex:none;font-weight:600;min-width:96px}
+.tr-detail{color:#4b5563}
