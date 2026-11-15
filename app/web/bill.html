@@ -175,6 +175,7 @@
             </div>
             <div id="impPreview" class="mt-3" style="display:none">
               <div class="imp-summary" id="impSummary"></div>
+              <div id="impRepair" class="mt-1"></div>
               <div class="tbl-wrap tbl-scroll"><table class="row-table" id="impRows"></table></div>
               <div class="row-btns mt-3">
                 <button class="btn btn-ghost" id="impBack">← 改映射</button>
@@ -1060,7 +1061,8 @@ const IMP_FIELDS = [
   ['price', '单价'], ['amount', '金额/总价'], ['depot', '仓库'], ['oper_time', '日期'],
   ['pay_amount', '实付金额'], ['tax_rate', '税率'], ['remark', '备注'], ['bill_no', '原单号'],
 ];
-let IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false };
+let IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false,
+  repair: null, repairBusy: false };   // repair：修复环摘要（applied/suggestions/rejected/steps）
 
 function impSetStep(n) {
   $$('#impSteps .imp-step').forEach((s, i) => s.className = 'imp-step' + (i === n ? ' on' : (i < n ? ' done' : '')));
@@ -1084,7 +1086,7 @@ async function impUpload(file) {
   let r;
   try { r = await apiForm('/api/sheet/inspect', fd); } catch (e) { toast(e.message, 'bad'); return; }
   if (!r.ok) { toast(r.message || '文件解析失败', 'bad'); return; }
-  IMP = { ref: r.ref, sheet: '', sheets: r.sheets, mapping: null, result: null, rows: [], busy: false };
+  IMP = { ref: r.ref, sheet: '', sheets: r.sheets, mapping: null, result: null, rows: [], busy: false, repair: null, repairBusy: false };
   impSetStep(0);
   if (r.sheets.length === 1) { impPickSheet(r.sheets[0].name); return; }
   $('#impSheets').innerHTML = '<div class="hint" style="margin-bottom:6px">这个文件有多个工作表，选一个：</div>' +
@@ -1114,16 +1116,39 @@ async function impMap(extra) {
   } else {
     IMP.mapping = r.mapping;
     $('#impMapNote').style.display = 'none';
+    // 修复环 v2（P-C）：map 响应自带修复后的 result 与 repair 摘要——自动修复
+    // 结果直接可见，不再走一遍「应用映射」重变换（会把已采纳的写回冲掉）
+    if (r.result && r.repair && !r.repair.skipped) { await impUseMapRepair(r); return; }
   }
   renderMap();
   renderRows(IMP.result);
   impSetStep(1);
   if (r.ok) toast('AI 已认列，请核对映射再应用', 'ok');
 }
+
+// map 自带修复环结果的落地：映射表照样渲染（← 改映射可回看），同映射再拉一次
+// 确定性变换（零 LLM）做「旧值」对照，然后带着修复摘要直接进行预览
+async function impUseMapRepair(r) {
+  renderMap();
+  let before = null;
+  try {
+    const t = await api('/api/sheet/transform', { method: 'POST', body: {
+      ref: IMP.ref, sheet: IMP.sheet, mapping: repairMapping() } });
+    if (t.ok && t.result) before = t.result.drafts || [];
+  } catch (e) { /* 旧值对照拿不到就只显示新值，不堵流程 */ }
+  IMP.result = r.result;
+  IMP.repair = enrichRepair(r.repair, before);
+  renderRows(IMP.result);
+  stripAppliedProblems();
+  renderRows();
+  impSetStep(2);
+  toast('AI 认列完成，修复环已自动处理问题行', 'ok');
+  await impResolve();
+}
 $('#impRemap').onclick = () => impMap('');
 
 $('#impRefile').onclick = () => {
-  IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false };
+  IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false, repair: null, repairBusy: false };
   $('#impSheets').innerHTML = '';
   $('#impPreview').style.display = 'none';
   impSetStep(0);
@@ -1195,6 +1220,7 @@ $('#impApply').onclick = async () => {
     IMP.mapping = mapping;
     IMP.result = r.result;
     IMP.rows = [];
+    IMP.repair = null;   // 确定性重变换是全新结果，上一轮修复摘要一并作废（按钮可再点）
     renderRows(r.result);
     impSetStep(2);
     // 就绪行自动签发预览令牌（失败的行不浪费这次调用）
@@ -1226,11 +1252,13 @@ async function impResolve() {
 
 function renderRows(result) {
   if (result) {
-    IMP.rows = (result.drafts || []).map(d => ({
-      row_no: d.row_no, draft: d.draft, problems: d.problems || [],
+    // _di = result.drafts 数组下标：修复环的 row_index 就是对这个数组的索引，
+    // 行按 row_no 排序后靠它回连（row_errors 不是草稿，永远 -1）
+    IMP.rows = (result.drafts || []).map((d, di) => ({
+      row_no: d.row_no, draft: d.draft, problems: d.problems || [], _di: di,
       preview: null, token: null, state: 'open', res: null, checked: true,
     })).concat((result.row_errors || []).map(e2 => ({
-      row_no: e2.row_no, draft: null, problems: e2.errors || [],
+      row_no: e2.row_no, draft: null, problems: e2.errors || [], _di: -1,
       preview: null, token: null, state: 'open', res: null, checked: false,
     })));
     IMP.rows.sort((a, b) => a.row_no - b.row_no);
@@ -1239,12 +1267,16 @@ function renderRows(result) {
   const ready = rows.filter(r => !r.problems.length && r.state !== 'committed');
   const bad = rows.filter(r => r.problems.length);
   const done = rows.filter(r => r.state === 'committed');
+  const fixTags = repairTagsByRow();   // drafts 下标 → 行内「已自动修复/已采纳」标签
   $('#impSummary').innerHTML = `
     <span>共 <b class="num">${rows.length}</b> 行</span>
     <span class="row-ok">就绪 <b class="num">${ready.length}</b></span>
     <span class="row-warn">需处理 <b class="num">${bad.length}</b></span>
     <span class="row-ok">已写入 <b class="num">${done.length}</b></span>
-    ${bad.length ? `<span class="hint">缺单价=0 元提醒照常可写；缺数量/商品/往来单位的行先修数据再导，或勾掉不写</span>` : ''}`;
+    ${bad.length ? `<span class="hint">缺单价=0 元提醒照常可写；缺数量/商品/往来单位的行先修数据再导，或勾掉不写</span>
+    <button class="btn btn-sm btn-ghost" id="impRepairBtn" ${IMP.repairBusy ? 'disabled' : ''}>${IMP.repairBusy ? 'AI 修复中…' : '🧠 AI 修复需处理行'}</button>` : ''}`;
+  const rbtn = $('#impRepairBtn');
+  if (rbtn) rbtn.onclick = impRepairNow;
   $('#impRows').innerHTML = rows.length ? rows.map(r => {
     const d = r.draft || {};
     const tot = (d.items || []).reduce((s, it) => s + num(it.qty) * num(it.price), 0);
@@ -1261,7 +1293,7 @@ function renderRows(result) {
       <td>${esc(d.party || '—')}</td>
       <td>${esc(items || '—')}</td>
       <td class="num">￥${money(tot)}</td>
-      <td class="row-bad" style="max-width:220px">${esc((r.problems.length ? r.problems : (r.state === 'failed' ? [r.res && r.res.message || '写入失败'] : (r.preview && r.preview.warnings) || [])).slice(0, 2).join('；'))}</td>
+      <td class="row-bad" style="max-width:220px">${esc((r.problems.length ? r.problems : (r.state === 'failed' ? [r.res && r.res.message || '写入失败'] : (r.preview && r.preview.warnings) || [])).slice(0, 2).join('；'))}${(fixTags[r._di] || []).join('')}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="8" class="muted center">没有可导入的行</td></tr>';
   const cbtn = $('#impCommit');
@@ -1277,6 +1309,177 @@ function renderRows(result) {
     $('#impCommit').disabled = !n;
     $('#impCommit').textContent = `写入勾选行（${n}）`;
   });
+  renderRepair();   // 修复轨迹块每次跟 IMP.repair 现算同步，换结果/重置后不会残留旧内容
+}
+
+/* ---------- AI 修复环（P-C）：问题行只读取证 → 高置信自动改 / 低置信点选采纳 ---------- */
+// 工具名 → 中文标签（与对话区 CHECK_LABEL 同风格，实现独立避免牵连已完成的校验轨迹）
+const REPAIR_LABEL = { find_material: '商品档案', find_party: '往来单位', search_history: '历史原话', submit_verdict: '修复结论' };
+const REPAIR_FIELD_ZH = { item_name: '商品名', party: '往来单位' };
+
+// 修复步骤行：结构复刻对话区 stepRowCheck（.al-step 全局样式），标签换 REPAIR_LABEL
+function stepRowRepair(s) {
+  const row = document.createElement('div');
+  row.className = 'al-step' + (s.ok === false ? ' al-err' : '');
+  const args = s.args && Object.values(s.args).filter(v => v !== '' && v != null).join(' · ');
+  const obs = JSON.stringify(s.observation, null, 1) || '';
+  row.innerHTML = `<div class="al-hd"><span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span><span class="al-name">${esc(REPAIR_LABEL[s.tool] || s.tool)}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}<span class="al-caret" aria-hidden="true">▾</span></div><div class="al-body">${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}<pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre></div>`;
+  row.querySelector('.al-hd').onclick = () => {
+    row.classList.toggle('open');
+    row.querySelector('.al-caret').textContent = row.classList.contains('open') ? '▴' : '▾';
+  };
+  return row;
+}
+
+// 服务端映射的 cols 键可能是 0-based 数字串（_clean_mapping 的产物形状），
+// 确定性端点只认 Excel 字母键——发 /api/sheet/* 前统一转回字母
+function repairMapping() {
+  const m = IMP.mapping || {};
+  const cols = {};
+  Object.entries(m.cols || {}).forEach(([k, f]) => { cols[/^\d+$/.test(k) ? colLetter(+k) : k] = f; });
+  return Object.assign({}, m, { cols });
+}
+
+// 修复前草稿快照 → 给 applied/suggestions 补「旧值」（标签显示 旧值→新值 用）
+function enrichRepair(rep, beforeDrafts) {
+  const oldOf = f => {
+    const d = (beforeDrafts || [])[f.row_index] || {};
+    if (f.field === 'party') return String(d.party || '');
+    return String(((d.items || [])[num(f.item_index)] || {}).name || '');
+  };
+  (rep.applied || []).forEach(f => { f.old = oldOf(f); });
+  (rep.suggestions || []).forEach(s => { s.old = oldOf(s); });
+  return rep;
+}
+
+// fix 指向行的当前值（采纳建议那一刻实时取，不依赖可能过期的快照）
+function fixOldOf(f) {
+  const d = ((IMP.result || {}).drafts || [])[f.row_index] || {};
+  if (f.field === 'party') return String(d.party || '');
+  return String(((d.items || [])[num(f.item_index)] || {}).name || '');
+}
+
+// 写回后行内问题串本地重算：只剔除名称/往来单位类已解除的问题——数量/日期类
+// 问题修复 agent 不许碰（字段白名单），原样保留交给人工
+function problemsAfterFix(d, problems, fix) {
+  const probs = problems || [];
+  if (fix.field === 'item_name') {
+    const named = (d.items || []).every(it => String(it.name || '').trim());
+    if (named) return probs.filter(p => !/有一行商品没有名称|商品名为空/.test(p));
+  } else if (fix.field === 'party') {
+    const p = String(d.party || '').trim();
+    const bad = !p || /^\d/.test(p) || /^[\d\s:：]+$/.test(p);
+    if (!bad) return probs.filter(q => !/往来单位.*含数字/.test(q));
+  }
+  return probs;
+}
+
+// 服务端 apply_fixes 不重算 problems（留给后续 resolve）——前端把已自动写回的
+// 行按同一口径剔除已解除的问题串，让状态列/勾选框立即反映修复结果
+function stripAppliedProblems() {
+  const rep = IMP.repair || {};
+  (rep.applied || []).forEach(f => {
+    const d = ((IMP.result || {}).drafts || [])[f.row_index];
+    const irow = IMP.rows.find(r2 => r2._di === f.row_index);
+    if (d && irow) irow.problems = problemsAfterFix(d.draft, irow.problems, f);
+  });
+}
+
+// drafts 下标 → 行内「已自动修复/已采纳」小标签 HTML；每次渲染现算，不留缓存
+function repairTagsByRow() {
+  const rep = IMP.repair;
+  if (!rep || rep.skipped) return {};
+  const map = {};
+  const put = (di, txt) => { (map[di] = map[di] || []).push(`<div class="hint">${txt}</div>`); };
+  (rep.applied || []).forEach(f => {
+    put(f.row_index, '🛠 已自动修复：' + esc(REPAIR_FIELD_ZH[f.field] || f.field || '') + ' ' + esc(f.old || '（空）') + '→' + esc(f.value) + (f.reason ? '（' + esc(f.reason) + '）' : ''));
+  });
+  (rep.suggestions || []).forEach(s => {
+    if (s._adopted) put(s.row_index, '✓ 已采纳：' + esc(REPAIR_FIELD_ZH[s.field] || s.field || '') + ' ' + esc(s.old || '（空）') + '→' + esc(s.value));
+  });
+  return map;
+}
+
+// 修复轨迹块：步骤可展开（al-step）、rejected 折叠看 why、建议带「采纳」按钮；
+// 有建议待采纳时默认展开（不然按钮藏在折叠里点不到）
+function renderRepair() {
+  const box = $('#impRepair');
+  if (!box) return;
+  const rep = IMP.repair;
+  if (!rep) { box.innerHTML = ''; return; }
+  if (rep.skipped) {
+    box.innerHTML = rep.reason ? `<div class="hint mt-1">🧠 AI 修复未执行：${esc(rep.reason)}</div>` : '';
+    return;
+  }
+  const steps = (rep.steps || []).filter(s => s.tool);
+  const nAp = (rep.applied || []).length;
+  const sug = rep.suggestions || [];
+  const rej = rep.rejected || [];
+  if (!steps.length && !nAp && !sug.length && !rej.length) { box.innerHTML = ''; return; }
+  const bits = [];
+  if (steps.length) bits.push(steps.length + ' 步取证');
+  if (nAp) bits.push('自动修复 ' + nAp + ' 项');
+  if (sug.length) bits.push(sug.length + ' 项建议待采纳');
+  if (rej.length) bits.push(rej.length + ' 项未采纳');
+  const appliedHtml = nAp ? `<div class="hint mt-1">🛠 ${(rep.applied || []).map(f => esc(REPAIR_FIELD_ZH[f.field] || f.field || '') + ' ' + esc(f.old || '（空）') + '→' + esc(f.value) + (f.reason ? '（' + esc(f.reason) + '）' : '')).join('；')}</div>` : '';
+  const sugHtml = sug.length ? `<div class="mt-1">${sug.map((s, i) => `<div class="hint" style="margin-top:4px">💡 建议：${esc(REPAIR_FIELD_ZH[s.field] || s.field || '')} ${esc(s.old || '（空）')}→${esc(s.value)}${s.reason ? '（' + esc(s.reason) + '）' : ''} <button class="btn btn-sm" data-adopt="${i}" ${s._adopted ? 'disabled' : ''}>${s._adopted ? '已采纳' : '采纳'}</button></div>`).join('')}</div>` : '';
+  const rejHtml = rej.length ? `<details class="fold mt-1"><summary>${rej.length} 项未采纳（原因）</summary><div class="fold-body">${rej.map(f => `<div class="hint" style="margin-top:4px">✗ ${esc(REPAIR_FIELD_ZH[f.field] || f.field || '')} ${esc(f.value == null ? '' : f.value)}：${esc(f.why || '')}</div>`).join('')}</div></details>` : '';
+  box.innerHTML = `<details class="check-trace"${sug.length ? ' open' : ''}><summary>🧠 AI 修复轨迹 · ${esc(bits.join(' · ') || '修复完成')}</summary>${appliedHtml}${sugHtml}${rejHtml}<div class="al-steps"></div></details>`;
+  const stepsBox = box.querySelector('.al-steps');
+  steps.forEach(s => stepsBox.appendChild(stepRowRepair(s)));
+  $$('#impRepair [data-adopt]').forEach(b => b.onclick = () => impAdopt(+b.dataset.adopt));
+}
+
+// 🧠 AI 修复需处理行：POST /api/sheet/repair（服务端重变换 + 修复 agent + 确定性写回），
+// 用响应的 result 整体替换本地 result，修复摘要落 IMP.repair 供标签/轨迹渲染
+async function impRepairNow() {
+  if (IMP.busy || IMP.repairBusy || !IMP.mapping) return;
+  IMP.repairBusy = true;
+  renderRows();   // 按钮切到「AI 修复中…」禁用态
+  const before = JSON.parse(JSON.stringify((IMP.result || {}).drafts || []));   // 修复前旧值快照
+  try {
+    const r = await api('/api/sheet/repair', { method: 'POST', body: {
+      ref: IMP.ref, sheet: IMP.sheet, mapping: repairMapping() } });
+    if (!r.ok) { toast(r.message || 'AI 修复失败', 'bad'); return; }
+    IMP.result = r.result;
+    IMP.repair = enrichRepair(r.repair || {}, before);
+    renderRows(IMP.result);
+    stripAppliedProblems();
+    renderRows();
+    await impResolve();   // 修复后可用的行走现有预览链路（匹配档案 / 签令牌）
+  } catch (e) {
+    toast(e.message, 'bad');
+  } finally {
+    IMP.repairBusy = false;
+    renderRows();   // 恢复按钮态（成功路径数据已换新，这里只是重绘）
+  }
+}
+
+// 采纳低置信建议：本地写回 result.drafts[row_index]（item_name 改 name / party 改
+// party / material_id 直达档案），行内问题重算后走现有 /api/sheet/resolve 出预览
+async function impAdopt(i) {
+  const rep = IMP.repair || {};
+  const s = (rep.suggestions || [])[i];
+  if (!s || s._adopted) return;
+  const drafts = (IMP.result || {}).drafts || [];
+  const row = drafts[s.row_index];
+  if (!row || !row.draft) { toast('行数据不存在，无法采纳', 'bad'); return; }
+  const value = String(s.value || '').trim();
+  if (!value) { toast('建议值为空，无法采纳', 'bad'); return; }
+  if (s.field === 'party') {
+    row.draft.party = value;
+  } else {
+    const it = (row.draft.items || [])[num(s.item_index)];
+    if (!it) { toast('明细行不存在，无法采纳', 'bad'); return; }
+    it.name = value;
+    if (s.material_id) it.material_id = s.material_id;   // 点选直达语义：resolve 按档案精确匹配
+  }
+  s._adopted = true;
+  s.old = s.old || fixOldOf(s);
+  const irow = IMP.rows.find(r2 => r2._di === s.row_index);
+  if (irow) irow.problems = problemsAfterFix(row.draft, irow.problems, s);
+  renderRows();
+  await impResolve();
 }
 
 $('#impBack').onclick = () => impSetStep(1);
