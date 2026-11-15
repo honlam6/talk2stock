@@ -430,8 +430,10 @@ function AttachmentManager(zoneEl, opts) {
   opts = opts || {};
   const biz = opts.biz || 'bill';
   const max = opts.max || 4;            // 原版限制单单据最多 4 份
-  const paths = [];                     // 已上传到 ERP 的相对路径串
-  const names = [];                     // 对应文件名（用于展示）
+  // initial：多单预览层重渲染卡片时，把已传附件原样带回（paths 存在调用方状态里）
+  const initial = Array.isArray(opts.initial) ? opts.initial : [];
+  const paths = initial.map(x => x.path).filter(Boolean);
+  const names = initial.map(x => x.name || (x.path || '').split('/').pop());
 
   function pickFile() { const f = $('#__attFile', zoneEl); if (f) f.click(); }
 
@@ -949,6 +951,539 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
   }
 
   render();
+}
+
+// ---------- 图片录入：客户端压缩（视觉 token 按图片 tile 计费，先省再传） ----------
+/** 图片文件 → 压缩后的 data URL（最长边 maxSide，JPEG q）。压缩失败回退原文件，
+ *  由调用方自行决定直传（服务端有 8MB 上限）。 */
+function compressImage(file, maxSide = 1600, q = 0.85) {
+  return new Promise(resolve => {
+    try {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      const done = v => { try { URL.revokeObjectURL(url); } catch (e) {} resolve(v); };
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const cv = document.createElement('canvas');
+          cv.width = w; cv.height = h;
+          cv.getContext('2d').drawImage(img, 0, 0, w, h);
+          const du = cv.toDataURL('image/jpeg', q);
+          done(du && du.length > 30 ? { dataUrl: du, file } : { dataUrl: null, file });
+        } catch (e) { done({ dataUrl: null, file }); }   // HEIC 等解不动的格式直传原文件
+      };
+      img.onerror = () => done({ dataUrl: null, file });
+      img.src = url;
+    } catch (e) { resolve({ dataUrl: null, file }); }
+  });
+}
+
+function dataURLtoBlob(dataUrl) {
+  const [head, b64] = String(dataUrl).split(',');
+  const mime = (head.match(/data:([^;]+)/) || [, 'image/jpeg'])[1];
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// ---------- 批量写入（分块顺序提交，进度可回报） ----------
+/** items: [{draft, confirm_token}]。分块调用 /api/commit/batch：服务端逐单顺序写
+ *  （主数据补建必须对下一张可见），前端分块拿到中间进度；onResult(gi, res) 的 gi
+ *  是 items 全局下标。 */
+async function commitBatch(items, opts) {
+  const o = Object.assign({ source: '', rawText: '', chunkSize: 5, onResult: null, onProgress: null }, opts || {});
+  const total = items.length;
+  let done = 0, okCount = 0;
+  const results = new Array(total);
+  for (let s = 0; s < total; s += o.chunkSize) {
+    const chunk = items.slice(s, s + o.chunkSize);
+    const r = await api('/api/commit/batch', { method: 'POST', body: {
+      items: chunk.map(x => ({ draft: x.draft, confirm_token: x.confirm_token })),
+      source: o.source, raw_text: o.rawText, operator: await ensureOperator(),
+    } });
+    if (!r.results) throw new Error(r.message || '批量写入失败');
+    (r.results || []).forEach(res => {
+      const gi = s + res.index;
+      results[gi] = res;
+      done++;
+      if (res.ok) okCount++;
+      if (o.onResult) o.onResult(gi, res);
+    });
+    if (o.onProgress) o.onProgress(done, total, okCount);
+  }
+  return { results, okCount, total };
+}
+
+// ---------- 多单批量预览层（AI 多单解析 / 表格导入共用） ----------
+/** bills: [{draft, preview, confirm_token, ai, attach?}]；extra: {source, rawText, onClose(bills)}。
+ *  每单一个确认令牌：勾选整批 → /api/commit/batch 逐单过闸门，篡改哪单拒哪单；
+ *  改过的单自动先 /api/resolve 换新令牌再写入。逐单可弃可改，互不阻塞。 */
+function showMultiPreview(bills, extra) {
+  const old = document.getElementById('__mmask');
+  if (old) old.remove();
+  extra = extra || {};
+
+  const st = {
+    source: extra.source || 'ai',
+    rawText: extra.rawText || '',
+    done: false,
+    bills: (bills || []).map((b, i) => ({
+      idx: i,
+      draft: JSON.parse(JSON.stringify(b.draft || {})),
+      preview: JSON.parse(JSON.stringify(b.preview || {})),
+      confirm_token: b.confirm_token || '',
+      ai: b.ai || (b.preview && b.preview.ai) || {},
+      attach: (b.attach || []).slice(),
+      collapsed: i > 0,
+      dirty: false,
+      state: 'open',        // open | committed | failed
+      res: null,
+    })),
+  };
+
+  const statusOf = b => {
+    if (b.state === 'committed') return 'committed';
+    if (b.state === 'failed') return 'failed';
+    if ((b.preview.errors || []).length) return 'blocked';
+    if ((b.preview.warnings || []).length) return 'warned';
+    return 'ready';
+  };
+  const STATUS_ZH = { ready: '可写入', warned: '需注意', blocked: '无法提交', committed: '已写入', failed: '写入失败' };
+  const billTotal = b => (b.draft.items || []).reduce((t, it) => t + num(it.qty) * num(it.price), 0);
+  const clientErrors = b => {
+    const d = b.draft, errs = [];
+    if (!(d.party || '').trim()) errs.push('缺少往来单位名称');
+    const items = d.items || [];
+    if (!items.length) errs.push('至少需要一项商品明细');
+    items.forEach((it, i) => {
+      if (!(it.name || '').trim()) errs.push(`第${i + 1}行缺商品名称`);
+      if (num(it.qty) <= 0) errs.push(`第${i + 1}行数量必须大于 0`);
+      if (num(it.price) < 0) errs.push(`第${i + 1}行单价不能为负`);
+    });
+    return errs;
+  };
+  const matNorm = s => String(s || '').replace(/[()（）]/g, '').replace(/[×✕ｘ]/g, 'x')
+    .trim().toLowerCase().replace(/\s/g, '');
+  const itemTag = (b, i) => {
+    const it = (b.draft.items || [])[i];
+    if (!it || !(it.name || '').trim()) return '<span class="muted">未填</span>';
+    const n = matNorm(it.name);
+    const hit = (MD.materials || []).find(x =>
+      matNorm(x.name) === n || matNorm(x.name + (x.model || '') + (x.standard || '')) === n);
+    return hit ? '<span class="tag tag-ok">已有</span>' : '<span class="tag tag-new">将新建</span>';
+  };
+  const candChips = (cands, pick) => (cands || []).length
+    ? `<div class="mt-1"><span class="hint">是指：</span>${cands.map(c => {
+        const o = (c && typeof c === 'object');
+        const label = o ? [c.name, c.model, c.standard].filter(Boolean).join(' · ') : c;
+        const mid = o && c.id ? ` data-cand-mid="${c.id}"` : '';
+        return `<span class="tag tag-blue" style="cursor:pointer" data-pick="${esc(pick)}" data-cand="${esc(o ? c.name : c)}"${mid}>${esc(label)}</span>`;
+      }).join(' ')}</div>`
+    : '';
+
+  // ---------- 渲染 ----------
+  let detachKey = null;
+
+  function cardBody(b) {
+    const p = b.preview, d = b.draft;
+    const errs = p.errors || [], warns = p.warnings || [], toCreate = p.to_create || [];
+    const ai = b.ai || {};
+    const aiFlag = (ai.confidence && ai.confidence !== 'high') || (ai.note || '').trim() || (ai.problems || []).length;
+    const pitem = i => (p.items || [])[i] || {};
+    const rows = (d.items || []).map((it, i) => {
+      const pv = pitem(i);
+      return `<tr>
+        <td>
+          <div class="ac-wrap" style="flex:1"><input class="pv-name" data-i="${i}" value="${esc(it.name)}" placeholder="商品名称" autocomplete="off"></div>
+          <div class="pv-sub">${itemTag(b, i)}${(pv.match_kind === 'fuzzy' || pv.match_kind === 'picked') && pv.matched_name ? ` <span class="tag ${pv.match_kind === 'picked' ? 'tag-ok' : 'tag-fuzzy'}">匹配→${esc(pv.matched_name)}${pv.matched_model ? ' ' + esc(pv.matched_model) : ''}</span>` : ''}${candChips(pv.candidates, `${b.idx}:item:${i}`)}</div>
+        </td>
+        <td><input class="pv-qty num" data-i="${i}" type="number" step="any" value="${it.qty ?? ''}" placeholder="0"></td>
+        <td><input class="pv-unit" data-i="${i}" value="${esc(it.unit || '')}" placeholder="个"></td>
+        <td><input class="pv-price num${pv.price_missing ? ' price-zero' : ''}" data-i="${i}" type="number" step="any" value="${it.price ?? ''}" placeholder="0.00">${pv.price_missing ? ' <span class="tag tag-new" title="原内容里可能没有价格">单价?</span>' : ''}</td>
+        <td class="num"><b class="pv-amt" data-i="${i}">${money(num(it.qty) * num(it.price))}</b></td>
+        <td><button class="xdel" data-del="${i}" title="删除该行">×</button></td>
+      </tr>`;
+    }).join('');
+    const dtVal = (d.oper_time || '').replace(' ', 'T').slice(0, 16);
+    const partyTag = () => {
+      if (!(d.party || '').trim()) return '';
+      return findExact(partyPool(d.biz), d.party)
+        ? '<span class="tag tag-ok">已有</span>' : '<span class="tag tag-new">将新建</span>';
+    };
+    return `
+      <div data-errs="${b.idx}">${errs.length ? `<div class="alert alert-error"><b>无法提交：</b><br>${errs.map(esc).join('<br>')}</div>` : ''}</div>
+      ${aiFlag ? `<div class="alert ${ai.confidence === 'low' ? 'alert-warn' : 'alert-info'}"><b>AI 提示（置信度：${esc(ai.confidence || '—')}）：</b>${esc(ai.note || '')}${(ai.problems || []).length ? '<br>解析问题：' + ai.problems.map(esc).join('；') : ''}</div>` : ''}
+      ${toCreate.length ? `<div class="alert alert-warn"><b>⚠ 将自动新建：</b>${toCreate.map(esc).join('；')}</div>` : ''}
+      ${warns.length ? `<div class="alert alert-info"><b>提醒：</b><br>${warns.map(esc).join('<br>')}</div>` : ''}
+      <div data-res="${b.idx}"></div>
+      <div class="pv-form">
+        <div class="pv-line">
+          <label>${esc((p.party && p.party.type) || (BIZ[d.biz] && BIZ[d.biz].party) || '往来单位')}</label>
+          <div class="ac-wrap pv-grow"><input class="pv-party" value="${esc(d.party || '')}" placeholder="名称，没有的会自动新建" autocomplete="off"></div>
+          <span class="pv-partytag">${partyTag()}</span>
+        </div>
+        <div class="pv-partycand">${d.party && p.party && !p.party.matched ? candChips(p.party.candidates, `${b.idx}:party`) : ''}</div>
+        <div class="pv-line">
+          <label>仓库</label>
+          <div class="pv-grow"><input class="pv-depot" list="__depotListM" value="${esc(d.depot || '')}" placeholder="留空用默认仓"></div>
+          ${p.depot && p.depot.will_create && d.depot ? '<span class="tag tag-new">将新建</span>' : '<span class="tag tag-ok">已有</span>'}
+        </div>
+        <div class="pv-line">
+          <label>日期</label>
+          <div class="pv-grow"><input class="pv-otime" type="datetime-local" value="${esc(dtVal)}"></div>
+        </div>
+      </div>
+      <div class="tbl-wrap mt-2 tbl-scroll">
+        <table class="xtable">
+          <thead><tr><th>商品</th><th class="num" style="width:80px">数量</th><th style="width:70px">单位</th><th class="num" style="width:100px">单价</th><th class="num" style="width:92px">金额</th><th style="width:36px"></th></tr></thead>
+          <tbody class="m-pvbody" data-i="${b.idx}">${rows || '<tr><td colspan="6" class="muted center">没有明细</td></tr>'}</tbody>
+        </table>
+      </div>
+      <button class="btn btn-sm btn-ghost mt-1" data-addrow="${b.idx}">＋ 加一行</button>
+      <div class="total-row">合计：<span class="amount" data-total="${b.idx}">￥${money(billTotal(b))}</span></div>
+      <div class="pv-dirty hidden" data-dirty="${b.idx}">✏ 内容已修改：写入前会自动刷新预览换新令牌。</div>
+      <div class="field mt-2">
+        <label>附件（选填 · 发票 / 合同，随本单写入 ERP）</label>
+        <div class="attach-zone" data-att="${b.idx}"></div>
+      </div>
+      <datalist id="__depotListM">${(MD.depots || []).map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>
+      <div class="row-btns mt-3">
+        <button class="btn" data-refresh="${b.idx}">↻ 刷新预览</button>
+        <span class="hint" style="flex:1">表格里可直接改数</span>
+        <button class="btn btn-primary" data-commitone="${b.idx}">确认此单</button>
+      </div>`;
+  }
+
+  function renderCard(i) {
+    const b = st.bills[i];
+    const el = $(`.m-card[data-i="${i}"]`);
+    if (!el) return;
+    const stat = statusOf(b);
+    el.className = `m-card open ${stat}` + (b.collapsed ? '' : ' open');
+    if (b.collapsed) el.classList.remove('open');
+    const one = (b.preview.errors || [])[0];
+    const sel = $(`.m-sel[data-sel="${i}"]`);
+    const lockSel = stat === 'blocked' || stat === 'committed';
+    el.innerHTML = `
+      <div class="m-card-hd" data-toggle="${i}">
+        <input class="m-sel" data-sel="${i}" type="checkbox" ${lockSel ? 'disabled' : ''}
+          ${sel && sel.checked !== undefined ? (sel.checked && !lockSel ? 'checked' : '') : (!lockSel ? 'checked' : '')}
+          ${lockSel ? (stat === 'committed' ? 'checked' : '') : 'checked'}>
+        <span class="m-idx">#${i + 1}</span>
+        <span class="m-title">${esc((BIZ[b.draft.biz] || {}).label || b.draft.biz || '')} · ${esc(b.draft.party || '？')} · ${(b.draft.items || []).length} 行</span>
+        <span class="m-status ${stat}">${STATUS_ZH[stat]}${stat === 'blocked' && one ? '：' + esc(one) : ''}</span>
+        <b class="m-total">￥${money(billTotal(b))}</b>
+        <span class="caret">▶</span>
+      </div>
+      <div class="m-body" ${b.collapsed ? '' : ''} style="${b.collapsed ? 'display:none' : ''}">${cardBody(b)}</div>`;
+
+    // 附件管理器：以 st.attach 为初始状态（卡片重渲染不丢已传附件）
+    const zone = $(`.attach-zone[data-att="${i}"]`, el);
+    if (zone) {
+      b._att = AttachmentManager(zone, { biz: 'bill', max: 4, initial: b.attach });
+      b._getAttach = () => {
+        const ps = b._att ? b._att.getPaths() : b.attach.map(a => a.path);
+        const oldPaths = b.attach.map(a => a.path);
+        b.attach = ps.map(p => ({ path: p, name: p.split('/').pop() }));
+        void oldPaths;
+        return b.attach;
+      };
+    }
+    bindCard(i, el);
+  }
+
+  function renderAll() {
+    st.bills.forEach((_, i) => renderCard(i));
+    updateBars();
+  }
+
+  function updateBars() {
+    const n = st.bills.length;
+    const cnt = { ready: 0, warned: 0, blocked: 0, committed: 0, failed: 0 };
+    st.bills.forEach(b => { cnt[statusOf(b)]++; });
+    const pending = cnt.ready + cnt.warned + cnt.failed;
+    const selCount = st.bills.filter(b => {
+      const s = $(`.m-sel[data-sel="${b.idx}"]`);
+      return s && s.checked && b.state !== 'committed';
+    }).length;
+    const sb = $('#__msum');
+    if (sb) sb.innerHTML =
+      `共 <b>${n}</b> 张：<span class="row-ok">可写入 ${cnt.ready}</span> · ` +
+      `<span class="row-warn">需注意 ${cnt.warned}</span> · ` +
+      (cnt.blocked ? `<span class="row-bad">无法提交 ${cnt.blocked}</span> · ` : '') +
+      `<span class="row-ok">已写入 ${cnt.committed}</span>` +
+      (cnt.failed ? ` · <span class="row-bad">失败 ${cnt.failed}</span>` : '');
+    const btn = $('#__mbatch');
+    if (btn) {
+      btn.disabled = selCount === 0 || st.busy;
+      btn.textContent = st.busy ? '写入中…' : `确认写入勾选的 ${selCount} 单`;
+    }
+  }
+
+  function bindCard(i, el) {
+    const b = st.bills[i];
+    const partyTagEl = () => $('.pv-partytag', el);
+    const refreshPartyTag = () => {
+      const d = b.draft, t = partyTagEl();
+      if (t) t.innerHTML = (!(d.party || '').trim()) ? ''
+        : (findExact(partyPool(d.biz), d.party) ? '<span class="tag tag-ok">已有</span>' : '<span class="tag tag-new">将新建</span>');
+    };
+    // 折叠
+    $('.m-card-hd', el).onclick = e => {
+      if (e.target.closest('.m-sel')) return;
+      b.collapsed = !b.collapsed;
+      const body = $('.m-body', el);
+      body.style.display = b.collapsed ? 'none' : '';
+      el.classList.toggle('open', !b.collapsed);
+    };
+    // 勾选
+    $('.m-sel', el).onchange = updateBars;
+    // 输入绑定
+    const bindScope = () => {
+      const party = $('.pv-party', el);
+      if (party) party.addEventListener('input', () => { b.draft.party = party.value.trim(); refreshPartyTag(); b.dirty = true; });
+      const depot = $('.pv-depot', el);
+      if (depot) depot.addEventListener('input', () => { b.draft.depot = depot.value.trim(); b.dirty = true; });
+      const ot = $('.pv-otime', el);
+      if (ot) ot.addEventListener('change', () => {
+        const v = ot.value || '';
+        if (v) b.draft.oper_time = v.replace('T', ' ') + (v.length === 16 ? ':00' : '');
+        b.dirty = true;
+      });
+      const body = $('.m-pvbody', el);
+      if (body) {
+        body.addEventListener('input', e => {
+          const t = e.target;
+          const ri = +t.dataset.i;
+          const it = (b.draft.items || [])[ri];
+          if (!it) return;
+          if (t.classList.contains('pv-qty')) it.qty = num(t.value);
+          else if (t.classList.contains('pv-price')) it.price = num(t.value);
+          else if (t.classList.contains('pv-unit')) it.unit = t.value.trim() || '个';
+          else return;   // pv-name 走 autocomplete
+          const amt = $(`.pv-amt[data-i="${ri}"]`, body);
+          if (amt) amt.textContent = money(num(it.qty) * num(it.price));
+          const tot = $(`[data-total="${b.idx}"]`);
+          if (tot) tot.textContent = '￥' + money(billTotal(b));
+          b.dirty = true;
+          const db = $(`[data-dirty="${b.idx}"]`);
+          if (db) db.classList.remove('hidden');
+        });
+        body.addEventListener('click', e => {
+          const del = e.target.closest('[data-del]');
+          if (del) {
+            const ri = +del.dataset.del;
+            const items = b.draft.items || [];
+            if (items.length > 1) items.splice(ri, 1);
+            else items[0] = { name: '', qty: 0, unit: '个', price: 0 };
+            b.dirty = true;
+            renderCard(i);
+            updateBars();
+            return;
+          }
+          const chip = e.target.closest('[data-pick]');
+          if (chip) pickCandidate(i, chip);
+        });
+        const add = $(`[data-addrow="${i}"]`);
+        if (add) add.onclick = () => {
+          (b.draft.items = b.draft.items || []).push({ name: '', qty: 0, unit: '个', price: 0 });
+          b.dirty = true;
+          renderCard(i);
+        };
+      }
+      // 商品自动补全（点选锁档案，手改解除——与单单确认卡同规则）
+      $$('.pv-name', el).forEach(inp => {
+        let pickedNow = false;
+        autocomplete(inp, () => MD.materials,
+          it2 => {
+            const ri = +inp.dataset.i;
+            const it = b.draft.items[ri];
+            if (!it) return;
+            pickedNow = true;
+            if (it2.id) it.material_id = it2.id;
+            if (it2.unit && !it.unit) {
+              it.unit = it2.unit;
+              const u = $(`.pv-unit[data-i="${ri}"]`, el);
+              if (u) u.value = it2.unit;
+            }
+          },
+          () => {
+            const ri = +inp.dataset.i;
+            const it = b.draft.items[ri];
+            if (!it) return;
+            it.name = inp.value.trim();
+            if (!pickedNow) delete it.material_id;
+            pickedNow = false;
+            b.dirty = true;
+          });
+      });
+      if (party) autocomplete(party, () => partyPool(b.draft.biz), null, refreshPartyTag);
+    };
+    bindScope();
+
+    $(`[data-refresh="${i}"]`, el).onclick = () => refreshBill(i);
+    $(`[data-commitone="${i}"]`, el).onclick = () => commitOne(i);
+  }
+
+  async function pickCandidate(cardIdx, chip) {
+    const b = st.bills[cardIdx];
+    const pick = chip.dataset.pick.split(':');   // [cardIdx, 'party'|'item', rowIdx?]
+    const cand = chip.dataset.cand;
+    if (pick[1] === 'party') b.draft.party = cand;
+    else {
+      const it = b.draft.items && b.draft.items[+pick[2]];
+      if (!it) return;
+      it.name = cand;
+      if (chip.dataset.candMid) it.material_id = +chip.dataset.candMid;
+    }
+    chip.textContent = '…';
+    await refreshBill(cardIdx, true);
+  }
+
+  async function refreshBill(i, silent) {
+    const b = st.bills[i];
+    try {
+      const r = await api('/api/resolve', { method: 'POST', body: { draft: b.draft, source: st.source } });
+      if (!r.ok) { toast(r.message || '刷新预览失败', 'bad'); return false; }
+      b.preview = r.preview;
+      b.confirm_token = r.preview.confirm_token;
+      b.dirty = false;
+      if (b.state === 'failed') b.state = 'open';
+      renderCard(i);
+      updateBars();
+      if (!silent) toast(`第 ${i + 1} 单预览已刷新`, 'ok');
+      return true;
+    } catch (e) { toast(e.message, 'bad'); return false; }
+  }
+
+  async function commitOne(i) {
+    const b = st.bills[i];
+    if (b.dirty && !(await refreshBill(i, true))) return;
+    const btn = $(`[data-commitone="${i}"]`);
+    if (btn) { btn.disabled = true; btn.textContent = '写入中…'; }
+    try {
+      const d = Object.assign({}, b.draft);
+      const att = b._getAttach ? b._getAttach() : b.attach;
+      if (att.length) d.file_name = att.map(x => x.path).join(',');
+      const res = await api('/api/commit', { method: 'POST', body: {
+        draft: d, confirm_token: b.confirm_token,
+        source: st.source, raw_text: st.rawText, operator: await ensureOperator(),
+      } });
+      if (res.ok) {
+        b.state = 'committed'; b.res = res;
+        toast(`✓ 第 ${i + 1} 单已写入：${res.message || ''}`, 'ok');
+      } else {
+        b.state = 'failed'; b.res = res;
+        toast(res.message || '写入失败', 'bad');
+      }
+    } catch (e) {
+      b.state = 'failed'; b.res = { ok: false, message: e.message };
+      toast(e.message, 'bad');
+    }
+    renderCard(i);
+    updateBars();
+  }
+
+  async function commitSelected() {
+    if (st.busy) return;
+    const sel = st.bills.filter(b => {
+      const s = $(`.m-sel[data-sel="${b.idx}"]`);
+      return s && s.checked && b.state !== 'committed';
+    });
+    if (!sel.length) { toast('请先勾选要写入的单据', 'warn'); return; }
+    st.busy = true;
+    updateBars();
+    const prog = $('#__mprog'), progFill = prog ? prog.querySelector('i') : null;
+    const progTxt = $('#__mprogTxt');
+    // 脏单先刷新换新令牌（旧令牌绑定旧内容，直接提交会被闸门拒）
+    for (const b of sel) {
+      if (b.dirty) {
+        if (progTxt) progTxt.textContent = `刷新第 ${b.idx + 1} 单预览…`;
+        const ok = await refreshBill(b.idx, true);
+        if (!ok) { st.busy = false; updateBars(); return; }
+      }
+    }
+    const items = sel.map(b => {
+      const d = Object.assign({}, b.draft);
+      const att = b._getAttach ? b._getAttach() : b.attach;
+      if (att.length) d.file_name = att.map(x => x.path).join(',');
+      return { draft: d, confirm_token: b.confirm_token, _bill: b };
+    });
+    try {
+      const r = await commitBatch(items, {
+        source: st.source, rawText: st.rawText,
+        onResult: (gi, res) => {
+          const b = items[gi]._bill;
+          b.state = res.ok ? 'committed' : 'failed';
+          b.res = res;
+          renderCard(b.idx);
+        },
+        onProgress: (done, total) => {
+          if (progFill) progFill.style.width = Math.round(done / total * 100) + '%';
+          if (progTxt) progTxt.textContent = `写入中 ${done}/${total}`;
+        },
+      });
+      toast(`批量写入完成：成功 ${r.okCount} / ${r.total}` + (r.okCount < r.total ? '（失败单已标红，可修改后重试）' : ''), r.okCount === r.total ? 'ok' : 'warn');
+    } catch (e) {
+      toast(e.message, 'bad');
+    }
+    st.busy = false;
+    updateBars();
+  }
+
+  function close() {
+    const pending = st.bills.filter(b => b.state === 'open').length;
+    if (pending && !st.done &&
+        !confirm(`还有 ${pending} 张单没写入，确定关闭？\n（已写入的不受影响；未写入的草稿保留在会话里）`)) return;
+    if (detachKey) detachKey();
+    const mask = $('#__mmask');
+    if (mask) mask.remove();
+    if (extra.onClose) extra.onClose(st.bills.map(({ _att, _getAttach, ...rest }) => {
+      const att = _getAttach ? _getAttach() : rest.attach;
+      return Object.assign(rest, { attach: att });
+    }));
+  }
+
+  // ---------- 骨架 ----------
+  const mask = document.createElement('div');
+  mask.id = '__mmask';
+  mask.className = 'multi-mask';
+  mask.setAttribute('role', 'dialog');
+  mask.setAttribute('aria-modal', 'true');
+  mask.innerHTML = `
+    <div class="multi-wrap">
+      <div class="m-head">
+        <h2>批量确认</h2>
+        <span class="m-count" id="__msum"></span>
+        <button class="modal-x" title="关闭（Esc）" aria-label="关闭">×</button>
+      </div>
+      <div class="m-sumbar">
+        <label class="m-selall"><input type="checkbox" id="__mselall" checked> 全选可写入的单</label>
+        <span class="hint" style="margin:0">每单独立过闸门：改过的单写入前自动刷新；失败的单不影响其他单。</span>
+      </div>
+      <div class="m-list" id="__mlist"></div>
+      <div class="m-sticky">
+        <button class="btn btn-primary btn-lg" id="__mbatch">确认写入</button>
+        <div class="m-prog" id="__mprog"><i></i></div>
+        <span class="hint-c" id="__mprogTxt"></span>
+        <span class="hint-c" style="margin-left:auto">Esc 关闭</span>
+      </div>
+    </div>`;
+  document.body.appendChild(mask);
+  mask.querySelector('.modal-x').onclick = close;
+  $('#__mselall').onchange = e => {
+    const on = e.target.checked;
+    $$('.m-sel').forEach(s => { if (!s.disabled) s.checked = on; });
+    updateBars();
+  };
+  $('#__mbatch').onclick = commitSelected;
+  const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+  document.addEventListener('keydown', onKey);
+  detachKey = () => document.removeEventListener('keydown', onKey);
+  renderAll();
 }
 
 // ---------- 焦点陷阱（21st.dev Dialog 模式核心） ----------

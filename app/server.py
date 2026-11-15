@@ -23,9 +23,15 @@
     GET    /api/auth/me           → 当前登录者与角色
     GET    /api/my/model          → 我的模型档案（私有，key 脱敏）+ 共享档案只读状态
     POST   /api/my/model          → 我的模型管理（action=save|activate|delete|test）
-    POST   /api/parse             → 自然语言 → draft + 预览 + 确认令牌
+    POST   /api/parse             → 自然语言 → bills[] 草稿 + 逐单预览 + 独立确认令牌
+    POST   /api/parse/image       → 单据照片（multipart）→ 视觉解析 → bills[]
     POST   /api/resolve           → draft → 预览（只读）+ 确认令牌
     POST   /api/commit            → draft + 确认令牌 → 真正写入 ERP（无令牌一律拒绝）
+    POST   /api/commit/batch      → items[{draft,confirm_token}] → 逐单过闸门写入（batch_id 串联审计）
+    POST   /api/sheet/inspect     → Excel/CSV（multipart）→ 工作表清单 + 前 8 行预览
+    POST   /api/sheet/map         → AI 表头映射（≤2 轮有界修复）+ 试变换结果
+    POST   /api/sheet/transform   → 人工修正映射后确定性重变换（零 LLM）
+    POST   /api/sheet/resolve     → 导入草稿逐行预览 + 令牌
     GET    /api/master            → 主数据（供应商/客户/商品/仓库/账户/单位）
     GET    /api/dashboard         → 经营看板全量数据（?lite=1 为工作台 KPI 精简版）
     GET    /api/history           → 最近录单（审计日志 commit_ok 的只读视图）
@@ -35,6 +41,7 @@
 所有 /api 响应均为 UTF-8 JSON；任何异常都被捕获成
 {"ok": false, "message": "中文提示"}，不会向客户端抛栈。
 """
+import base64
 import json
 import os
 import re
@@ -43,6 +50,7 @@ import tempfile
 import time
 import traceback
 import urllib.parse
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -57,6 +65,8 @@ from core import erp as erpmod              # noqa: E402
 from core import gate as gatemod            # noqa: E402
 from core import llm as llmmod              # noqa: E402
 from core import oplog as oplogmod          # noqa: E402
+from core import sheet as sheetmod          # noqa: E402
+from core.sheet import SheetError           # noqa: E402
 
 PORT = int(os.environ.get("PORT", "8090"))
 HOST = os.environ.get("HOST", "0.0.0.0")
@@ -416,42 +426,325 @@ def _confirm_meta(source, raw_text="", model="", extra=None):
     return meta
 
 
+MAX_PARSE_CHARS = 1000   # 多单契约放宽：一段话多单（；分单）允许更长，但仍拒绝整篇文章
+MAX_IMAGES = 4           # 单次识别图片上限（一次调用带全部图，token 一次花完）
+MAX_IMG_BYTES = 8 * 1024 * 1024
+
+
+def _parse_to_bills(drafts, meta, erp, source, raw_text, batch_id=""):
+    """llm.parse / parse_images 产出的草稿数组 → bills[]：逐单 resolve + 签发独立令牌。
+    每单一个令牌（与单内容哈希绑定）——批量确认时逐单过闸门，篡改哪单拒哪单，
+    C1-C4 不变量在批量语义下原样成立。"""
+    bills = []
+    for i, d in enumerate(drafts):
+        preview = draftmod.resolve(d, erp)
+        bm = (meta.get("bills") or [{}])[i] or {}
+        preview["ai"] = {"confidence": bm.get("confidence", ""),
+                         "note": bm.get("note", ""), "problems": bm.get("problems", [])}
+        m = _confirm_meta(source, raw_text, model=meta.get("model", ""),
+                          extra={"draft_resolved": d, "profile": meta.get("profile", ""),
+                                 "revision": bool(meta.get("revision")),
+                                 "bill_index": i, "batch_id": batch_id})
+        preview["confirm_token"] = gatemod.issue(d, m)
+        bills.append({"draft": d, "preview": preview, "confirm_token": preview["confirm_token"]})
+    return bills
+
+
+def _bill_meta_public(meta):
+    """回给前端的解析 meta（裁掉内嵌 drafts / raw，避免响应膨胀）。"""
+    return {k: meta.get(k) for k in ("model", "profile", "confidence", "note",
+                                     "problems", "count", "revision")}
+
+
 def api_parse(_q, body):
     text = (body.get("text") or "").strip()
     if not text:
-        return {"ok": False, "message": "请先输入一句话描述，例如「从美宜佳买了3瓶可乐单价3块5」"}
-    if len(text) > 500:
+        return {"ok": False, "message": "请先输入业务描述，例如「从美宜佳买3瓶可乐单价3块5；卖给张记2箱方便面单价45」"}
+    if len(text) > MAX_PARSE_CHARS:
         return {"ok": False,
-                "message": "一句话太长了（%d 字）——单次最多 500 字；一笔业务一句话，多笔分开录" % len(text)}
+                "message": "输入太长了（%d 字）——单次最多 %d 字；多笔业务用「；」分段，还装不下就分两次录" % (len(text), MAX_PARSE_CHARS)}
     if not llmmod.is_configured():
         return {"ok": False, "need_config": True,
                 "message": "尚未配置 AI 模型，请点右上角「设置」添加一个模型档案（Base URL / API Key / 模型名）后再试。"}
-    # 多轮修正：body.draft 非空时，本轮输入是对该草稿的增量修改指令
+    # 多轮修正：body.draft 非空时，本轮输入是对该草稿的增量修改指令（单张语义）
     prev = body.get("draft")
     prev = prev if isinstance(prev, dict) and prev else None
     # skip_clarify：用户点「跳过追问」或已达澄清轮次上限，直接出确认卡
     skip_clarify = bool(body.get("skip_clarify"))
     erp = _erp()
     try:
-        draft, meta = llmmod.parse(text, erp, prev_draft=prev)
+        drafts, meta = llmmod.parse(text, erp, prev_draft=prev)
     except Exception as e:
         return {"ok": False, "message": "AI 解析失败：%s" % friendly(e)}
-    # 主动澄清：缺关键信息时不签令牌不出确认卡，追问一轮（前端把补充回答
-    # 连同本 draft 重发 /api/parse 即多轮修正链路；跳过则走 resolve 出预览）
+    # 主动澄清只在单张时有意义（多单缺信息在确认卡上逐单标出来改，跨单追问会把人绕晕）
     cl = meta.get("clarify")
-    if cl and not skip_clarify:
+    if cl and not skip_clarify and len(drafts) == 1:
         return {"ok": True, "need_clarification": True,
                 "question": cl.get("question", ""), "missing": cl.get("missing", ""),
-                "draft": draft, "meta": {k: meta.get(k) for k in
-                                         ("model", "confidence", "note", "revision")}}
-    preview = draftmod.resolve(draft, erp)
-    preview["ai"] = {"confidence": meta.get("confidence", ""),
-                     "note": meta.get("note", ""), "problems": meta.get("problems", [])}
-    meta_info = _confirm_meta("ai", text, model=meta.get("model", ""),
-                              extra={"draft_resolved": draft, "profile": meta.get("profile", ""),
-                                     "revision": bool(prev)})
-    preview["confirm_token"] = gatemod.issue(draft, meta_info)
-    return {"ok": True, "draft": draft, "meta": meta, "preview": preview}
+                "draft": drafts[0], "meta": {k: meta.get(k) for k in
+                                             ("model", "confidence", "note", "revision")}}
+    batch_id = uuid.uuid4().hex[:12]
+    bills = _parse_to_bills(drafts, meta, erp, "ai", text, batch_id)
+    out = {"ok": True, "count": len(bills), "bills": bills,
+           "batch_id": batch_id, "meta": _bill_meta_public(meta)}
+    if bills:   # 单张兼容旧形状：顶层 draft/preview 指向第一张（老脚本不炸）
+        out["draft"], out["preview"] = bills[0]["draft"], bills[0]["preview"]
+    return out
+
+
+_IMG_MIME = ((b"\x89PNG", "image/png"), (b"\xff\xd8", "image/jpeg"),
+             (b"RIFF", "image/webp"), (b"GIF8", "image/gif"))
+
+
+def _sniff_mime(data):
+    for magic, mime in _IMG_MIME:
+        if data[:len(magic)] == magic:
+            return mime
+    return "image/jpeg"
+
+
+def api_parse_image(_q, body):
+    """单据照片 → bills[]（视觉解析）。multipart 字段：image（可多份，≤4 张 ≤8MB）
+    + 可选 text（补充说明，如「都是今天的」）。走档案能力位路由，非视觉档案给出可执行指引。"""
+    up = body.get("_multipart") or {}
+    images = []
+    names = sorted(k for k in up if k.startswith("image") and isinstance(up[k], tuple))
+    for k in names:
+        fname, data = up[k]
+        if not data:
+            continue
+        if len(data) > MAX_IMG_BYTES:
+            return {"ok": False, "message": "图片「%s」超过 8MB，请压缩后再传" % fname}
+        images.append("data:%s;base64,%s" % (_sniff_mime(data), base64.b64encode(data).decode()))
+        if len(images) >= MAX_IMAGES:
+            break
+    if not images:
+        return {"ok": False, "message": "没有收到图片（字段名应为 image）"}
+    if not llmmod.is_configured():
+        return {"ok": False, "need_config": True,
+                "message": "尚未配置 AI 模型，请点右上角「设置」添加一个模型档案后再试。"}
+    text = str(up.get("text") or "").strip()[:MAX_PARSE_CHARS]
+    erp = _erp()
+    try:
+        drafts, meta = llmmod.parse_images(images, text, erp)
+    except Exception as e:
+        return {"ok": False, "message": "图片识别失败：%s" % friendly(e)}
+    batch_id = uuid.uuid4().hex[:12]
+    bills = _parse_to_bills(drafts, meta, erp, "ai_image", text or "（图片录入）", batch_id)
+    return {"ok": True, "count": len(bills), "bills": bills,
+            "batch_id": batch_id, "meta": _bill_meta_public(meta)}
+
+
+BATCH_MAX = 500
+
+
+def api_commit_batch(_q, body):
+    """批量写入：items=[{draft, confirm_token, raw_text?}]，逐单过闸门（一次性令牌、
+    内容哈希绑定）、逐单建单。顺序执行而非并发——前一张单补建的主数据（新商品/新档案）
+    必须对后一张立即可见，否则同名商品会被重复建档案；每单成功后清 ERP 缓存。
+    单张失败不回滚其他单（ERP 建单是逐个 REST 调用，跨单事务本就不存在），
+    失败单带原因返回，前端行级展示。审计逐单一条，batch_id 串联。"""
+    items = body.get("items")
+    if not isinstance(items, list) or not items:
+        return {"ok": False, "message": "缺少批量写入数据（items）"}
+    if len(items) > BATCH_MAX:
+        return {"ok": False, "message": "一次最多批量写入 %d 张单，请分批提交" % BATCH_MAX}
+    source = (body.get("source") or "").strip()
+    raw_text = (body.get("raw_text") or "").strip()
+    operator = (body.get("_operator") or body.get("operator") or "").strip()[:40]
+    batch_id = uuid.uuid4().hex[:12]
+    erp = _erp()
+    results, ok_count = [], 0
+    for i, it in enumerate(items):
+        d = it.get("draft") if isinstance(it, dict) else None
+        token = (it.get("confirm_token") or "").strip() if isinstance(it, dict) else ""
+        if not isinstance(d, dict) or not d:
+            results.append({"index": i, "ok": False, "message": "第 %d 张草稿数据缺失" % (i + 1)})
+            continue
+        ok, meta, reason = gatemod.check(token, d)
+        if not ok:
+            # 闸门拒绝：不写库，逐单记审计（批量下「未经确认写入为 0」的取证位置）
+            gatemod.log_rejected(reason, d, source=source,
+                                 raw_text=(it.get("raw_text") or raw_text or ""),
+                                 operator=operator)
+            results.append({"index": i, "ok": False, "need_confirm": True, "message": reason})
+            continue
+        res = draftmod.commit(d, erp)
+        if res.get("ok"):
+            ok_count += 1
+            meta2 = dict(meta)
+            meta2["batch_id"] = batch_id
+            meta2["bill_index"] = i
+            diff = gatemod.diff_drafts(meta.get("draft_resolved") or {}, d)
+            gatemod.log_write(meta2, d, res, diff=diff, source=source,
+                              raw_text=(it.get("raw_text") or raw_text or ""),
+                              operator=operator)
+            try:
+                _erp_operator_log(erp, operator, d, res)
+            except Exception:
+                pass
+            # 主数据可能被本单补建，清缓存让下一张的匹配/查库拿到最新
+            try:
+                erp.invalidate("")
+            except Exception:
+                pass
+        if not res.get("ok") and not res.get("message"):
+            res["message"] = "写入失败，请检查数据后重试"
+        results.append({"index": i, "ok": bool(res.get("ok")),
+                        "number": res.get("number", ""), "total": res.get("total", 0),
+                        "biz_label": res.get("biz_label", ""),
+                        "created": res.get("created", []),
+                        "message": res.get("message", "")})
+    try:
+        from core import report as reportmod
+        reportmod.invalidate()
+    except Exception:
+        pass
+    return {"ok": ok_count > 0, "batch_id": batch_id, "results": results,
+            "summary": {"total": len(items), "ok": ok_count, "fail": len(items) - ok_count}}
+
+
+# --------------------------------------------------------------------------
+# 表格导入：inspect（解析文件）→ map（AI 映射，≤2 轮有界修复）→
+# transform（人工改映射后确定性重变换）→ resolve（逐行出预览+令牌）
+# --------------------------------------------------------------------------
+TMP_DIR = os.path.join(cfgmod.DATA_DIR, "tmp_uploads")
+MAX_SHEET_BYTES = 20 * 1024 * 1024
+_SHEET_REPAIR_THRESHOLD = 0.2   # 失败行占比超过该值才触发修复轮（省 token：小毛病行级标出来就够）
+
+
+def _sweep_tmp():
+    """临时上传目录清理：2 小时前的文件删掉（导入完没用的表不留盘）。"""
+    try:
+        now = time.time()
+        for n in os.listdir(TMP_DIR):
+            p = os.path.join(TMP_DIR, n)
+            if os.path.isfile(p) and now - os.path.getmtime(p) > 7200:
+                os.remove(p)
+    except OSError:
+        pass
+
+
+def _load_tmp_sheet(ref, sheet_name=None):
+    """按 ref 取回临时文件并解析工作表。ref 必须是 hex（防路径穿越）。"""
+    if not re.fullmatch(r"[0-9a-f]{8,32}", str(ref or "")):
+        raise SheetError("文件引用无效，请重新上传")
+    for n in os.listdir(TMP_DIR) if os.path.isdir(TMP_DIR) else []:
+        if n.startswith(str(ref)):
+            with open(os.path.join(TMP_DIR, n), "rb") as f:
+                wb = sheetmod.read_workbook(n, f.read())
+            break
+    else:
+        raise SheetError("上传文件已过期（2 小时未用自动清理），请重新上传")
+    sheets = wb["sheets"]
+    if sheet_name:
+        for s in sheets:
+            if s["name"] == sheet_name:
+                return s, wb
+        raise SheetError("找不到工作表「%s」，现有：%s" % (sheet_name, "、".join(s["name"] for s in sheets)))
+    return max(sheets, key=lambda s: len(s["rows"])), wb   # 默认取数据最多的表
+
+
+def api_sheet_inspect(_q, body):
+    up = body.get("_multipart") or {}
+    f = up.get("file")
+    if not isinstance(f, tuple) or not f[0]:
+        return {"ok": False, "message": "没有收到文件（字段名应为 file）"}
+    fname, data = f
+    if len(data) > MAX_SHEET_BYTES:
+        return {"ok": False, "message": "文件超过 20MB，请拆分后再导入"}
+    try:
+        wb = sheetmod.read_workbook(fname, data)
+    except SheetError as e:
+        return {"ok": False, "message": str(e)}
+    ref = uuid.uuid4().hex
+    try:
+        os.makedirs(TMP_DIR, exist_ok=True)
+        _sweep_tmp()
+        ext = os.path.splitext(fname)[1].lower() or ".bin"
+        with open(os.path.join(TMP_DIR, ref + ext), "wb") as fo:
+            fo.write(data)
+    except OSError as e:
+        return {"ok": False, "message": "文件暂存失败：%s" % e}
+    sheets = []
+    for s in wb["sheets"]:
+        rows = s["rows"]
+        sheets.append({
+            "name": s["name"],
+            "total_rows": len(rows),
+            "total_cols": max((len(r) for r in rows), default=0),
+            "truncated": bool(s.get("truncated")),
+            "preview": [r[:12] for r in rows[:8]],
+        })
+    return {"ok": True, "ref": ref, "kind": wb["kind"], "sheets": sheets}
+
+
+def api_sheet_map(_q, body):
+    """AI 表头映射 + 一次确定性变换试跑；失败行占比高时带样本做一轮修复（LLM 总调用 ≤2）。"""
+    if not llmmod.is_configured():
+        return {"ok": False, "need_config": True,
+                "message": "AI 映射需要模型：请先在「设置」里配置模型档案，或直接手动指定列映射。"}
+    ref = body.get("ref")
+    try:
+        sheet, _ = _load_tmp_sheet(ref, body.get("sheet"))
+    except SheetError as e:
+        return {"ok": False, "message": str(e)}
+    rows = sheet["rows"]
+    if len(rows) < 2:
+        return {"ok": False, "message": "表格里没有数据行（只有表头或空表）"}
+    gd = sheetmod.grid_desc(rows)
+    try:
+        mapping = llmmod.map_sheet(sheet["name"], gd)
+    except Exception as e:
+        return {"ok": False, "message": "AI 映射失败：%s（可在下一步手动指定列映射）" % friendly(e)}
+    tr = sheetmod.transform(rows, mapping)
+    fails = [d for d in tr["drafts"] if d["problems"]]
+    if fails and tr["drafts"] and len(fails) / len(tr["drafts"]) >= _SHEET_REPAIR_THRESHOLD:
+        fs = sheetmod.failure_samples(rows, tr["drafts"], mapping)
+        if fs:
+            try:
+                mapping2 = llmmod.map_sheet(sheet["name"], gd, extra=fs)
+                tr2 = sheetmod.transform(rows, mapping2)
+                if len([d for d in tr2["drafts"] if d["problems"]]) < len(fails):
+                    mapping, tr = mapping2, tr2   # 修复轮确有改善才采纳
+            except Exception:
+                pass   # 修复轮失败不致命：第一轮结果 + 行级错误照样交付
+    return {"ok": True, "ref": ref, "sheet": sheet["name"], "mapping": mapping, "result": tr}
+
+
+def api_sheet_transform(_q, body):
+    """人工确认/修改映射后重变换（确定性，零 LLM）。"""
+    ref = body.get("ref")
+    mapping = body.get("mapping") or {}
+    try:
+        sheet, _ = _load_tmp_sheet(ref, body.get("sheet"))
+        tr = sheetmod.transform(sheet["rows"], mapping)
+    except SheetError as e:
+        return {"ok": False, "message": str(e)}
+    return {"ok": True, "ref": ref, "sheet": body.get("sheet") or "", "result": tr}
+
+
+def api_sheet_resolve(_q, body):
+    """导入草稿逐行出预览 + 签令牌（shape 与 /api/parse 的 bills 对齐，前端同一套确认/提交流程）。"""
+    items = body.get("drafts")
+    if not isinstance(items, list) or not items:
+        return {"ok": False, "message": "缺少导入草稿"}
+    if len(items) > BATCH_MAX:
+        return {"ok": False, "message": "一次最多导入 %d 行，请拆分文件" % BATCH_MAX}
+    erp = _erp()
+    bills = []
+    for i, it in enumerate(items):
+        d = it.get("draft") if isinstance(it, dict) and isinstance(it.get("draft"), dict) else (
+            it if isinstance(it, dict) else None)
+        if not d:
+            continue
+        preview = draftmod.resolve(d, erp)
+        m = _confirm_meta("import", "导入行%s" % ((it.get("row_no") or i + 1) if isinstance(it, dict) else i + 1),
+                          extra={"draft_resolved": d, "bill_index": i})
+        preview["confirm_token"] = gatemod.issue(d, m)
+        bills.append({"row_no": it.get("row_no") if isinstance(it, dict) else None,
+                      "draft": d, "preview": preview, "confirm_token": preview["confirm_token"]})
+    return {"ok": True, "count": len(bills), "bills": bills}
 
 
 def api_resolve(_q, body):
@@ -738,8 +1031,17 @@ ROUTES = {
     ("POST", "/api/parse"): api_parse,
     ("POST", "/api/resolve"): api_resolve,
     ("POST", "/api/commit"): api_commit,
+    ("POST", "/api/commit/batch"): api_commit_batch,
     ("POST", "/api/upload"): api_upload,
+    ("POST", "/api/parse/image"): api_parse_image,
+    ("POST", "/api/sheet/inspect"): api_sheet_inspect,
+    ("POST", "/api/sheet/map"): api_sheet_map,
+    ("POST", "/api/sheet/transform"): api_sheet_transform,
+    ("POST", "/api/sheet/resolve"): api_sheet_resolve,
 }
+
+# multipart/form-data 路由：_handle 里单独解析，字段字典经 body["_multipart"] 传入
+MULTIPART_ROUTES = {"/api/upload", "/api/parse/image", "/api/sheet/inspect"}
 
 
 # --------------------------------------------------------------------------
@@ -905,8 +1207,9 @@ class Handler(BaseHTTPRequestHandler):
             if not fn:
                 self._json({"ok": False, "message": "接口不存在：%s %s" % (method, path)}, 404)
                 return
-            # 附件上传：multipart/form-data，单独解析（cgi 已移除，手写解析器）
-            if method == "POST" and path == "/api/upload":
+            # multipart 路由（附件上传 / 图片解析 / 表格导入）：单独解析
+            # （cgi 已移除，手写解析器），字段字典经 body["_multipart"] 传给端点
+            if method == "POST" and path in MULTIPART_ROUTES:
                 try:
                     ctype = self.headers.get("Content-Type") or ""
                     if "multipart/form-data" not in ctype:
@@ -918,23 +1221,26 @@ class Handler(BaseHTTPRequestHandler):
                         n = 0
                     raw = self.rfile.read(n) if n > 0 else b""
                     fields = _parse_multipart(ctype, raw)
-                    up = fields.get("file")
-                    if not up or not isinstance(up, tuple) or not up[0]:
-                        self._json({"ok": False, "message": "没有收到文件（字段名应为 file）"}, 400)
+                    if path == "/api/upload":
+                        up = fields.get("file")
+                        if not up or not isinstance(up, tuple) or not up[0]:
+                            self._json({"ok": False, "message": "没有收到文件（字段名应为 file）"}, 400)
+                            return
+                        fname0, data = up
+                        ext = os.path.splitext(fname0)[1] or ""
+                        fd, tmp = tempfile.mkstemp(suffix=ext)
+                        with os.fdopen(fd, "wb") as f:
+                            f.write(data)
+                        biz = str(fields.get("biz") or "bill").strip()
+                        try:
+                            self._json(fn(q, {"_upload": {
+                                "file_path": tmp, "filename": fname0, "biz": biz, "tmp": True
+                            }}))
+                        except Exception as e:
+                            sys.stderr.write(traceback.format_exc())
+                            self._json({"ok": False, "message": friendly(e)}, 200)
                         return
-                    fname0, data = up
-                    ext = os.path.splitext(fname0)[1] or ""
-                    fd, tmp = tempfile.mkstemp(suffix=ext)
-                    with os.fdopen(fd, "wb") as f:
-                        f.write(data)
-                    biz = str(fields.get("biz") or "bill").strip()
-                    try:
-                        self._json(fn(q, {"_upload": {
-                            "file_path": tmp, "filename": fname0, "biz": biz, "tmp": True
-                        }}))
-                    except Exception as e:
-                        sys.stderr.write(traceback.format_exc())
-                        self._json({"ok": False, "message": friendly(e)}, 200)
+                    self._json(fn(q, {"_multipart": fields}))
                     return
                 except Exception as e:
                     sys.stderr.write(traceback.format_exc())

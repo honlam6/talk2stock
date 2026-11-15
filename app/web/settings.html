@@ -82,6 +82,13 @@
               </select></div>
             <div class="field"><label>高级参数 JSON（可选）</label><input id="p_xbody" placeholder='{"enable_thinking": false}'></div>
           </div>
+          <div class="field" style="margin-top:10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input id="p_vision" type="checkbox" style="width:18px;height:18px">
+              支持图片识别（视觉模型）——录单页的拍照/截图录入会路由到勾选了这个的档案
+            </label>
+            <div class="hint">hy4、DeepSeek 视觉版等都勾上；纯文本模型不要勾，否则传图必报错。当前档案本身支持视觉时不用动别的档案。</div>
+          </div>
           <div class="hint">不同厂商叫法不一：OpenAI 系用上面的推理强度（minimal/low/medium/high）；只有开/关思考的厂商（如 Qwen）用高级参数透传，如 {"enable_thinking": false}、Claude 系 {"thinking": {"type": "enabled", "budget_tokens": 4096}}。端点不认的参数会自动忽略，不影响请求。</div>
           <div class="row-btns">
             <button class="btn btn-ghost" id="p_test">测试连接</button>
@@ -125,6 +132,12 @@
               <option value="high">high</option>
             </select></div>
           <div class="field"><label>高级参数 JSON（可选）</label><input id="m_xbody" placeholder='{"enable_thinking": false}'></div>
+        </div>
+        <div class="field" style="margin-top:10px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input id="m_vision" type="checkbox" style="width:18px;height:18px">
+            支持图片识别（视觉模型）——录单页的拍照/截图录入会优先用你的视觉档案
+          </label>
         </div>
         <div class="hint">厂商叫法不一时用高级参数透传（如 {"enable_thinking": false}）；不填则跟随模型默认。问一问的每步决策会自动用 low 强度，无需为此单独配模型。</div>
         <div class="row-btns">
@@ -179,7 +192,7 @@ async function loadUsage() {
     const r = await api('/api/usage');
     const u = r.usage || {};
     if (!u.calls) return;
-    const PU = { parse: '录单解析', agent: '问答 agent', insight: '经营洞察', ask_select: '问答路由', ask_answer: '问答作答', test: '连通测试' };
+    const PU = { parse: '录单解析', parse_image: '图片录入', sheet_map: '表格映射', agent: '问答 agent', insight: '经营洞察', ask_select: '问答路由', ask_answer: '问答作答', test: '连通测试' };
     const parts = Object.entries(u.by_purpose || {}).sort((a, b) => b[1].tokens - a[1].tokens)
       .map(([k, v]) => `${PU[k] || k} ${v.calls} 次/${v.tokens >= 10000 ? (v.tokens / 1000).toFixed(1) + 'k' : v.tokens} tok`)
       .join(' · ');
@@ -270,6 +283,7 @@ $('#profList').onclick = async e => {
       $('#p_model').value = p.model || ''; $('#p_temp').value = p.temperature || 0;
       $('#p_effort').value = p.reasoning_effort || '';
       $('#p_xbody').value = (p.extra_body && Object.keys(p.extra_body).length) ? JSON.stringify(p.extra_body) : '';
+      $('#p_vision').checked = !!p.vision;
       $('#p_key').value = '';
       $('#addFold').open = true;
       $('#p_msg').textContent = '正在编辑：' + (p.name || editKey) + '（Key 留空表示不修改）';
@@ -300,6 +314,7 @@ function formProf() {
     temperature: num($('#p_temp').value),
     reasoning_effort: $('#p_effort').value,
     extra_body: xb,
+    vision: $('#p_vision').checked,
   };
 }
 
@@ -325,7 +340,7 @@ $('#p_save').onclick = async () => {
     await api('/api/config/llm', { method: 'POST', body: { key, profile: p } });
     editKey = null;
     ['p_name', 'p_base', 'p_key', 'p_model', 'p_xbody'].forEach(i => { $('#' + i).value = ''; });
-    $('#p_temp').value = 0; $('#p_effort').value = '';
+    $('#p_temp').value = 0; $('#p_effort').value = ''; $('#p_vision').checked = false;
     $('#p_msg').textContent = '';
     $('#addFold').open = false;
     await loadCfg(); await loadMy();
@@ -394,6 +409,7 @@ $('#myList').onclick = async e => {
       $('#m_model').value = p.model || ''; $('#m_temp').value = p.temperature || 0;
       $('#m_effort').value = p.reasoning_effort || '';
       $('#m_xbody').value = (p.extra_body && Object.keys(p.extra_body).length) ? JSON.stringify(p.extra_body) : '';
+      $('#m_vision').checked = !!p.vision;
       $('#m_key').value = '';
       $('#myFold').open = true;
       $('#m_msg').textContent = '正在编辑：' + (p.name || myEditKey) + '（Key 留空表示不修改）';
@@ -412,6 +428,7 @@ function formMy() {
     temperature: num($('#m_temp').value),
     reasoning_effort: $('#m_effort').value,
     extra_body: xb,
+    vision: $('#m_vision').checked,
   };
 }
 
@@ -438,7 +455,7 @@ $('#m_save').onclick = async () => {
     if (!r.ok) { toast(r.message || '保存失败', 'bad'); return; }
     myEditKey = null;
     ['m_name', 'm_base', 'm_key', 'm_model', 'm_xbody'].forEach(i => { $('#' + i).value = ''; });
-    $('#m_temp').value = 0; $('#m_effort').value = '';
+    $('#m_temp').value = 0; $('#m_effort').value = ''; $('#m_vision').checked = false;
     $('#m_msg').textContent = '';
     $('#myFold').open = false;
     await loadMy();

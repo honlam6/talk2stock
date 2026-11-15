@@ -266,6 +266,12 @@ def upsert_profile(key, profile):
             prof_new[opt] = old[opt]
         elif opt in profile:
             prof_new[opt] = bool(profile[opt])
+    # vision：视觉能力位（设置页勾选）。录入侧图片请求按能力位路由到支持视觉的档案，
+    # 生产换模型只是改档案配置，代码零改动。本次携带即以本次为准（同 reasoning_effort）。
+    if "vision" in profile:
+        prof_new["vision"] = bool(profile["vision"])
+    elif "vision" in old:
+        prof_new["vision"] = old["vision"]
     # extra_headers 同为网关行为配置（不在表单里）：档案级自定义请求头，
     # 如自建网关的 X-Prompt-Mode 分流（fork 功能），从旧档案原样继承
     if "extra_headers" in old:

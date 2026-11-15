@@ -12,6 +12,7 @@
   <div class="mode-tabs" id="modeTabs">
     <button data-mode="ai"><span class="ico">✎</span>对话录入</button>
     <button data-mode="form"><span class="ico">▤</span>表单录入</button>
+    <button data-mode="import"><span class="ico">▦</span>表格导入</button>
   </div>
 
   <div class="bill-grid">
@@ -29,9 +30,12 @@
 
           <div class="say-row">
             <textarea id="text" rows="3"
-              placeholder="例如：向美宜佳采购可乐 30瓶，单价3块5，入原料仓（⌘/Ctrl+Enter 快速解析）"></textarea>
+              placeholder="例如：从美宜佳买3瓶可乐单价3块5；卖给张记便利店2箱方便面单价45&#10;多笔业务用「；」分隔，一次出多张单（⌘/Ctrl+Enter 快速解析）"></textarea>
             <button class="mic-btn" id="micBtn" title="语音输入（再点一次结束）" style="display:none">🎤</button>
+            <button class="cam-btn" id="camBtn" title="拍照 / 截图识别单据（可配一句补充说明）">📷</button>
           </div>
+          <div id="imgThumbs" class="img-thumbs"></div>
+          <input type="file" id="imgFile" accept="image/*" multiple style="display:none">
 
           <div id="correctChip" class="correct-chip hidden"></div>
 
@@ -140,6 +144,50 @@
         </div>
       </div>
 
+      <!-- ============ 表格导入模式 ============ -->
+      <div id="paneImport" style="display:none">
+        <div class="card">
+          <h2><span class="bar"></span>Excel / CSV 批量导入
+            <span class="hint" style="margin-left:10px">任意来源：金蝶 / 用友 / 手工表格 / 其他 ERP 导出</span>
+          </h2>
+          <div class="hint" style="margin:-6px 0 12px">不预设模板——AI 认列、你确认映射；缺数据的行单独标出来（缺单价按 0 元提醒、缺数量/商品/往来单位拦该行），不阻塞其他行；「合计/总计」脚注行自动跳过。</div>
+          <div class="imp-steps" id="impSteps">
+            <span class="imp-step on">① 选文件</span><span class="imp-step">② 确认列映射</span><span class="imp-step">③ 行预览与写入</span>
+          </div>
+
+          <div id="impStep1">
+            <div class="imp-drop" id="impDrop">
+              <div class="ico">▦</div>
+              点击选择或拖入 <b>.xlsx / .csv</b> 文件（≤20MB，≤500 行）
+              <input type="file" id="impFile" accept=".xlsx,.xlsm,.csv,.tsv,.txt" style="display:none">
+            </div>
+            <div id="impSheets" class="mt-2"></div>
+          </div>
+
+          <div id="impStep2" style="display:none">
+            <div id="impMapNote" class="alert alert-info" style="display:none"></div>
+            <div class="tbl-wrap tbl-scroll mt-2"><table class="map-table" id="impMapTable"></table></div>
+            <div class="row-btns mt-3">
+              <button class="btn btn-ghost" id="impRemap">↻ AI 重新认列</button>
+              <button class="btn btn-ghost" id="impRefile">换文件</button>
+              <span class="hint" style="flex:1">下拉可改任意列；改完点右侧应用（确定性重变换，不耗 token）</span>
+              <button class="btn btn-primary" id="impApply">应用映射并预览 →</button>
+            </div>
+            <div id="impPreview" class="mt-3" style="display:none">
+              <div class="imp-summary" id="impSummary"></div>
+              <div class="tbl-wrap tbl-scroll"><table class="row-table" id="impRows"></table></div>
+              <div class="row-btns mt-3">
+                <button class="btn btn-ghost" id="impBack">← 改映射</button>
+                <span class="hint" style="flex:1" id="impHint"></span>
+                <button class="btn btn-primary btn-lg" id="impCommit">写入勾选行</button>
+              </div>
+              <div class="m-prog mt-2" id="impProg" style="display:none"><i></i></div>
+              <div class="hint mt-1" id="impProgTxt"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
 
     <!-- 会话流侧栏 -->
@@ -162,12 +210,14 @@ shell('/new');
 let mode = 'ai';
 const params = new URLSearchParams(location.search);
 if (params.get('mode') === 'form') mode = 'form';
+if (params.get('mode') === 'import') mode = 'import';
 
 function setMode(m, push) {
   mode = m;
   $$('#modeTabs button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
   $('#paneAI').style.display = m === 'ai' ? '' : 'none';
   $('#paneForm').style.display = m === 'form' ? '' : 'none';
+  $('#paneImport').style.display = m === 'import' ? '' : 'none';
   $('#convCard').style.display = m === 'ai' ? '' : 'none';
   $('#convTitle').textContent = '本次会话';
   if (push !== false) history.replaceState(null, '', '/new?mode=' + m);
@@ -189,8 +239,8 @@ if (typeof AttachmentManager === 'function') {
 const EXAMPLES = [
   ['采购入库', '向美宜佳采购可乐 30瓶，单价3块5，入原料仓'],
   ['销售出库', '卖给永辉超市 纸箱 200个，单价5块，从成品仓出'],
+  ['多单一句话', '从美宜佳买3瓶可乐单价3块5；卖给张记便利店2箱方便面单价45'],
   ['多商品采购', '向美宜佳采购 可乐30瓶单价3块5、纸箱200个单价5块，入原料仓'],
-  ['多商品销售', '卖给张记便利店 方便面20箱单价45元、矿泉水50瓶单价2元，从成品仓出'],
   ['采购退货', '把美宜佳那批可乐退5瓶，单价3块5，从原料仓出'],
   ['复用+新建', '向供应商1采购牛皮纸 10卷，单价80元，入仓库1'],
 ];
@@ -285,6 +335,23 @@ function renderConv() {
         <div class="ln-items">${items || '<span class="muted">无明细</span>'}</div>
         <div class="ln ln-total">合计 <b>￥${money(total)}</b></div>
         ${reopen}
+      </div>`;
+    }
+    if (t.type === 'drafts') {
+      // 多单批量草稿：一张会话卡概览 N 张单，点开批量预览逐单改/写
+      const lines = (t.bills || []).map((b, i) => {
+        const d = b.draft || {};
+        const stat = b.state === 'committed' ? '<span class="tag tag-ok">已写入</span>'
+          : b.state === 'failed' ? '<span class="tag t-red">失败</span>'
+          : '<span class="tag tag-blue">草稿</span>';
+        const tot = (d.items || []).reduce((s, it) => s + num(it.qty) * num(it.price), 0);
+        return `<div class="ln"><span class="k">#${i + 1} ${esc((BIZ[d.biz] || {}).label || d.biz || '')}</span>${esc(d.party || '？')} · ${(d.items || []).length} 行 · ￥${money(tot)} ${stat}</div>`;
+      }).join('');
+      const pending = (t.bills || []).some(b => b.state !== 'committed');
+      return `<div class="turn-card" data-turn="${i}">
+        <div class="turn-hd">批量草稿 · ${(t.bills || []).length} 张单</div>
+        ${lines}
+        ${pending ? `<div class="row-btns" style="margin-top:8px"><button class="btn btn-sm" data-multi-open="${i}">打开批量预览 / 继续写入</button></div>` : ''}
       </div>`;
     }
     if (t.type === 'clarify') {
@@ -399,9 +466,24 @@ function handleCommitted(turn, res, finalDraft) {
   loadHistory();
 }
 
+// 多单批量预览：showMultiPreview 深拷贝 bills，关闭时把逐单状态写回会话
+function openMultiPreview(turn) {
+  showMultiPreview(turn.bills, {
+    source: 'ai',
+    rawText: turn.rawText || '',
+    onClose: bills => { turn.bills = bills; renderConv(); loadHistory(); },
+  });
+}
+
 $('#conv').onclick = async e => {
   const reopen = e.target.closest('[data-reopen]');
   const correct = e.target.closest('[data-correct]');
+  const multiOpen = e.target.closest('[data-multi-open]');
+  if (multiOpen) {
+    const turn = turns[+multiOpen.dataset.multiOpen];
+    if (turn && turn.type === 'drafts') openMultiPreview(turn);
+    return;
+  }
   if (reopen) {
     const turn = turns[+reopen.dataset.reopen];
     reopen.textContent = '预览中…';
@@ -436,31 +518,107 @@ $('#text').addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doParse(); }
 });
 
+// ---------- 图片录入（拍照 / 截图 / 粘贴 / 拖拽，客户端先压缩省视觉 token） ----------
+let pendingImages = [];
+function renderThumbs() {
+  const el = $('#imgThumbs');
+  if (!el) return;
+  el.innerHTML = pendingImages.map((p, i) => `
+    <div class="img-thumb">
+      ${p.dataUrl ? `<img src="${p.dataUrl}" alt="">` : '<span style="display:flex;align-items:center;justify-content:center;height:100%;font-size:22px">🖼</span>'}
+      ${p.busy ? '<span class="img-up">压缩中…</span>' : `<button class="img-x" data-imgx="${i}" title="移除">×</button>`}
+    </div>`).join('');
+  $$('.img-x', el).forEach(x => x.onclick = () => { pendingImages.splice(+x.dataset.imgx, 1); renderThumbs(); });
+}
+async function addImageFiles(files) {
+  for (const f of Array.from(files || [])) {
+    if (!f.type || !f.type.startsWith('image/')) { toast('只支持图片文件', 'warn'); continue; }
+    if (pendingImages.length >= 4) { toast('一次最多 4 张图片', 'warn'); break; }
+    const slot = { dataUrl: null, file: f, busy: true };
+    pendingImages.push(slot);
+    renderThumbs();
+    const c = await compressImage(f);   // 压缩失败 slot.dataUrl=null，直传原文件
+    slot.dataUrl = c.dataUrl;
+    slot.busy = false;
+    renderThumbs();
+  }
+}
+$('#camBtn').onclick = () => $('#imgFile').click();
+$('#imgFile').onchange = async e => { await addImageFiles(e.target.files); e.target.value = ''; };
+$('#text').addEventListener('paste', e => {
+  const items = (e.clipboardData || {}).items || [];
+  const files = [];
+  for (const it of items) if (it.kind === 'file' && it.type.startsWith('image/')) {
+    const f = it.getAsFile(); if (f) files.push(f);
+  }
+  if (files.length) { e.preventDefault(); addImageFiles(files); toast('已贴入图片，补充说明可留空', 'ok'); }
+});
+(() => {
+  const ta = $('#text');
+  ['dragover', 'dragleave', 'drop'].forEach(ev => ta.addEventListener(ev, e => {
+    e.preventDefault();
+    ta.classList.toggle('dragover', ev === 'dragover');
+    if (ev === 'drop' && e.dataTransfer.files.length) addImageFiles(e.dataTransfer.files);
+  }));
+})();
+
+// multipart 友好封装：401 时复用登录弹窗重试一次
+async function apiForm(path, fd) {
+  const h = {};
+  const cred = localStorage.getItem('t2s_pass');
+  if (cred) h['X-T2S-Pass'] = cred;
+  let resp = await fetch(path, { method: 'POST', body: fd, headers: h });
+  if (resp.status === 401) {
+    const c = await askLogin();
+    if (c) {
+      localStorage.setItem('t2s_pass', c);
+      renderUserChip();
+      resp = await fetch(path, { method: 'POST', body: fd, headers: { 'X-T2S-Pass': c } });
+    }
+  }
+  const txt = await resp.text();
+  try { return JSON.parse(txt); } catch (e) { throw new Error('服务返回异常：' + txt.slice(0, 120)); }
+}
+
 async function doParse() {
   if (pendingParse) return;
   const text = $('#text').value.trim();
-  if (!text) { toast('请先说一句业务', 'warn'); $('#text').focus(); return; }
+  const hasImgs = pendingImages.some(p => !p.busy);
+  if (!text && !hasImgs) { toast('请先说一句业务，或点 📷 加单据照片', 'warn'); $('#text').focus(); return; }
+  if (pendingImages.some(p => p.busy)) { toast('图片还在压缩，稍等一下', 'warn'); return; }
   pendingParse = true;
   const btn = $('#parseBtn');
-  btn.disabled = true; btn.textContent = 'AI 解析中…';
+  btn.disabled = true; btn.textContent = hasImgs ? 'AI 识别中…' : 'AI 解析中…';
 
-  // 澄清补充回答与修正指令走同一多轮链路：都把上一稿带给模型
+  // 澄清补充回答与修正指令走同一多轮链路：都把上一稿带给模型（仅纯文本路径）
   const base = clarifying ? clarifying.draft : (correcting ? correcting.draft : null);
   const wasRevision = !!base;
   const prevDraft = base;
   const skipClarify = clarifyCount >= 2;   // 超过 2 轮不再追问，直接出确认卡
-  turns.push({ type: 'user', text, revision: wasRevision });
+  turns.push({ type: 'user', text: hasImgs && !text ? '（📷 图片录入）' : text, revision: wasRevision && !hasImgs });
   if (correcting) exitCorrect();
-  if (clarifying) exitClarify(false);       // 本轮是补充回答，等结果再判定是否继续追问
+  if (clarifying) exitClarify(false);
   turns.push({ type: 'pending' });
   renderConv();
   startStages();
 
   try {
-    const body = { text };
-    if (prevDraft) body.draft = prevDraft;
-    if (skipClarify) body.skip_clarify = true;
-    const r = await api('/api/parse', { method: 'POST', body });
+    let r;
+    if (hasImgs) {
+      // 图片路径：一次调用带全部图（不逐图跑），说明文字随行
+      const fd = new FormData();
+      pendingImages.forEach((p, i) => {
+        if (p.dataUrl) fd.append('image', dataURLtoBlob(p.dataUrl), `img${i}.jpg`);
+        else fd.append('image', p.file, p.file.name || `img${i}`);
+      });
+      if (text) fd.append('text', text);
+      r = await apiForm('/api/parse/image', fd);
+    } else {
+      const body = { text };
+      if (prevDraft) body.draft = prevDraft;
+      if (skipClarify) body.skip_clarify = true;
+      r = await api('/api/parse', { method: 'POST', body });
+    }
     turns = turns.filter(t => t.type !== 'pending');
     if (!r.ok) {
       turns.push({ type: 'result', ok: false, msg: r.message || '解析失败' });
@@ -475,6 +633,24 @@ async function doParse() {
       renderConv();
       return;
     }
+    if (!hasImgs) { pendingImages = []; renderThumbs(); }
+    $('#text').value = '';
+    // 多单契约：count>1 → 批量草稿卡 + 批量预览层（每单独立令牌、独立写入）
+    if ((r.count || 1) > 1 && Array.isArray(r.bills)) {
+      const turn = {
+        type: 'drafts', batchId: r.batch_id || '', rawText: hasImgs && !text ? '（图片录入）' : text,
+        bills: r.bills.map(b => ({
+          draft: b.draft, preview: b.preview,
+          ai: (b.preview && b.preview.ai) || {}, attach: [], state: 'open',
+        })),
+      };
+      turns.push(turn);
+      exitClarify(true);
+      renderConv();
+      openMultiPreview(turn);
+      return;
+    }
+    // 单张：顶层 draft/preview 兼容字段
     const att = (attachMgr && !attachMgr.isEmpty()) ? attachMgr.getPaths().map(p => ({ path: p, name: p.split('/').pop() })) : [];
     const turn = {
       type: 'draft', draft: r.draft, preview: r.preview,
@@ -775,6 +951,267 @@ $('#clearBtn').onclick = () => {
   addRow();
   calc();
   checkParty();
+};
+
+/* ================= 表格导入向导 ================= */
+const IMP_FIELDS = [
+  ['party', '往来单位'], ['item_name', '商品名'], ['qty', '数量'], ['unit', '单位'],
+  ['price', '单价'], ['amount', '金额/总价'], ['depot', '仓库'], ['oper_time', '日期'],
+  ['pay_amount', '实付金额'], ['tax_rate', '税率'], ['remark', '备注'], ['bill_no', '原单号'],
+];
+let IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false };
+
+function impSetStep(n) {
+  $$('#impSteps .imp-step').forEach((s, i) => s.className = 'imp-step' + (i === n ? ' on' : (i < n ? ' done' : '')));
+  $('#impStep1').style.display = n === 0 ? '' : 'none';
+  $('#impStep2').style.display = n > 0 ? '' : 'none';
+  $('#impPreview').style.display = n === 2 ? '' : 'none';
+}
+
+$('#impDrop').onclick = () => $('#impFile').click();
+$('#impDrop').addEventListener('dragover', e => { e.preventDefault(); $('#impDrop').classList.add('drag'); });
+$('#impDrop').addEventListener('dragleave', () => $('#impDrop').classList.remove('drag'));
+$('#impDrop').addEventListener('drop', e => {
+  e.preventDefault(); $('#impDrop').classList.remove('drag');
+  if (e.dataTransfer.files.length) impUpload(e.dataTransfer.files[0]);
+});
+$('#impFile').onchange = e => { if (e.target.files.length) impUpload(e.target.files[0]); e.target.value = ''; };
+
+async function impUpload(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  let r;
+  try { r = await apiForm('/api/sheet/inspect', fd); } catch (e) { toast(e.message, 'bad'); return; }
+  if (!r.ok) { toast(r.message || '文件解析失败', 'bad'); return; }
+  IMP = { ref: r.ref, sheet: '', sheets: r.sheets, mapping: null, result: null, rows: [], busy: false };
+  impSetStep(0);
+  if (r.sheets.length === 1) { impPickSheet(r.sheets[0].name); return; }
+  $('#impSheets').innerHTML = '<div class="hint" style="margin-bottom:6px">这个文件有多个工作表，选一个：</div>' +
+    r.sheets.map(s => `<span class="chip" data-sheet="${esc(s.name)}">${esc(s.name)}（${s.total_rows} 行 × ${s.total_cols} 列）</span>`).join(' ');
+}
+$('#impSheets').onclick = e => {
+  const el = e.target.closest('[data-sheet]');
+  if (el) impPickSheet(el.dataset.sheet);
+};
+
+async function impPickSheet(name) {
+  IMP.sheet = name;
+  $('#impSheets').innerHTML = `<div class="hint">已选工作表「${esc(name)}」，AI 认列中…</div>`;
+  await impMap('');
+}
+
+async function impMap(extra) {
+  let r;
+  try { r = await api('/api/sheet/map', { method: 'POST', body: { ref: IMP.ref, sheet: IMP.sheet } }); }
+  catch (e) { toast(e.message, 'bad'); return; }
+  if (!r.ok) {
+    // AI 认列失败不堵流程：给一份空映射，人工在下拉里指（提示写清楚）
+    toast(r.message || 'AI 认列失败，已切换为手动指定', 'warn');
+    IMP.mapping = { header_row: 1, mode: 'per_row', group_col: '', file_biz: 'purchase_in', biz_col: '', cols: {}, date_format: 'auto' };
+    $('#impMapNote').style.display = '';
+    $('#impMapNote').innerHTML = '<b>AI 认列失败：</b>' + esc(r.message || '') + '<br>请直接在下面手动指定列映射（表头行号也要核对）。';
+  } else {
+    IMP.mapping = r.mapping;
+    $('#impMapNote').style.display = 'none';
+  }
+  renderMap();
+  renderRows(IMP.result);
+  impSetStep(1);
+  if (r.ok) toast('AI 已认列，请核对映射再应用', 'ok');
+}
+$('#impRemap').onclick = () => impMap('');
+
+$('#impRefile').onclick = () => {
+  IMP = { ref: '', sheet: '', sheets: [], mapping: null, result: null, rows: [], busy: false };
+  $('#impSheets').innerHTML = '';
+  $('#impPreview').style.display = 'none';
+  impSetStep(0);
+};
+
+function renderMap() {
+  const m = IMP.mapping || {};
+  const s = IMP.sheets.find(x => x.name === IMP.sheet) || { rows: [] };
+  const ncol = s.total_cols || 0;
+  const colOpts = (sel, any) => {
+    let o = any ? `<option value="">（不使用）</option>` : '';
+    for (let c = 0; c < ncol; c++) {
+      const letter = colLetter(c);
+      const head = (s.rows[m.header_row ? m.header_row - 1 : 0] || [])[c] || '';
+      o += `<option value="${letter}"${sel === letter ? ' selected' : ''}>${letter}列 ${esc(String(head).slice(0, 12))}</option>`;
+    }
+    return o;
+  };
+  const cur = m.cols || {};   // {字段: 列字母}（前端展示形态；后端收列字母键）
+  $('#impMapTable').innerHTML = `
+    <tr><th>表头行</th><td><input id="im_hr" type="number" min="1" value="${m.header_row || 1}" style="width:80px"></td>
+      <th>业务类型</th><td><select id="im_biz">${Object.entries(BIZ).map(([k, v]) => `<option value="${k}"${(m.file_biz || 'purchase_in') === k ? ' selected' : ''}>${v.label}</option>`).join('')}</select></td></tr>
+    <tr><th>拆单方式</th><td><select id="im_mode">
+        <option value="per_row"${m.mode !== 'group' ? ' selected' : ''}>每行一张单</option>
+        <option value="group"${m.mode === 'group' ? ' selected' : ''}>按单号列分组</option></select></td>
+      <th>分组/单号列</th><td><select id="im_gcol">${colOpts(m.group_col, true)}</select></td></tr>
+    <tr><th>类型列（可选）</th><td><select id="im_bcol">${colOpts(m.biz_col, true)}</select></td>
+      <th>取值对照</th><td><input id="im_bvals" value="${esc(Object.entries(m.biz_values || {}).map(([k, v]) => `${k}=${v}`).join(', '))}" placeholder="入库=purchase_in, 出库=sale_out" style="width:100%"></td></tr>
+    ${IMP_FIELDS.map(([f, zh]) => `<tr><th>${esc(zh)}</th><td colspan="3"><select class="im-col" data-f="${f}">${colOpts(cur[f], true)}</select></td></tr>`).join('')}`;
+}
+function colLetter(idx) {
+  let s = ''; let i = idx + 1;
+  while (i) { const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); }
+  return s;
+}
+
+function collectMapping() {
+  const cols = {};
+  $$('#impMapTable .im-col').forEach(sel => { if (sel.value) cols[sel.value] = sel.dataset.f; });
+  // 同列多字段时后写的覆盖：按字段顺序消费，item_name 优先级最高
+  const vals = {};
+  vals['bill_no'] = 0;   // bill_no 让位给业务字段
+  const bizVals = {};
+  ($('#im_bvals').value || '').split(/[,，]/).forEach(pair => {
+    const [k, v] = pair.split('=').map(s2 => s2.trim());
+    if (k && v) bizVals[k] = v;
+  });
+  return {
+    header_row: Math.max(1, parseInt($('#im_hr').value, 10) || 1),
+    mode: $('#im_mode').value,
+    group_col: $('#im_gcol').value,
+    file_biz: $('#im_biz').value,
+    biz_col: $('#im_bcol').value,
+    biz_values: bizVals,
+    cols,
+    date_format: 'auto',
+  };
+}
+
+$('#impApply').onclick = async () => {
+  if (IMP.busy) return;
+  const mapping = collectMapping();
+  IMP.busy = true;
+  const btn = $('#impApply');
+  btn.disabled = true; btn.textContent = '变换中…';
+  try {
+    const r = await api('/api/sheet/transform', { method: 'POST', body: { ref: IMP.ref, sheet: IMP.sheet, mapping } });
+    if (!r.ok) { toast(r.message || '变换失败', 'bad'); return; }
+    IMP.mapping = mapping;
+    IMP.result = r.result;
+    IMP.rows = [];
+    renderRows(r.result);
+    impSetStep(2);
+    // 就绪行自动签发预览令牌（失败的行不浪费这次调用）
+    await impResolve();
+  } catch (e) {
+    toast(e.message, 'bad');
+  } finally {
+    IMP.busy = false;
+    btn.disabled = false; btn.textContent = '应用映射并预览 →';
+  }
+};
+
+async function impResolve() {
+  const okRows = IMP.rows.filter(r => !r.problems.length);
+  if (!okRows.length) return;
+  const hint = $('#impHint');
+  if (hint) hint.textContent = `正在生成 ${okRows.length} 行的预览（匹配档案/库存/令牌）…`;
+  try {
+    const r = await api('/api/sheet/resolve', { method: 'POST', body: {
+      drafts: okRows.map(x => ({ row_no: x.row_no, draft: x.draft })) } });
+    if (!r.ok) { toast(r.message || '预览失败', 'bad'); return; }
+    (r.bills || []).forEach(b => {
+      const row = IMP.rows.find(x => x.row_no === b.row_no);
+      if (row) { row.preview = b.preview; row.token = b.confirm_token; }
+    });
+  } catch (e) { toast(e.message, 'bad'); }
+  renderRows();
+}
+
+function renderRows(result) {
+  if (result) {
+    IMP.rows = (result.drafts || []).map(d => ({
+      row_no: d.row_no, draft: d.draft, problems: d.problems || [],
+      preview: null, token: null, state: 'open', res: null, checked: true,
+    })).concat((result.row_errors || []).map(e2 => ({
+      row_no: e2.row_no, draft: null, problems: e2.errors || [],
+      preview: null, token: null, state: 'open', res: null, checked: false,
+    })));
+    IMP.rows.sort((a, b) => a.row_no - b.row_no);
+  }
+  const rows = IMP.rows;
+  const ready = rows.filter(r => !r.problems.length && r.state !== 'committed');
+  const bad = rows.filter(r => r.problems.length);
+  const done = rows.filter(r => r.state === 'committed');
+  $('#impSummary').innerHTML = `
+    <span>共 <b class="num">${rows.length}</b> 行</span>
+    <span class="row-ok">就绪 <b class="num">${ready.length}</b></span>
+    <span class="row-warn">需处理 <b class="num">${bad.length}</b></span>
+    <span class="row-ok">已写入 <b class="num">${done.length}</b></span>
+    ${bad.length ? `<span class="hint">缺单价=0 元提醒照常可写；缺数量/商品/往来单位的行先修数据再导，或勾掉不写</span>` : ''}`;
+  $('#impRows').innerHTML = rows.length ? rows.map(r => {
+    const d = r.draft || {};
+    const tot = (d.items || []).reduce((s, it) => s + num(it.qty) * num(it.price), 0);
+    const items = (d.items || []).map(it => `${it.name || '?'}×${num(it.qty)}${it.unit || ''}`).join('、');
+    const stat = r.state === 'committed' ? '<span class="row-ok">已写入</span>'
+      : r.state === 'failed' ? '<span class="row-bad">失败</span>'
+      : r.problems.length ? `<span class="row-bad">需处理</span>`
+      : r.preview && (r.preview.warnings || []).length ? `<span class="row-warn">注意</span>`
+      : '<span class="row-ok">就绪</span>';
+    return `<tr>
+      <td><input type="checkbox" class="imp-chk" data-row="${r.row_no}" ${(!r.problems.length && r.state !== 'committed') ? 'checked' : ''} ${(!r.token && !r.problems.length) ? '' : (r.problems.length ? 'disabled' : (r.state === 'committed' ? 'disabled' : ''))}></td>
+      <td>${r.row_no}</td><td>${stat}</td>
+      <td>${esc((BIZ[d.biz] || {}).label || d.biz || '—')}</td>
+      <td>${esc(d.party || '—')}</td>
+      <td>${esc(items || '—')}</td>
+      <td class="num">￥${money(tot)}</td>
+      <td class="row-bad" style="max-width:220px">${esc((r.problems.length ? r.problems : (r.state === 'failed' ? [r.res && r.res.message || '写入失败'] : (r.preview && r.preview.warnings) || [])).slice(0, 2).join('；'))}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="8" class="muted center">没有可导入的行</td></tr>';
+  const cbtn = $('#impCommit');
+  if (cbtn) {
+    const n = rows.filter(r => r.checked && r.token && r.state !== 'committed').length;
+    cbtn.disabled = !n;
+    cbtn.textContent = `写入勾选行（${n}）`;
+  }
+  $$('#impRows .imp-chk').forEach(c => c.onchange = () => {
+    const row = IMP.rows.find(x => x.row_no === +c.dataset.row);
+    if (row) row.checked = c.checked;
+    const n = IMP.rows.filter(r2 => r2.checked && r2.token && r2.state !== 'committed').length;
+    $('#impCommit').disabled = !n;
+    $('#impCommit').textContent = `写入勾选行（${n}）`;
+  });
+}
+
+$('#impBack').onclick = () => impSetStep(1);
+
+$('#impCommit').onclick = async () => {
+  if (IMP.busy) return;
+  const sel = IMP.rows.filter(r => r.checked && r.token && r.state !== 'committed');
+  if (!sel.length) { toast('没有可写入的勾选行', 'warn'); return; }
+  IMP.busy = true;
+  const btn = $('#impCommit');
+  btn.disabled = true;
+  const prog = $('#impProg'), fill = prog.querySelector('i'), txt = $('#impProgTxt');
+  prog.style.display = ''; fill.style.width = '0'; txt.textContent = '准备写入…';
+  try {
+    const r = await commitBatch(
+      sel.map(x => ({ draft: x.draft, confirm_token: x.token, _row: x })),
+      { source: 'import', rawText: `表格导入 ${IMP.sheet || ''}`,
+        chunkSize: 10,
+        onResult: (gi, res) => {
+          const row = sel[gi]._row;
+          row.state = res.ok ? 'committed' : 'failed';
+          row.res = res;
+        },
+        onProgress: (done, total) => {
+          fill.style.width = Math.round(done / total * 100) + '%';
+          txt.textContent = `写入中 ${done}/${total}`;
+        } });
+    txt.textContent = `完成：成功 ${r.okCount} / ${r.total}` + (r.okCount < r.total ? '，失败行见状态列' : '');
+    toast(`导入写入完成：成功 ${r.okCount} / ${r.total}`, r.okCount === r.total ? 'ok' : 'warn');
+  } catch (e) {
+    toast(e.message, 'bad');
+    txt.textContent = '中断：' + e.message;
+  }
+  IMP.busy = false;
+  btn.disabled = false;
+  renderRows();
 };
 
 /* ================= 初始化 ================= */
