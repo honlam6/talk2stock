@@ -1159,8 +1159,16 @@ function showMultiPreview(bills, extra) {
 
   function renderCard(i) {
     const b = st.bills[i];
-    const el = $(`.m-card[data-i="${i}"]`);
-    if (!el) return;
+    let el = $(`.m-card[data-i="${i}"]`);
+    if (!el) {
+      // 壳由这里按需创建（骨架里只有空的 #__mlist 容器）：没有壳就先建再填，
+      // 否则弹层永远是空壳（浏览器实测抓到的 bug，单测覆盖不到 DOM 装配层）
+      el = document.createElement('div');
+      el.className = 'm-card';
+      el.dataset.i = i;
+      const list = $('#__mlist');
+      (list || document.body).appendChild(el);
+    }
     const stat = statusOf(b);
     el.className = `m-card open ${stat}` + (b.collapsed ? '' : ' open');
     if (b.collapsed) el.classList.remove('open');
@@ -1434,10 +1442,17 @@ function showMultiPreview(bills, extra) {
     updateBars();
   }
 
-  function close() {
+  async function close() {
     const pending = st.bills.filter(b => b.state === 'open').length;
-    if (pending && !st.done &&
-        !confirm(`还有 ${pending} 张单没写入，确定关闭？\n（已写入的不受影响；未写入的草稿保留在会话里）`)) return;
+    if (pending && !st.done) {
+      // 原生 confirm 在公网 WebView 里不存在（整页卡死，公网部署实测教训）——用自绘弹窗
+      // askInline 取消=resolve(null)、确定=resolve(输入值)——判定用 v !== null（空输入点确定也算确认）
+      const ok = await askInline({
+        title: '还有 ' + pending + ' 张单没写入，确定关闭？',
+        hint: '已写入的不受影响；未写入的草稿保留在会话里。', okText: '关闭',
+      }).then(v => v !== null).catch(() => false);
+      if (!ok) return;
+    }
     if (detachKey) detachKey();
     const mask = $('#__mmask');
     if (mask) mask.remove();
@@ -1484,6 +1499,9 @@ function showMultiPreview(bills, extra) {
   document.addEventListener('keydown', onKey);
   detachKey = () => document.removeEventListener('keydown', onKey);
   renderAll();
+  // 已有/将新建标签依赖主数据池——问一问等页面首次打开时 MD 还是空的，这里补拉
+  // 并重渲染（不阻塞首帧；bill.html 已提前 loadMaster，这里只兜底）
+  if (!MD.loaded) loadMaster().then(renderAll).catch(() => {});
 }
 
 // ---------- 焦点陷阱（21st.dev Dialog 模式核心） ----------

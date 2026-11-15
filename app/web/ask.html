@@ -254,7 +254,7 @@ let watchdog = null;      // 90 秒无数据自动断开
 function setBusy(b) {
   busy = b;
   sendBtn.classList.toggle('stop', b);
-  sendBtn.textContent = b ? '停止' : '提问';
+  sendBtn.textContent = b ? '停止' : '发送';
   samplesEl.classList.toggle('off', b);
 }
 function stopStream() {
