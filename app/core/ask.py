@@ -27,7 +27,7 @@ from . import draft as draftmod
 from .report import official_stats, recent_bills as _rb, stock_overview, summary
 from .erp import get_client, parallel
 
-PROMPT_VERSION = "ask-v8-20261116"   # v8: supervisor 化——draft_order 起草工具上线（写意图路由到草稿预览，写入仍过 HMAC 闸门，ADR-10）
+PROMPT_VERSION = "ask-v8b-20261116"   # v8b: 接地护栏补强——final 禁止观察外数字（建议量/合计/换算），cn 模型实测 a7/a10/a14 三例系统性触线
 
 # --------------------------------------------------------------------------
 # 第 1 层：规则直答（0 token）。只收录无参数的统计意图，带参数的查询
