@@ -327,9 +327,9 @@ def run_check(drafts, erp, operator="", on_event=None):
             on_event=on_event, prompt_template=template)
     except Exception as e:
         return dict(empty, error=str(e)[:120])
-    # 结论优先取 submit_verdict 工具的 args 通道；模型忘了收口时退回解析 final 文本
-    verdict = dict(verdict_box) if verdict_box.get("patches") or verdict_box.get("clarify") \
-        else _parse_verdict(out.get("answer"))
+    # 结论优先取 submit_verdict 工具的 args 通道（键存在即已收口——空 patches 是
+    # 合法结论「宁缺勿错」）；模型忘了收口时退回解析 final 文本
+    verdict = dict(verdict_box) if "patches" in verdict_box else _parse_verdict(out.get("answer"))
     if verdict is None:
         return dict(empty, error="verdict_unparsable", answer_raw=str(out.get("answer"))[:200],
                     steps=out.get("steps") or [], tokens=out.get("tokens") or {})

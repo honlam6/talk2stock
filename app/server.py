@@ -697,7 +697,40 @@ def api_sheet_map(_q, body):
                     mapping, tr = mapping2, tr2   # 修复轮确有改善才采纳
             except Exception:
                 pass   # 修复轮失败不致命：第一轮结果 + 行级错误照样交付
-    return {"ok": True, "ref": ref, "sheet": sheet["name"], "mapping": mapping, "result": tr}
+    # 修复环 v2（P-C）：映射修复轮之后仍有问题行 → 修复 agent 只读取证给建议，
+    # 高置信自动改，低置信进 suggestions。默认开启（≤10 行才有界）；失败不致命。
+    repair = {"skipped": True}
+    if body.get("repair", True) and cfgmod.agent_profile():
+        try:
+            from core import repair as repairmod
+            tr, repair = repairmod.repair_transform_result(
+                tr, erp, operator=cfgmod.current_username() or "")
+        except Exception:
+            pass   # 修复 agent 失败不致命：行级 problems 照样交付
+    return {"ok": True, "ref": ref, "sheet": sheet["name"], "mapping": mapping,
+            "result": tr, "repair": repair}
+
+
+def _run_sheet_repair_endpoint(body):
+    """AI 修复需处理行（/api/sheet/repair）：确定性重变换 + 修复 agent + 写回。
+    mapping 由前端带回（服务端无状态）；建议（低置信 fix）也一并返回供点选。"""
+    ref = body.get("ref")
+    mapping = body.get("mapping") or {}
+    try:
+        sheet, _ = _load_tmp_sheet(ref, body.get("sheet"))
+        tr = sheetmod.transform(sheet["rows"], mapping)
+    except SheetError as e:
+        return {"ok": False, "message": str(e)}
+    if not cfgmod.agent_profile():
+        return {"ok": False, "need_config": True, "message": "AI 修复需要先配置模型档案。"}
+    erp = _erp()
+    from core import repair as repairmod
+    tr, repair = repairmod.repair_transform_result(tr, erp, operator=cfgmod.current_username() or "")
+    return {"ok": True, "ref": ref, "sheet": body.get("sheet") or "", "result": tr, "repair": repair}
+
+
+def api_sheet_repair(_q, body):
+    return _run_sheet_repair_endpoint(body)
 
 
 def api_sheet_transform(_q, body):
@@ -1032,6 +1065,7 @@ ROUTES = {
     ("POST", "/api/sheet/inspect"): api_sheet_inspect,
     ("POST", "/api/sheet/map"): api_sheet_map,
     ("POST", "/api/sheet/transform"): api_sheet_transform,
+    ("POST", "/api/sheet/repair"): api_sheet_repair,
     ("POST", "/api/sheet/resolve"): api_sheet_resolve,
 }
 
