@@ -1,0 +1,218 @@
+{
+ "summary": {
+  "corpus_version": "repair-v1-20261116",
+  "model": "DeepSeek V4.1 Flash",
+  "n": 4,
+  "acc": 0.75,
+  "hit_rate": 0.1,
+  "precision": 1.0,
+  "applied": 1,
+  "suggestions": 0,
+  "rejected": 0,
+  "rejected_num_fixes": 0,
+  "steps": 2,
+  "map_latency_s": 3.0,
+  "repair_latency_s": 65.0,
+  "tokens": 15548,
+  "tokens_estimated": false,
+  "prompt_version": "repair-v1-20261116",
+  "skipped": false,
+  "skip_reason": "",
+  "problem_rows": 18,
+  "mapping_cols": {
+   "A": "party",
+   "B": "item_name",
+   "C": "qty",
+   "D": "unit",
+   "E": "price"
+  }
+ },
+ "results": [
+  {
+   "id": "c1",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true
+   },
+   "hits": 1,
+   "hit_detail": [
+    "13→方便面(applied)"
+   ],
+   "rows": [
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+   ]
+  },
+  {
+   "id": "c2",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "hit_min": false,
+    "no_touch_qty_price": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    18,
+    19,
+    20
+   ]
+  },
+  {
+   "id": "c3",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true,
+    "no_fix:24": true,
+    "no_fix:25": true,
+    "no_fix:26": true,
+    "no_fix:27": true,
+    "no_fix:28": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    24,
+    25,
+    26,
+    27,
+    28
+   ]
+  },
+  {
+   "id": "c4",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true,
+    "no_fix:2": true,
+    "no_fix:3": true,
+    "no_fix:4": true,
+    "no_fix:5": true,
+    "no_fix:6": true,
+    "no_fix:7": true,
+    "no_fix:8": true,
+    "no_fix:9": true,
+    "no_fix:10": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+   ]
+  }
+ ],
+ "mapping": {
+  "header_row": 1,
+  "mode": "per_row",
+  "group_col": "",
+  "file_biz": "sale_out",
+  "biz_col": "",
+  "biz_values": {},
+  "cols": {
+   "A": "party",
+   "B": "item_name",
+   "C": "qty",
+   "D": "unit",
+   "E": "price"
+  },
+  "date_format": "auto",
+  "confidence": "high",
+  "notes": "表头在第1行；有客户列A和品名列B，按每行独立销售出库处理；数量与单位分列，单价列E映射为price。"
+ },
+ "applied": [
+  {
+   "row_index": 11,
+   "item_index": 0,
+   "field": "item_name",
+   "value": "方便面",
+   "material_id": 664,
+   "reason": "find_material 查询“方便面”返回 exact 档案 id 664；表中“方更面”与“方便面”同价 44.0、同单位“箱”，判断为错别字。",
+   "confidence": 0.85
+  }
+ ],
+ "suggestions": [],
+ "rejected": [],
+ "steps": [
+  {
+   "step": 1,
+   "thought": "",
+   "tool": null,
+   "ok": false,
+   "observation": {
+    "error": "AI 决策失败：AI 未返回可解析的 JSON"
+   }
+  },
+  {
+   "step": 2,
+   "thought": "先查“方便面”，可同时覆盖“方更面”和“方便面”两行的商品名候选，优先修复明显错别字。",
+   "tool": "find_material",
+   "args": {
+    "name": "方便面"
+   },
+   "ok": true,
+   "latency_ms": 28,
+   "observation": {
+    "query": "方便面",
+    "found": true,
+    "match_kind": "exact",
+    "matched": {
+     "id": 664,
+     "name": "方便面",
+     "model": ""
+    },
+    "candidates": []
+   }
+  },
+  {
+   "step": 3,
+   "thought": "已查到系统商品“方便面”（id 664），可将同价同单位且明显错别字的“方更面”修正为该档案；其余行涉及数量文本无法解析或档案未取证，留待人工。",
+   "tool": "submit_verdict",
+   "args": {
+    "fixes": [
+     {
+      "row_index": 11,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "方便面",
+      "material_id": 664,
+      "confidence": 0.85,
+      "reason": "find_material 查询“方便面”返回 exact 档案 id 664；表中“方更面”与“方便面”同价 44.0、同单位“箱”，判断为错别字。"
+     }
+    ]
+   },
+   "ok": true,
+   "latency_ms": 0,
+   "observation": {
+    "received": true,
+    "fixes": 1
+   }
+  },
+  {
+   "step": 4,
+   "thought": "预算已用完，无法继续调用 find_material/find_party/search_history。已确认“方更面”可修正为系统商品“方便面”(id 664)；其余行因数量为中文/符号无法解析或商品档案未取证，只能留待人工处理。",
+   "tool": null,
+   "forced_final": true,
+   "final": "已完成的修复：row_index 11（第13行）“方更面” → “方便面”，material_id=664，置信度0.85，依据是同价44.0、同单位“箱”且 find_material 返回 exact 档案。未修复行：row_index 9、10、12-26。其中 9-21、26 主要是中文数量“三十节/十五瓶/廿箱/二十个/十二卷/十块/五盒/二十瓶/十节/廿五瓶/十二个/六卷/几箱”无法解析；22-25、27 为乱码商品名/空商品名/无明细；party 中“永辉”“张记”“校园”等简称及乱码单位未完成档案取证。所有数量、单价、日期均未改动。建议人工重点处理疑似错别字：6号电沲→电池、可樂→可乐、纸箱儿→纸箱、牛批纸→牛皮纸、肥皀→肥皂，但本轮预算内未取得对应工具观察，故不出 fix。"
+  }
+ ]
+}

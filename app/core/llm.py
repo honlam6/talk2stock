@@ -394,7 +394,8 @@ _RESERVED_BODY_KEYS = {"model", "messages", "temperature", "stream", "response_f
                        "stream_options", "reasoning_effort", "max_tokens"}
 
 
-def _base_payload(prof, messages, force_json=True, purpose="", extra_effort=None):
+def _base_payload(prof, messages, force_json=True, purpose="", extra_effort=None,
+                  decision_max_tokens=None):
     """构造 chat 请求体：模型/温度 + 可选推理强度与档案级参数透传。
 
     推理强度两个旋钮的分工（厂商叫法不一）：
@@ -420,7 +421,9 @@ def _base_payload(prof, messages, force_json=True, purpose="", extra_effort=None
     # hy4 默认高推理，800 连思考都装不下，正文 JSON 会被截断（F12 评测实测）。
     if purpose == "agent":
         from . import agent as _agentmod
-        payload["max_tokens"] = int(prof.get("agent_max_tokens") or _agentmod.DEFAULT_AGENT_MAX_TOKENS)
+        payload["max_tokens"] = int(decision_max_tokens
+                                    or prof.get("agent_max_tokens")
+                                    or _agentmod.DEFAULT_AGENT_MAX_TOKENS)
     eff = str(prof.get("reasoning_effort") or "").strip() or extra_effort
     if eff and "no_reasoning_effort" not in _quirks:
         payload["reasoning_effort"] = str(eff)
@@ -431,7 +434,8 @@ def _base_payload(prof, messages, force_json=True, purpose="", extra_effort=None
     return payload
 
 
-def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_effort=None):
+def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_effort=None,
+          decision_max_tokens=None):
     """单次对话调用（三级降级 + 重试 + 用量记录），返回模型文本。
     purpose 标记调用来源（parse/ask_select/ask_answer/agent/insight/test），进用量台账。
     collect 传入 dict 时，把本次 usage 写入其中（调用方做会话级合计/预算用）。
@@ -446,7 +450,8 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_e
 
     # 1) 流式 + response_format（优先；很多推理端点非流式会挂起）+ include_usage
     base = _base_payload(prof, messages, force_json=force_json, purpose=purpose,
-                         extra_effort=reasoning_effort)
+                         extra_effort=reasoning_effort,
+                         decision_max_tokens=decision_max_tokens)
     try:
         payload = dict(base, stream=True)
         if "no_stream_options" not in _quirks:

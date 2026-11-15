@@ -35,14 +35,18 @@ REPAIR_PROMPT = """你是导入修复 agent。表格导入后，下面这些单�
 fix 元素：{{"row_index":0,"item_index":0,"field":"item_name|party","value":"系统里写得对的名字","material_id":123,"confidence":0.0~1.0,"reason":"依据"}}
 
 # 规则
-1. 最多 {max_steps} 轮。problems 说商品没匹配 → find_material（把表里的写法近似成
-   系统档案名，型号列进去区分同名规格）；往来单位没匹配 → find_party；
-   表格写法太野查不到 → search_history 用关键词搜历史单据原话。
+1. 最多 {max_steps} 轮。第一轮就把所有问题行的商品名一次性传给 find_material 的
+   names（列表），往来单位一次性传给 find_party 的 names——批量查，不要逐行调。
+   批量查完仍有对不上的（如往来单位缺失），用 search_history 按该行的商品名+单价
+   作关键词搜历史单据原话归因——**每个缺失往来单位的行单独搜一次**（该行的商品名
+   +单价是现成关键词，命中哪张单就归因到那张单的往来单位），整个取证最多 3 次；
+   查不到就留给人工。
 2. fixes 只许改 item_name / party 两个字段；数量、单价、日期永远不动。
 3. value 必须来自工具观察（档案名 / 历史单据原话），禁止凭空造名；查不到就不出
    fix——那行留给人工处理。material_id 只在 find_material 返回的候选里有就带上。
 4. 有把握（观察里有明确对应档案）confidence 给 0.9+；只是猜测给 0.5 以下。
 5. 每个问题行至多一个 fix；行内有多个问题字段就分多个 fix（item_index 对应明细行）。
+   空的往来单位可以补；已有往来单位不许动（系统会拒绝）。
 6. submit_verdict 恰好调用一次。"""
 
 MAX_REPAIR_ROWS = 30   # 一次最多修这么多行——超出说明映射本身坏了，该让用户改映射
@@ -53,51 +57,56 @@ def _sql_escape(s):
 
 
 def _tool_find_material(args, erp):
-    name = str(args.get("name") or "").strip()
-    if not name:
-        return ({"error": "name 必填"}, "find_material 需要 name 参数。")
-    mrow, kind = erp.find_material(name)
-    cands = erp.material_candidates(name) if not mrow else []
-    data = {"query": name, "found": bool(mrow), "match_kind": kind or "",
-            "matched": {"id": mrow.get("id"), "name": mrow.get("name"), "model": mrow.get("model") or ""} if mrow else None,
-            "candidates": cands[:5]}
-    if mrow:
-        label = (mrow.get("name") or "") + (f"（{mrow.get('model')}）" if mrow.get("model") else "")
-        note = "系统档案：%s（id=%s，匹配方式 %s）。" % (label, mrow.get("id"), kind or "exact")
-    elif cands:
-        labels = "；".join("%s%s id=%s" % (c.get("name"), f"（{c['model']}）" if isinstance(c, dict) and c.get("model") else "",
-                                           c.get("id") if isinstance(c, dict) else "?") for c in cands[:5])
-        note = "没有唯一档案，最接近的候选：%s。" % labels
-    else:
-        note = "系统里没有与「%s」接近的商品档案。" % name
-    return data, note
+    """批量查商品档案：names 一次给全（问题行通常十几行，逐行查步数撑不起）。"""
+    names = args.get("names") if isinstance(args.get("names"), list) else         ([str(args.get("name") or "").strip()] if str(args.get("name") or "").strip() else [])
+    names = [str(x or "").strip() for x in names if str(x or "").strip()][:30]
+    if not names:
+        return ({"error": "names 必填（列表）"}, "find_material 需要 names 参数（一次把所有问题商品名列全）。")
+    out = {}
+    for name in names:
+        mrow, kind = erp.find_material(name)
+        cands = erp.material_candidates(name) if not mrow else []
+        out[name] = {"found": bool(mrow), "match_kind": kind or "",
+                     "matched": {"id": mrow.get("id"), "name": mrow.get("name"),
+                                 "model": mrow.get("model") or ""} if mrow else None,
+                     "candidates": cands[:5]}
+    hit = sum(1 for v in out.values() if v["found"])
+    cand = sum(1 for v in out.values() if not v["found"] and v["candidates"])
+    note = "批量查 %d 个：唯一命中 %d、有候选 %d、无接近档案 %d。" % (len(out), hit, cand, len(out) - hit - cand)
+    return {"results": out}, note
 
 
 def _tool_find_party(args, erp):
-    name = str(args.get("name") or "").strip()
+    """批量查往来单位档案：names 一次给全（含简称/疑似写法，交给候选排序）。"""
+    names = args.get("names") if isinstance(args.get("names"), list) else         ([str(args.get("name") or "").strip()] if str(args.get("name") or "").strip() else [])
+    names = [str(x or "").strip() for x in names if str(x or "").strip()][:30]
     ptype = str(args.get("type") or "").strip()
-    if not name:
-        return ({"error": "name 必填"}, "find_party 需要 name 参数。")
-    prow, kind = erp.find_party(name, ptype or None)
-    cands = erp.party_candidates(name, ptype or None) if not prow else []
-    data = {"query": name, "type": ptype, "found": bool(prow), "match_kind": kind or "",
-            "matched": {"id": prow.get("id"), "name": prow.get("supplier")} if prow else None,
-            "candidates": cands[:5]}
-    if prow:
-        note = "往来单位档案：%s（id=%s，匹配方式 %s）。" % (prow.get("supplier"), prow.get("id"), kind or "exact")
-    elif cands:
-        labels = "；".join((c.get("supplier") if isinstance(c, dict) else str(c)) for c in cands[:5])
-        note = "没有唯一档案，最接近的候选：%s。" % labels
-    else:
-        note = "系统里没有与「%s」接近的往来单位（将自动新建，或建议改映射）。" % name
-    return data, note
+    if not names:
+        return ({"error": "names 必填（列表）"}, "find_party 需要 names 参数（一次把所有问题往来单位列全）。")
+    out = {}
+    for name in names:
+        prow, kind = erp.find_party(name, ptype or None)
+        cands = erp.party_candidates(name, ptype or None) if not prow else []
+        out[name] = {"found": bool(prow), "match_kind": kind or "",
+                     "matched": {"id": prow.get("id"), "name": prow.get("supplier")} if prow else None,
+                     "candidates": cands[:5]}
+    hit = sum(1 for v in out.values() if v["found"])
+    cand = sum(1 for v in out.values() if not v["found"] and v["candidates"])
+    note = "批量查 %d 个：唯一命中 %d、有候选 %d、无接近档案 %d。" % (len(out), hit, cand, len(out) - hit - cand)
+    return {"results": out}, note
 
 
-def _tool_search_history(args, erp):
+def _tool_search_history(args, erp, _seen=set()):
     from . import retrieve as rmod
     query = str(args.get("query") or "").strip()
     if not query:
         return ({"error": "query 必填"}, "search_history 需要 query 参数。")
+    if query in _seen:
+        # 同样的关键词重复查是空烧步数（实测模型会连发相同查询）——观察里直接纠正
+        return ({"error": "duplicate_query", "query": query},
+                "这个关键词刚才已经查过一次，结果不会变——换一个关键词（如另一行的商品名+单价），"
+                "或直接 submit_verdict 收尾。")
+    _seen.add(query)
     return rmod.search_history(query)
 
 
@@ -126,19 +135,24 @@ def run_repair(rows, erp, operator="", on_event=None):
         verdict_box["fixes"] = (args or {}).get("fixes") or []
         return ({"received": True, "fixes": len(verdict_box["fixes"])}, "修复结论已收到。")
 
+    seen_queries = set()
+
     def bind(fn):
         return lambda args: fn(args, erp)
 
+    def _search(args):
+        return _tool_search_history(args, erp, _seen=seen_queries)
+
     tools = {
-        "find_material": {"desc": "按表格里的写法找系统商品档案（同名规格看型号），返回候选 id",
-                          "args_hint": '{"name":"表格里的商品名写法"}',
+        "find_material": {"desc": "批量找商品档案：一次把所有问题行的商品名写法列进 names，返回逐个的唯一命中或 top 候选（带 id）",
+                          "args_hint": '{"names":["表格里的商品名写法", "..."]}',
                           "run": bind(_tool_find_material)},
-        "find_party": {"desc": "按表格里的写法找往来单位档案（type 给客户或供应商，不确定可空）",
-                       "args_hint": '{"name":"表格里的往来单位写法","type":"客户或供应商，可空"}',
+        "find_party": {"desc": "批量找往来单位档案：一次把所有问题行的写法列进 names（简称/疑似写法都给）",
+                       "args_hint": '{"names":["表格里的往来单位写法", "..."],"type":"客户或供应商，可空"}',
                        "run": bind(_tool_find_party)},
-        "search_history": {"desc": "按关键词搜历史单据原话（表格写法太野时找参照）",
-                           "args_hint": '{"query":"关键词"}',
-                           "run": bind(_tool_search_history)},
+        "search_history": {"desc": "按关键词搜历史单据原话（表格写法太野/往来单位缺失时找参照）；同一关键词重复查会被拒绝",
+                           "args_hint": '{"query":"关键词，推荐 商品名+单价"}',
+                           "run": _search},
         "submit_verdict": {"desc": "提交修复结论（结束取证，恰好调用一次）",
                            "args_hint": '{"fixes":[{"row_index":0,"item_index":0,"field":"item_name|party","value":"..","material_id":可选,"confidence":0.0-1.0,"reason":".."}]}',
                            "run": _submit},
@@ -146,9 +160,10 @@ def run_repair(rows, erp, operator="", on_event=None):
     template = REPAIR_PROMPT.replace("{n}", "%d" % len(targets))
     try:
         out = agentmod.run_agent(
-            goal, tools, max_steps=3,
+            goal, tools, max_steps=8,
             context_block="操作员：%s" % (operator or "（未登录）"),
-            on_event=on_event, prompt_template=template)
+            on_event=on_event, prompt_template=template,
+            decision_max_tokens=4000)   # 十几行 fix 的结论 JSON 是长输出，2000 会截断成废 JSON（实测）
     except Exception as e:
         return dict(empty, error=str(e)[:120])
     fixes = verdict_box.get("fixes")

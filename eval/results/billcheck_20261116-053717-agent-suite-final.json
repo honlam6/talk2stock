@@ -1,0 +1,114 @@
+{
+ "summary": {
+  "corpus_version": "billcheck-v1-20261116",
+  "model": "hy4",
+  "n": 4,
+  "acc": 1.0,
+  "latency_avg_s": 14.91,
+  "tokens_avg": 5150
+ },
+ "results": [
+  {
+   "id": "b1",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 12.66,
+   "tokens": 4942,
+   "applied": [
+    {
+     "bill_index": 0,
+     "field": "depot",
+     "value": "成品仓",
+     "reason": "habit_defaults 显示操作员 evalbot 在永辉超市 sale_out 业务下常用仓库为成品仓",
+     "confidence": 0.95
+    },
+    {
+     "bill_index": 0,
+     "field": "price",
+     "value": 4.0,
+     "reason": "habit_defaults 中可乐历史单价为 4.0",
+     "confidence": 0.9
+    }
+   ],
+   "rejected": [],
+   "clarify": "「可乐」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  },
+  {
+   "id": "b2",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 16.06,
+   "tokens": 5044,
+   "applied": [
+    {
+     "bill_index": 0,
+     "field": "price",
+     "value": 3.5,
+     "reason": "last_price 显示美宜佳可乐最近进价（in）为 3.5，2026-11-13 成交 100 瓶",
+     "confidence": 0.9
+    }
+   ],
+   "rejected": [],
+   "clarify": "「可乐」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  },
+  {
+   "id": "b3",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 13.67,
+   "tokens": 5183,
+   "applied": [
+    {
+     "bill_index": 0,
+     "field": "depot",
+     "value": "成品仓",
+     "reason": "habit_defaults 返回该操作员在张记便利店 sale_out 业务的默认仓库为成品仓",
+     "confidence": 0.9
+    },
+    {
+     "bill_index": 0,
+     "field": "price",
+     "value": 44.0,
+     "reason": "habit_defaults 返回方便面历史单价44.0",
+     "confidence": 0.9
+    }
+   ],
+   "rejected": [],
+   "clarify": "「方便面」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  },
+  {
+   "id": "b4",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "no_applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 17.27,
+   "tokens": 5431,
+   "applied": [],
+   "rejected": [],
+   "clarify": "第1张单缺少牛皮纸单价且未指定仓库，请补充；另牛皮纸库存仅10卷，不足100卷。",
+   "error": ""
+  }
+ ]
+}

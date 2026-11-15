@@ -177,3 +177,56 @@ API；高频主数据计数另走规则直答（0 token 秒回）。
 **证据**：`eval/billcheck_cases.jsonl` v1（4 条，含无历史价宁缺勿错用例）+
 `eval/run_billcheck.py`；2026-11-16 实测 4/4，SSE 取证步骤逐个可见，patch
 理由引用观察（「成品仓电池库存 70 节足够本单 10 节」）。
+
+## ADR-12 · 导入修复 agent 与老板日报 agent（有界自主的两个新工位）
+
+**背景**：multi-entry 把 AI 限制在三个有界位置（抽取/认列/一次映射修复环），
+「需处理」行全留给人工；洞察/日报（insight.py）纯规则零自主。Agent 化的
+空位在「修复」与「综合判断」——都不该碰数字与闸门。
+
+**导入修复（P-C，core/repair.py）**：确定性变换核心不动（可单测、可复现），
+修复 agent 只对 problems 行做只读取证（find_material / find_party /
+search_history 历史原话），结论走 submit_verdict args 通道；写回白名单只有
+item_name / party，qty/price 永远是 agent 不可触碰字段（数字正确性归确定性
+变换），material_id 需过 material_by_id 存在性校验（点选直达语义）；
+confidence < 0.85 只进建议（前端「采纳」按钮），≥0.85 自动写回后仍要过
+resolve 重签令牌。自动修复环限 ≤10 行（超出说明映射坏了，该改映射）。
+
+**老板日报（P-D，core/daily.py）**：全项目唯一「无人触发」的 agent——当日
+懒触发 + 缓存（commit 成功后 invalidate，数据变了昨天的结论不再可信）；
+agent 自主决定最值得说的 3~5 个点（8 只读工具 + submit_verdict），每个点的
+detail 数字逐点过 numeric_grounded（编造即丢点，宁缺勿滥）；补货建议
+suggest_drafts 剥价格、party 必须出现在观察里，落确认卡走闸门；LLM 失败
+降级规则模板（数字全真）。仅管理员可见（老板视角，_handle 层门禁）。
+实测教训：MAX_STEPS=5 会被「想多看一眼」烧满被迫降级 → 6 步（5 取证+1 收口）。
+
+## ADR-13 · P4 规模欠款漏报的修复：三路尝试的完整证据链与 SQL 聚合终案
+
+**问题（P4 open item）**：单类单据 >200 张时欠款合计漏老账（260 张真欠款实测
+漏 23%）。REST `/depotHead/list` 的规模行为是根因，两条修复路线先后被实测否决，
+最终落在「聚合数字直查 DB」。
+
+**尝试一（2026-11-09，已回滚）**：时间窗二分 sweep——未收敛。本次重查根因：
+`beginTime/endTime` 过滤器语义不稳定——压测态实测宽窗 [2000, 今天] 返回全量、
+窄窗（无论按 oper_time 还是 create_time 划）返回 0 行，与两个字段都对不上，
+按任何时间轴二分都无法收敛（本次以 30 窗口/0 截断的全量轨迹复证）。
+
+**尝试二（本次，已废弃）**：`sweep_time_buckets` 纯函数递归塌缩（区间按天减半
+保证终止 + 单日溢出诚实截断标记）。单测 5 例全绿，但在真 REST 上失效——
+同一个窗口查询两次调用分别返回 200/400 行（自适应翻页 page2 间歇失效/整页
+重复，list() 层 29aaf8d 的 currentPage/pageNo 重试也压不住），时间桶的前提
+「同窗口结果确定」不成立。连同 `bills_window` 问一问工具一起废弃——宁可
+不提供工具，不提供会在规模下悄悄给错数的工具。
+
+**终案（core/report.py `_debt_sql`）**：欠款合计与 top 归因直查 DB（dbread
+只读通道，ADR-9 同一条护栏链：SELECT 白名单 + 只读事务 + 截断）。口径：
+欠款 = 表头 `total_price − change_amount`（与 stress_scale 真路径 ground
+truth 同一公式），仅审计单计入，tenant 以登录用户子查询锚定。REST 路径
+（all_bills 逐单 debt 累加）保留为 dbread 不可达时的降级——宁可老口径也不
+空手。验收：压测态 `debt_pay_total = 15600.0` 与 gold 分毫不差（漏报 0），
+top 归因正确；`summary`/看板/问一问 debts 工具同一数据源全部受益。
+
+**方法论沉淀**：P4 两次「修复失败」都不是白做——每次都把根因边界往前推了一格
+（11-09 证明翻页不可靠 → 本次证明时间过滤不可靠 + 翻页间歇失效会传染自适应
+重试），最终把问题归类到「聚合 vs 明细」的架构分界：明细清单走 REST（分页
+瑕疵可容忍、行级展示），聚合数字走 SQL（分毫不差、可被 stress 探针直验）。

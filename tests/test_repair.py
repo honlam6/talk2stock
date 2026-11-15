@@ -122,7 +122,7 @@ class TestRunRepair(unittest.TestCase):
         fixes = [{"row_index": 0, "item_index": 0, "field": "item_name", "value": "6号电池",
                   "material_id": 33, "confidence": 0.93, "reason": "find_material 唯一候选"}]
         replies = [
-            _resp({"thought": "查档案", "tool": "find_material", "args": {"name": "6号电沲"}}),
+            _resp({"thought": "批量查档案", "tool": "find_material", "args": {"names": ["6号电沲"]}}),
             _resp({"thought": "唯一候选", "tool": "submit_verdict", "args": {"fixes": fixes}}),
             _resp({"thought": "收工", "final": "修复完成"}),
         ]

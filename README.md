@@ -54,6 +54,13 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 | **ERP 账号联动登录 + 两级权限** | 成员用 **ERP 账号密码**登录（服务端转发 ERP 校验，密码不落盘），会话为 HMAC 无状态签名（默认 30 天）；管理员 = ERP `ismanager=1` 或 `T2S_ADMINS` 名单。共享模型档案 / ERP 连接仅管理员可见可改（接口层 403，非前端隐藏）；每人可另配**私有模型档案**（密钥存服务端本人档案，录单/问答优先用它），设置页成员只见共享模型只读状态行 |
 | **双端留痕** | Agent 侧：每次写入落 `audit.jsonl`（operator=登录名）；ERP 侧：录单成功自动往 ERP 自带日志模块写一条「操作人 X 通过 Talk2Stock 录单」（按 userId 归因，原 ERP「日志」页按人可查）；token 用量按登录者分账（usage.jsonl `user` 字段） |
 | 密钥不进仓库 | 密钥只存 `app/.env`（已 `.gitignore`）；`config.json` 也在忽略列表里，公开仓库只带 `config.example.json` 模板 |
+| **Supervisor 统一智能助手（/ask）** | 问一问 agent loop 升级 supervisor：对话里直接说「给永辉卖50瓶可乐」即自主起草单据草稿（`draft_order` 工具 → 与对话录单同一确认卡/闸门/审计）；改库存删单据类请求在工具层拒绝——写权限边界：agent 自主性到草稿为止，写入必须人工确认（ADR-10） |
+| **录单自主校验 agent** | 草稿出预览前先过一个只读取证 loop：查库存够不够、查该客户历史真实成交价（只读 SQL 直查行价）、按操作员习惯补默认仓——补丁是确定性写回（白名单 depot/price + 置信度≥0.85 + 只补缺失），确认卡上可改；结论数字逐个过接地校验（ADR-11） |
+| **操作员习惯记忆** | 确认写入的单据沉淀为本人偏好（jsonl 只增不改）：常用仓库、历史成交价（该客户口径优先），校验 agent 用它补默认值，新操作员退全局口径 |
+| **导入修复 agent** | Excel/图片导入的「需处理」行：agent 只读取证（商品档案/往来单位/历史原话）给修复建议——高置信自动改、低置信点采纳；白名单只有商品名与往来单位，数量单价永远是 agent 不可触碰字段（ADR-12） |
+| **老板日报 agent** | 全项目唯一「无人触发」的 agent：当日懒触发自主分析（自主挑最值得说的 3~5 个点，逐点数字接地），附一键生成采购草稿（走确认卡）；LLM 失败降级规则模板，数字全真（ADR-12） |
+| **欠款聚合 SQL 直查** | 欠款合计与 top 归因直查 DB（只读事务 + SELECT 白名单，与表头真值同公式），规模下分毫不差——修掉「单类 >200 张漏老账 23%」的规模缺陷；两轮失败尝试（时间窗二分/递归塌缩）的完整证据链在 ADR-13，聚合走 SQL、明细走 REST 的架构分界由此确立 |
+| 语音输入 | 对话输入框语音转写（浏览器 Web Speech API，zh-CN，中间结果实时上屏）；非安全上下文（HTTP 部署）自动置灰并指路部署文档，HTTPS 部署见 `docs/语音输入HTTPS部署.md` |
 
 ---
 
@@ -65,7 +72,7 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 |---|---|---|---|
 | 工作台（首页） | `http://localhost:8090/` | 一页看 KPI、发指令、录单、提问 | 无（AI 指令需配置模型） |
 | 录入（/new） | `http://localhost:8090/new` | 日常录单员 / 想省事的人 / 手机端 | 对话模式需 LLM，表单模式纯预设匹配 |
-| 问一问（只读问答） | `http://localhost:8090/ask` | 随口查库存/采销/欠款 | 需配置一个 LLM 模型 |
+| 智能助手（查账 + 起草） | `http://localhost:8090/ask` | 随口查库存/采销/欠款；录单直接说，草稿确认后写入 | 需配置一个 LLM 模型 |
 | 经营看板 | `http://localhost:8090/dashboard` | 老板（只读） | 无 |
 | 设置 | `http://localhost:8090/settings` | 改 ERP 连接、配/切/测模型档案 | 无 |
 
@@ -390,10 +397,14 @@ python3 eval/run.py --limit 8 --tag smoke  # 冒烟
 - ~~单位换算与含税口径~~：商品建档带 `unitId`，`unit` 传用户单位，后端 `DepotItemService` 按单位组 ratio 自动折算 `basicNumber`；行级 `tax_rate` 落 `taxRate / taxMoney / taxLastMoney`，含税/未税口径跟随 ERP 的 `materialPriceTaxFlag`。
 - ~~CI~~：GitHub Actions（py_compile + unittest 31 项 + 前端内联 JS node --check）。
 
+- ~~Supervisor 统一智能助手~~：问一问起草单据（写意图路由到草稿，闸门不变）+ 录单自主校验 agent + 操作员习惯记忆 + 导入修复 agent + 老板日报 agent（ADR-10/11/12）；评测资产 ask_cases_v2 / billcheck_cases / repair_cases / daily_cases + 各自跑分器。
+- ~~P4 欠款规模漏报闭合~~：欠款聚合 SQL 直查（ADR-13，stress_scale P4 探针漏报 0；三路尝试完整证据链）。
+- ~~语音输入~~：Web Speech API + 安全上下文三级降级 + HTTPS 部署文档。
+
 下一步（按对答辩的价值排序）：
 1. **基线实验落地**：按 `docs/基线对比实验手册.md` 跑两场景计时（半天）。
 2. **公网部署 + 备份录屏**：IP+端口或海外节点，暴露前开 `T2S_REQUIRE_AUTH=1`。
-3. 语音输入（浏览器转写，计划书里是可选项）。
+3. HTTPS 前置反代上线后语音输入公网可用（文档已备：`docs/语音输入HTTPS部署.md`）。
 
 ---
 

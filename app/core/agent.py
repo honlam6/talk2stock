@@ -112,7 +112,8 @@ def _hist(i, thought, name, args, obs):
 
 
 def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_TOKENS,
-              context_block="", on_event=None, prompt_template=None):
+              context_block="", on_event=None, prompt_template=None,
+              decision_max_tokens=None):
     """执行一个 agent 会话。返回 {ok, answer, steps, tokens, meta}。
 
     tools: {name: {"desc": str, "args_hint": str, "run": callable(args) -> (data, note[, extra])}}
@@ -155,7 +156,8 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
             {"role": "system", "content": prompt},
             {"role": "user", "content": (ctx + "\n请给出下一轮动作。").strip()},
         ], purpose="agent", collect=u,
-            reasoning_effort="low")   # 决策只需短 JSON：默认压低推理强度（档案显式设置优先；配合 max_tokens 封顶，见 F10/F12）
+            reasoning_effort="low",   # 决策只需短 JSON：默认压低推理强度（档案显式设置优先；配合 max_tokens 封顶，见 F10/F12）
+            decision_max_tokens=decision_max_tokens)   # 修复/日报类结论是长 JSON（十几个 fix），封顶放宽防截断
         tokens["prompt"] += u.get("prompt_tokens", 0)
         tokens["completion"] += u.get("completion_tokens", 0)
         tokens["estimated"] = tokens["estimated"] or bool(u.get("estimated"))

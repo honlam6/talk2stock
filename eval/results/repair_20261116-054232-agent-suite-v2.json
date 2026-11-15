@@ -1,0 +1,608 @@
+{
+ "summary": {
+  "corpus_version": "repair-v1-20261116",
+  "model": "DeepSeek V4.1 Flash",
+  "n": 4,
+  "acc": 0.5,
+  "hit_rate": 0.0,
+  "precision": null,
+  "applied": 0,
+  "suggestions": 0,
+  "rejected": 0,
+  "rejected_num_fixes": 0,
+  "steps": 5,
+  "map_latency_s": 3.3,
+  "repair_latency_s": 93.3,
+  "tokens": 40024,
+  "tokens_estimated": false,
+  "prompt_version": "repair-v1-20261116",
+  "skipped": false,
+  "skip_reason": "",
+  "problem_rows": 18,
+  "mapping_cols": {
+   "A": "party",
+   "B": "item_name",
+   "C": "qty",
+   "D": "unit",
+   "E": "price"
+  }
+ },
+ "results": [
+  {
+   "id": "c1",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "hit_min": false,
+    "no_touch_qty_price": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+   ]
+  },
+  {
+   "id": "c2",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "hit_min": false,
+    "no_touch_qty_price": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    18,
+    19,
+    20
+   ]
+  },
+  {
+   "id": "c3",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true,
+    "no_fix:24": true,
+    "no_fix:25": true,
+    "no_fix:26": true,
+    "no_fix:27": true,
+    "no_fix:28": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    24,
+    25,
+    26,
+    27,
+    28
+   ]
+  },
+  {
+   "id": "c4",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true,
+    "no_fix:2": true,
+    "no_fix:3": true,
+    "no_fix:4": true,
+    "no_fix:5": true,
+    "no_fix:6": true,
+    "no_fix:7": true,
+    "no_fix:8": true,
+    "no_fix:9": true,
+    "no_fix:10": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+   ]
+  }
+ ],
+ "mapping": {
+  "header_row": 1,
+  "mode": "per_row",
+  "group_col": "",
+  "file_biz": "sale_out",
+  "biz_col": "",
+  "biz_values": {},
+  "cols": {
+   "A": "party",
+   "B": "item_name",
+   "C": "qty",
+   "D": "unit",
+   "E": "price"
+  },
+  "date_format": "auto",
+  "confidence": "high",
+  "notes": "表头在第1行；客户、品名、数量、单位、单价列清晰，按每行独立销售出库映射。"
+ },
+ "applied": [],
+ "suggestions": [],
+ "rejected": [],
+ "steps": [
+  {
+   "step": 1,
+   "thought": "先批量查询所有问题行的商品名写法，获取唯一命中或候选档案，再据此决定改名。",
+   "tool": "find_material",
+   "args": {
+    "names": [
+     "6号电沲",
+     "可樂",
+     "方更面",
+     "纸箱儿",
+     "牛批纸",
+     "肥皀",
+     "螺丝M8",
+     "方便面",
+     "可乐",
+     "电池",
+     "矿泉水",
+     "纸箱",
+     "牛皮纸",
+     "？？",
+     "++++",
+     "@@@@"
+    ]
+   },
+   "ok": true,
+   "latency_ms": 21,
+   "observation": {
+    "results": {
+     "6号电沲": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 685,
+        "name": "6号电池",
+        "model": "",
+        "standard": "",
+        "unit": "节"
+       }
+      ]
+     },
+     "可樂": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 674,
+        "name": "可乐",
+        "model": "",
+        "standard": "",
+        "unit": "瓶"
+       }
+      ]
+     },
+     "方更面": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 676,
+        "name": "方便面",
+        "model": "",
+        "standard": "",
+        "unit": "箱"
+       }
+      ]
+     },
+     "纸箱儿": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 678,
+       "name": "纸箱",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "牛批纸": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 679,
+        "name": "牛皮纸",
+        "model": "",
+        "standard": "",
+        "unit": "卷"
+       },
+       {
+        "id": 678,
+        "name": "纸箱",
+        "model": "",
+        "standard": "",
+        "unit": "个"
+       }
+      ]
+     },
+     "肥皀": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 680,
+        "name": "肥皂",
+        "model": "",
+        "standard": "",
+        "unit": "块"
+       }
+      ]
+     },
+     "螺丝M8": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 681,
+       "name": "螺丝",
+       "model": "M8×20"
+      },
+      "candidates": []
+     },
+     "方便面": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 676,
+       "name": "方便面",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "可乐": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 674,
+       "name": "可乐",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "电池": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 677,
+       "name": "电池",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "矿泉水": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 675,
+       "name": "矿泉水",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "纸箱": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 678,
+       "name": "纸箱",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "牛皮纸": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 679,
+       "name": "牛皮纸",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "？？": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "++++": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "@@@@": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     }
+    }
+   }
+  },
+  {
+   "step": 2,
+   "thought": "商品档案已批量核对完毕，接下来批量查询所有问题行中的往来单位写法，确认哪些能唯一匹配到客户档案，并区分乱码或缺失、需要人工处理的情况。",
+   "tool": "find_party",
+   "args": {
+    "names": [
+     "永辉超市",
+     "校园超市",
+     "张记便利店",
+     "永辉",
+     "张记",
+     "校园",
+     "靐齉齾",
+     "Ω∑Ω",
+     "???",
+     "靐齉"
+    ],
+    "type": "客户"
+   },
+   "ok": true,
+   "latency_ms": 22,
+   "observation": {
+    "results": {
+     "永辉超市": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 135,
+       "name": "永辉超市"
+      },
+      "candidates": []
+     },
+     "校园超市": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 137,
+       "name": "校园超市"
+      },
+      "candidates": []
+     },
+     "张记便利店": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 136,
+       "name": "张记便利店"
+      },
+      "candidates": []
+     },
+     "永辉": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 135,
+       "name": "永辉超市"
+      },
+      "candidates": []
+     },
+     "张记": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 136,
+       "name": "张记便利店"
+      },
+      "candidates": []
+     },
+     "校园": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 137,
+       "name": "校园超市"
+      },
+      "candidates": []
+     },
+     "靐齉齾": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "Ω∑Ω": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "???": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "靐齉": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     }
+    }
+   }
+  },
+  {
+   "step": 3,
+   "thought": "商品档案与客户档案已批量核对完；第16–18行往来单位为空，需按商品+单价检索历史单据原话，确认可补的客户名称。先查“方便面 44.0”。",
+   "tool": "search_history",
+   "args": {
+    "query": "方便面 44.0"
+   },
+   "ok": true,
+   "latency_ms": 43,
+   "observation": {
+    "query": "方便面 44.0",
+    "hits": [
+     {
+      "title": "2026-11-16 04:07:10 销售出库",
+      "snippet": "2026-11-16 04:07:10 销售出库 张记便利店 方便面×10箱 合计440.0元 单号00000000726 卖给张记便利店方便面10箱",
+      "source": "audit.jsonl",
+      "score": 15.355
+     },
+     {
+      "title": "2026-11-16 04:28:23 销售出库",
+      "snippet": "2026-11-16 04:28:23 销售出库 张记便利店 方便面×10箱 合计440.0元 单号00000000736 卖给张记便利店方便面10箱",
+      "source": "audit.jsonl",
+      "score": 15.355
+     },
+     {
+      "title": "2026-11-16 05:40:44 销售出库",
+      "snippet": "2026-11-16 05:40:44 销售出库 张记便利店 方便面×10箱 合计440.0元 单号00000000736 卖给张记便利店方便面10箱",
+      "source": "audit.jsonl",
+      "score": 15.355
+     },
+     {
+      "title": "2026-11-16 04:07:10 采购入库",
+      "snippet": "2026-11-16 04:07:10 采购入库 美宜佳 方便面×20箱、电池×100节 合计1050.0元 单号00000000724 从美宜佳进方便面20箱、电池100节",
+      "source": "audit.jsonl",
+      "score": 15.05
+     },
+     {
+      "title": "2026-11-16 04:28:22 采购入库",
+      "snippet": "2026-11-16 04:28:22 采购入库 美宜佳 方便面×20箱、电池×100节 合计1050.0元 单号00000000734 从美宜佳进方便面20箱、电池100节",
+      "source": "audit.jsonl",
+      "score": 15.05
+     }
+    ],
+    "total_bills": 1329
+   }
+  },
+  {
+   "step": 4,
+   "thought": "第16行往来单位为空，历史单据明确指向张记便利店；第17–19行同样缺客户，需再用商品+单价检索历史原话，确认能否补齐客户名称。",
+   "tool": "search_history",
+   "args": {
+    "query": "可乐 4.0 电池 3.5 矿泉水 2.5"
+   },
+   "ok": true,
+   "latency_ms": 3,
+   "observation": {
+    "query": "可乐 4.0 电池 3.5 矿泉水 2.5",
+    "hits": [
+     {
+      "title": "2026-11-16 04:07:11 销售出库",
+      "snippet": "2026-11-16 04:07:11 销售出库 校园超市 电池×30节、矿泉水×50瓶 合计230.0元 单号00000000727 卖给校园超市电池30节、矿泉水50瓶",
+      "source": "audit.jsonl",
+      "score": 20.123
+     },
+     {
+      "title": "2026-11-16 04:28:23 销售出库",
+      "snippet": "2026-11-16 04:28:23 销售出库 校园超市 电池×30节、矿泉水×50瓶 合计230.0元 单号00000000737 卖给校园超市电池30节、矿泉水50瓶",
+      "source": "audit.jsonl",
+      "score": 20.123
+     },
+     {
+      "title": "2026-11-16 05:40:44 销售出库",
+      "snippet": "2026-11-16 05:40:44 销售出库 校园超市 电池×30节、矿泉水×50瓶 合计230.0元 单号00000000737 卖给校园超市电池30节、矿泉水50瓶",
+      "source": "audit.jsonl",
+      "score": 20.123
+     },
+     {
+      "title": "2026-11-16 04:07:10 采购入库",
+      "snippet": "2026-11-16 04:07:10 采购入库 美宜佳 可乐×100瓶、矿泉水×200瓶 合计750.0元 单号00000000720 从美宜佳进可乐100瓶、矿泉水200瓶",
+      "source": "audit.jsonl",
+      "score": 20.047
+     },
+     {
+      "title": "2026-11-16 04:28:22 采购入库",
+      "snippet": "2026-11-16 04:28:22 采购入库 美宜佳 可乐×100瓶、矿泉水×200瓶 合计750.0元 单号00000000730 从美宜佳进可乐100瓶、矿泉水200瓶",
+      "source": "audit.jsonl",
+      "score": 20.047
+     }
+    ],
+    "total_bills": 1329
+   }
+  },
+  {
+   "step": 5,
+   "thought": "第16行客户已由历史单据明确为张记便利店；第17–19行仍缺客户，其中电池和矿泉水在历史销售出库中出现校园超市，但可乐尚无销售客户线索，需再搜可乐销售原话确认。",
+   "tool": "search_history",
+   "args": {
+    "query": "可乐 4.0 销售出库 卖给"
+   },
+   "ok": true,
+   "latency_ms": 2,
+   "observation": {
+    "query": "可乐 4.0 销售出库 卖给",
+    "hits": [
+     {
+      "title": "2026-11-16 04:07:10 销售出库",
+      "snippet": "2026-11-16 04:07:10 销售出库 永辉超市 可乐×50瓶、矿泉水×80瓶 合计400.0元 单号00000000725 卖给永辉超市可乐50瓶、矿泉水80瓶，实付300",
+      "source": "audit.jsonl",
+      "score": 24.203
+     },
+     {
+      "title": "2026-11-16 04:28:22 销售出库",
+      "snippet": "2026-11-16 04:28:22 销售出库 永辉超市 可乐×50瓶、矿泉水×80瓶 合计400.0元 单号00000000735 卖给永辉超市可乐50瓶、矿泉水80瓶，实付300",
+      "source": "audit.jsonl",
+      "score": 24.203
+     },
+     {
+      "title": "2026-11-16 05:40:44 销售出库",
+      "snippet": "2026-11-16 05:40:44 销售出库 永辉超市 可乐×50瓶、矿泉水×80瓶 合计400.0元 单号00000000735 卖给永辉超市可乐50瓶、矿泉水80瓶，实付300",
+      "source": "audit.jsonl",
+      "score": 24.203
+     },
+     {
+      "title": "2026-11-16 04:11:35 销售出库",
+      "snippet": "2026-11-16 04:11:35 销售出库 永辉超市 可乐×50.0瓶 合计175.0元 单号00000000729 给永辉超市卖50瓶可乐，单价3块5",
+      "source": "audit.jsonl",
+      "score": 21.48
+     },
+     {
+      "title": "2026-11-16 04:30:23 销售出库",
+      "snippet": "2026-11-16 04:30:23 销售出库 校园超市 电池×10.0瓶 合计35.0元 单号00000000739 卖给校园超市10瓶电池，单价3块5",
+      "source": "audit.jsonl",
+      "score": 19.404
+     }
+    ],
+    "total_bills": 1329
+   }
+  },
+  {
+   "step": 6,
+   "thought": "",
+   "tool": null,
+   "ok": false,
+   "observation": {
+    "error": "AI 决策失败：AI 未返回可解析的 JSON"
+   }
+  },
+  {
+   "step": 7,
+   "tool": null,
+   "fallback": true,
+   "final": "批量查 16 个：唯一命中 8、有候选 5、无接近档案 3。；批量查 10 个：唯一命中 6、有候选 0、无接近档案 4。；历史单据命中 5 条（库里共 1329 张写入单）：2026-11-16 04:07:10 销售出库；2026-11-16 04:28:23 销售出库；2026-11-16 05:40:44 销售出库。；历史单据命中 5 条（库里共 1329 张写入单）：2026-11-16 04:07:11 销售出库；2026-11-16 04:28:23 销售出库；2026-11-16 05:40:44 销售出库。；历史单据命中 5 条（库里共 1329 张写入单）：2026-11-16 04:07:10 销售出库；2026-11-16 04:28:22 销售出库；2026-11-16 05:40:44 销售出库。"
+  }
+ ]
+}

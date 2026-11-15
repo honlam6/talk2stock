@@ -81,15 +81,20 @@ def _tool_last_price(args, erp):
         return ({"error": "party 与 material 必填", "got": args},
                 "last_price 需要 party 和 material 两个参数。")
     from . import dbread as dbmod
+    from . import config as cfgmod
+    erp_user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
+    tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
+              % erp_user.replace("'", "''"))   # 不加租户锚会跨租户捞价（正确性）
     type_zh = "出库" if direction == "out" else "入库"
     organ_type = "客户" if direction == "out" else "供应商"
     sql = ("SELECT dh.oper_time AS time, di.unit_price AS price, di.oper_number AS qty, di.material_unit AS unit "
            "FROM jsh_depot_item di JOIN jsh_depot_head dh ON di.header_id = dh.id "
            "WHERE dh.delete_flag='0' AND di.delete_flag='0' AND dh.type='%s' AND di.unit_price > 0 "
+           "AND dh.tenant_id=%s "
            "AND dh.organ_id IN (SELECT id FROM jsh_supplier WHERE delete_flag='0' AND type='%s' AND supplier LIKE '%%%s%%') "
            "AND di.material_id IN (SELECT id FROM jsh_material WHERE delete_flag='0' AND name LIKE '%%%s%%') "
            "ORDER BY dh.oper_time DESC LIMIT 6") % (
-        type_zh, organ_type, _sql_escape(party), _sql_escape(material))
+        type_zh, tenant, organ_type, _sql_escape(party), _sql_escape(material))
     data, note = dbmod.sql_query({"sql": sql})
     rows = data.get("rows") or [] if "error" not in data else []
     records = []

@@ -34,6 +34,53 @@ def _day(bill):
     return s[:10]
 
 
+def _debt_sql():
+    """欠款聚合直查 DB（P4 修复 / ADR-13）。
+
+    为什么不用 REST 单据列表算：①自适应翻页对 /depotHead/list 仍间歇失效
+    （260 张真欠款实测漏 23%，page2 空/整页重复随机出现）；②beginTime/endTime
+    时间过滤语义不稳定（宽窗全量、窄窗全空，与 oper_time/create_time 都对不上，
+    11-09 时间窗二分 sweep 未收敛的根因）。聚合数字本来就该在 DB 算——
+    口径：欠款 = 表头 total_price − change_amount（与 eval/stress_scale.py
+    真路径 ground truth 同一公式），仅审计单（status='1'）计入。
+    dbread 不可达时返回 None，调用方退回 REST 口径（宁可老口径也不空手）。"""
+    from . import dbread as dbmod
+    from . import config as cfgmod
+    user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
+    tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
+              % user.replace("'", "''"))
+    base_where = ("h.delete_flag='0' AND h.status='1' AND h.tenant_id=%s" % tenant)
+    try:
+        def _total(subs):
+            sql = ("SELECT COALESCE(SUM(GREATEST(h.total_price - h.change_amount, 0)), 0) AS total "
+                   "FROM jsh_depot_head h WHERE " + base_where +
+                   " AND h.sub_type IN (%s) AND (h.total_price - h.change_amount) > 0"
+                   % ",".join("'%s'" % x for x in subs))
+            data, _ = dbmod.sql_query({"sql": sql})
+            rows = data.get("rows") or []
+            return float(rows[0].get("total") or 0) if rows else 0.0
+
+        def _top(subs, n=6):
+            sql = ("SELECT s.supplier AS name, SUM(GREATEST(h.total_price - h.change_amount, 0)) AS amount "
+                   "FROM jsh_depot_head h JOIN jsh_supplier s ON s.id = h.organ_id WHERE " + base_where +
+                   " AND h.sub_type IN (%s) AND (h.total_price - h.change_amount) > 0 "
+                   "AND s.delete_flag='0' "
+                   "GROUP BY h.organ_id, s.supplier ORDER BY amount DESC LIMIT %d"
+                   % (",".join("'%s'" % x for x in subs), n))
+            data, _ = dbmod.sql_query({"sql": sql})
+            rows = data.get("rows") or []
+            return [{"name": r.get("name") or "（未填单位）", "amount": round(float(r.get("amount") or 0), 2)}
+                    for r in rows]
+        return {
+            "debt_pay_total": round(_total(("采购",)), 2),
+            "debt_recv_total": round(_total(("销售", "零售")), 2),
+            "debt_pay": _top(("采购",)),
+            "debt_recv": _top(("销售", "零售")),
+        }
+    except Exception:
+        return None
+
+
 def summary(erp=None, bills=None):
     """核心经营指标。bills 可传入已取好的单据列表（避免重复查询）。"""
     erp = erp or get_client()
@@ -89,7 +136,7 @@ def summary(erp=None, bills=None):
         acc[k]["sell"] = round(acc[k]["sell"], 2)
         acc[k]["profit"] = round(acc[k]["sell"] - acc[k]["buy"], 2)
 
-    return {
+    out = {
         "ok": True,
         "date": today,
         "month": month,
@@ -97,11 +144,18 @@ def summary(erp=None, bills=None):
         "month_stat": acc["month"],
         "all": acc["all"],
         "bill_count": len(bills),
-        "debt_pay": top(debt_pay),
-        "debt_recv": top(debt_recv),
-        "debt_pay_total": round(sum(debt_pay.values()), 2),
-        "debt_recv_total": round(sum(debt_recv.values()), 2),
     }
+    # P4 修复：欠款合计/top 优先走 SQL 直查（REST 列表规模下不可靠，见 _debt_sql）；
+    # SQL 不可达时退回 REST 口径（bills 循环里的 debt 累加），绝不空手
+    sql_debt = _debt_sql()
+    if sql_debt:
+        out.update(sql_debt)
+    else:
+        out["debt_pay"] = top(debt_pay)
+        out["debt_recv"] = top(debt_recv)
+        out["debt_pay_total"] = round(sum(debt_pay.values()), 2)
+        out["debt_recv_total"] = round(sum(debt_recv.values()), 2)
+    return out
 
 
 def recent_bills(erp=None, limit=12, bills=None):

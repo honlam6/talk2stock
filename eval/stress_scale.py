@@ -177,7 +177,8 @@ def probe(llm, n_bills=0):
     expect_unpaid = 260 * 60.0
     out["P4_欠款合计(应付)"] = {"真路径未付单应计": round(expect_unpaid, 2),
                                  "summary应付合计": s["debt_pay_total"],
-                                 "漏报": round(max(0.0, expect_unpaid - s["debt_pay_total"]), 2)}
+                                 "漏报": round(max(0.0, expect_unpaid - s["debt_pay_total"]), 2),
+                                 "口径": "SQL 直查（ADR-13）"}
 
     erp._stock_tbl = None
     erp._stock_tbl_at = 0

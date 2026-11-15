@@ -1,0 +1,1009 @@
+{
+ "summary": {
+  "corpus_version": "repair-v1-20261116",
+  "model": "DeepSeek V4.1 Flash",
+  "n": 4,
+  "acc": 1.0,
+  "hit_rate": 1.0,
+  "precision": 1.0,
+  "applied": 10,
+  "suggestions": 0,
+  "rejected": 0,
+  "rejected_num_fixes": 0,
+  "steps": 8,
+  "map_latency_s": 2.9,
+  "repair_latency_s": 57.7,
+  "tokens": 54541,
+  "tokens_estimated": false,
+  "prompt_version": "repair-v1-20261116",
+  "skipped": false,
+  "skip_reason": "",
+  "problem_rows": 18,
+  "mapping_cols": {
+   "A": "party",
+   "B": "item_name",
+   "C": "qty",
+   "D": "unit",
+   "E": "price"
+  }
+ },
+ "results": [
+  {
+   "id": "c1",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true
+   },
+   "hits": 7,
+   "hit_detail": [
+    "11→6号电池(applied)",
+    "12→可乐(applied)",
+    "13→方便面(applied)",
+    "14→纸箱(applied)",
+    "15→牛皮纸(applied)",
+    "16→肥皂(applied)",
+    "17→螺丝(applied)"
+   ],
+   "rows": [
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17
+   ]
+  },
+  {
+   "id": "c2",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true
+   },
+   "hits": 3,
+   "hit_detail": [
+    "18→张记便利店(applied)",
+    "19→永辉超市(applied)",
+    "20→校园超市(applied)"
+   ],
+   "rows": [
+    18,
+    19,
+    20
+   ]
+  },
+  {
+   "id": "c3",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true,
+    "no_fix:24": true,
+    "no_fix:25": true,
+    "no_fix:26": true,
+    "no_fix:27": true,
+    "no_fix:28": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    24,
+    25,
+    26,
+    27,
+    28
+   ]
+  },
+  {
+   "id": "c4",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "hit_min": true,
+    "no_touch_qty_price": true,
+    "no_fix:2": true,
+    "no_fix:3": true,
+    "no_fix:4": true,
+    "no_fix:5": true,
+    "no_fix:6": true,
+    "no_fix:7": true,
+    "no_fix:8": true,
+    "no_fix:9": true,
+    "no_fix:10": true
+   },
+   "hits": 0,
+   "hit_detail": [],
+   "rows": [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+   ]
+  }
+ ],
+ "mapping": {
+  "header_row": 1,
+  "mode": "per_row",
+  "group_col": "",
+  "file_biz": "sale_out",
+  "biz_col": "",
+  "biz_values": {},
+  "cols": {
+   "A": "party",
+   "B": "item_name",
+   "C": "qty",
+   "D": "unit",
+   "E": "price"
+  },
+  "date_format": "auto",
+  "confidence": "high",
+  "notes": "表头在第1行；客户列对应往来单位，品名、数量、单位、单价分别映射，业务判断为销售出库。"
+ },
+ "applied": [
+  {
+   "row_index": 9,
+   "item_index": 0,
+   "field": "item_name",
+   "value": "6号电池",
+   "material_id": 685,
+   "reason": "档案唯一候选：6号电池（id 685），「6号电沲」为形近错字",
+   "confidence": 0.95
+  },
+  {
+   "row_index": 10,
+   "item_index": 0,
+   "field": "item_name",
+   "value": "可乐",
+   "material_id": 674,
+   "reason": "档案唯一候选：可乐（id 674），「可樂」为繁体写法",
+   "confidence": 0.95
+  },
+  {
+   "row_index": 11,
+   "item_index": 0,
+   "field": "item_name",
+   "value": "方便面",
+   "material_id": 676,
+   "reason": "档案唯一候选：方便面（id 676），「方更面」为形近错字",
+   "confidence": 0.95
+  },
+  {
+   "row_index": 12,
+   "item_index": 0,
+   "field": "item_name",
+   "value": "纸箱",
+   "material_id": 678,
+   "reason": "模糊匹配命中：纸箱（id 678），「纸箱儿」为口语化后缀",
+   "confidence": 0.9
+  },
+  {
+   "row_index": 13,
+   "item_index": 0,
+   "field": "item_name",
+   "value": "牛皮纸",
+   "material_id": 679,
+   "reason": "档案唯一候选：牛皮纸（id 679），「牛批纸」为同音错字",
+   "confidence": 0.95
+  },
+  {
+   "row_index": 14,
+   "item_index": 0,
+   "field": "item_name",
+   "value": "肥皂",
+   "material_id": 680,
+   "reason": "档案唯一候选：肥皂（id 680），「肥皀」为形近错字",
+   "confidence": 0.9
+  },
+  {
+   "row_index": 15,
+   "item_index": 0,
+   "field": "item_name",
+   "value": "螺丝",
+   "material_id": 681,
+   "reason": "模糊匹配命中：螺丝（型号M8×20，id 681），「螺丝M8」把规格写进名称",
+   "confidence": 0.85
+  },
+  {
+   "row_index": 16,
+   "item_index": 0,
+   "field": "party",
+   "value": "张记便利店",
+   "material_id": null,
+   "reason": "历史单据「方便面 44.0」命中张记便利店，单价一致",
+   "confidence": 0.85
+  },
+  {
+   "row_index": 17,
+   "item_index": 0,
+   "field": "party",
+   "value": "永辉超市",
+   "material_id": null,
+   "reason": "历史单据「可乐 4.0」命中永辉超市，单价一致",
+   "confidence": 0.85
+  },
+  {
+   "row_index": 18,
+   "item_index": 0,
+   "field": "party",
+   "value": "校园超市",
+   "material_id": null,
+   "reason": "历史单据「电池 3.5」命中校园超市，单价一致",
+   "confidence": 0.85
+  }
+ ],
+ "suggestions": [],
+ "rejected": [],
+ "steps": [
+  {
+   "step": 1,
+   "thought": "先批量查所有问题行的商品名写法，确认档案中的标准名称和 material_id；往来单位下一轮再批量查。",
+   "tool": "find_material",
+   "args": {
+    "names": [
+     "6号电沲",
+     "可樂",
+     "方更面",
+     "纸箱儿",
+     "牛批纸",
+     "肥皀",
+     "螺丝M8",
+     "方便面",
+     "可乐",
+     "电池",
+     "矿泉水",
+     "纸箱",
+     "牛皮纸",
+     "？？",
+     "++++",
+     "@@@@"
+    ]
+   },
+   "ok": true,
+   "latency_ms": 35,
+   "observation": {
+    "results": {
+     "6号电沲": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 685,
+        "name": "6号电池",
+        "model": "",
+        "standard": "",
+        "unit": "节"
+       }
+      ]
+     },
+     "可樂": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 674,
+        "name": "可乐",
+        "model": "",
+        "standard": "",
+        "unit": "瓶"
+       }
+      ]
+     },
+     "方更面": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 676,
+        "name": "方便面",
+        "model": "",
+        "standard": "",
+        "unit": "箱"
+       }
+      ]
+     },
+     "纸箱儿": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 678,
+       "name": "纸箱",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "牛批纸": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 679,
+        "name": "牛皮纸",
+        "model": "",
+        "standard": "",
+        "unit": "卷"
+       },
+       {
+        "id": 678,
+        "name": "纸箱",
+        "model": "",
+        "standard": "",
+        "unit": "个"
+       }
+      ]
+     },
+     "肥皀": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": [
+       {
+        "id": 680,
+        "name": "肥皂",
+        "model": "",
+        "standard": "",
+        "unit": "块"
+       }
+      ]
+     },
+     "螺丝M8": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 681,
+       "name": "螺丝",
+       "model": "M8×20"
+      },
+      "candidates": []
+     },
+     "方便面": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 676,
+       "name": "方便面",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "可乐": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 674,
+       "name": "可乐",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "电池": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 677,
+       "name": "电池",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "矿泉水": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 675,
+       "name": "矿泉水",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "纸箱": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 678,
+       "name": "纸箱",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "牛皮纸": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 679,
+       "name": "牛皮纸",
+       "model": ""
+      },
+      "candidates": []
+     },
+     "？？": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "++++": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "@@@@": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     }
+    }
+   }
+  },
+  {
+   "step": 2,
+   "thought": "商品名档案已基本确认，下一步批量查所有问题行的往来单位写法，确认简称或缺失单位对应的档案名称。",
+   "tool": "find_party",
+   "args": {
+    "names": [
+     "永辉超市",
+     "校园超市",
+     "张记便利店",
+     "永辉",
+     "张记",
+     "校园",
+     "靐齉齾",
+     "Ω∑Ω",
+     "???",
+     "靐齉"
+    ],
+    "type": "客户"
+   },
+   "ok": true,
+   "latency_ms": 28,
+   "observation": {
+    "results": {
+     "永辉超市": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 135,
+       "name": "永辉超市"
+      },
+      "candidates": []
+     },
+     "校园超市": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 137,
+       "name": "校园超市"
+      },
+      "candidates": []
+     },
+     "张记便利店": {
+      "found": true,
+      "match_kind": "exact",
+      "matched": {
+       "id": 136,
+       "name": "张记便利店"
+      },
+      "candidates": []
+     },
+     "永辉": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 135,
+       "name": "永辉超市"
+      },
+      "candidates": []
+     },
+     "张记": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 136,
+       "name": "张记便利店"
+      },
+      "candidates": []
+     },
+     "校园": {
+      "found": true,
+      "match_kind": "fuzzy",
+      "matched": {
+       "id": 137,
+       "name": "校园超市"
+      },
+      "candidates": []
+     },
+     "靐齉齾": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "Ω∑Ω": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "???": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     },
+     "靐齉": {
+      "found": false,
+      "match_kind": "none",
+      "matched": null,
+      "candidates": []
+     }
+    }
+   }
+  },
+  {
+   "step": 3,
+   "thought": "缺失往来单位的行需按商品名+单价搜历史单据归因；先查第18行（方便面 44.0）。",
+   "tool": "search_history",
+   "args": {
+    "query": "方便面 44.0"
+   },
+   "ok": true,
+   "latency_ms": 42,
+   "observation": {
+    "query": "方便面 44.0",
+    "hits": [
+     {
+      "title": "2026-11-16 04:07:10 销售出库",
+      "snippet": "2026-11-16 04:07:10 销售出库 张记便利店 方便面×10箱 合计440.0元 单号00000000726 卖给张记便利店方便面10箱",
+      "source": "audit.jsonl",
+      "score": 15.355
+     },
+     {
+      "title": "2026-11-16 04:28:23 销售出库",
+      "snippet": "2026-11-16 04:28:23 销售出库 张记便利店 方便面×10箱 合计440.0元 单号00000000736 卖给张记便利店方便面10箱",
+      "source": "audit.jsonl",
+      "score": 15.355
+     },
+     {
+      "title": "2026-11-16 05:40:44 销售出库",
+      "snippet": "2026-11-16 05:40:44 销售出库 张记便利店 方便面×10箱 合计440.0元 单号00000000736 卖给张记便利店方便面10箱",
+      "source": "audit.jsonl",
+      "score": 15.355
+     },
+     {
+      "title": "2026-11-16 04:07:10 采购入库",
+      "snippet": "2026-11-16 04:07:10 采购入库 美宜佳 方便面×20箱、电池×100节 合计1050.0元 单号00000000724 从美宜佳进方便面20箱、电池100节",
+      "source": "audit.jsonl",
+      "score": 15.05
+     },
+     {
+      "title": "2026-11-16 04:28:22 采购入库",
+      "snippet": "2026-11-16 04:28:22 采购入库 美宜佳 方便面×20箱、电池×100节 合计1050.0元 单号00000000734 从美宜佳进方便面20箱、电池100节",
+      "source": "audit.jsonl",
+      "score": 15.05
+     }
+    ],
+    "total_bills": 1329
+   }
+  },
+  {
+   "step": 4,
+   "thought": "已用1次历史搜索确认第18行方便面对应张记便利店；还剩可乐、电池两个空往来单位行需各搜一次。先查「可乐 4.0」。",
+   "tool": "search_history",
+   "args": {
+    "query": "可乐 4.0"
+   },
+   "ok": true,
+   "latency_ms": 1,
+   "observation": {
+    "query": "可乐 4.0",
+    "hits": [
+     {
+      "title": "2026-11-16 04:07:11 销售退货",
+      "snippet": "2026-11-16 04:07:11 销售退货 永辉超市 可乐×2瓶 合计8.0元 单号00000000728 永辉超市退回可乐2瓶",
+      "source": "audit.jsonl",
+      "score": 7.281
+     },
+     {
+      "title": "2026-11-16 04:28:23 销售退货",
+      "snippet": "2026-11-16 04:28:23 销售退货 永辉超市 可乐×2瓶 合计8.0元 单号00000000738 永辉超市退回可乐2瓶",
+      "source": "audit.jsonl",
+      "score": 7.281
+     },
+     {
+      "title": "2026-11-16 05:40:44 销售退货",
+      "snippet": "2026-11-16 05:40:44 销售退货 永辉超市 可乐×2瓶 合计8.0元 单号00000000738 永辉超市退回可乐2瓶",
+      "source": "audit.jsonl",
+      "score": 7.281
+     },
+     {
+      "title": "2026-11-16 04:11:35 销售出库",
+      "snippet": "2026-11-16 04:11:35 销售出库 永辉超市 可乐×50.0瓶 合计175.0元 单号00000000729 给永辉超市卖50瓶可乐，单价3块5",
+      "source": "audit.jsonl",
+      "score": 7.057
+     },
+     {
+      "title": "2026-11-16 04:07:10 采购入库",
+      "snippet": "2026-11-16 04:07:10 采购入库 美宜佳 可乐×100瓶、矿泉水×200瓶 合计750.0元 单号00000000720 从美宜佳进可乐100瓶、矿泉水200瓶",
+      "source": "audit.jsonl",
+      "score": 6.847
+     }
+    ],
+    "total_bills": 1329
+   }
+  },
+  {
+   "step": 5,
+   "thought": "还剩第20行（电池，party为空）需要按商品名+单价搜历史单据归因，这是第3次也是最后一次历史搜索。",
+   "tool": "search_history",
+   "args": {
+    "query": "电池 3.5"
+   },
+   "ok": true,
+   "latency_ms": 1,
+   "observation": {
+    "query": "电池 3.5",
+    "hits": [
+     {
+      "title": "2026-11-16 04:30:23 销售出库",
+      "snippet": "2026-11-16 04:30:23 销售出库 校园超市 电池×10.0瓶 合计35.0元 单号00000000739 卖给校园超市10瓶电池，单价3块5",
+      "source": "audit.jsonl",
+      "score": 7.548
+     },
+     {
+      "title": "2026-11-16 04:07:10 采购入库",
+      "snippet": "2026-11-16 04:07:10 采购入库 美宜佳 方便面×20箱、电池×100节 合计1050.0元 单号00000000724 从美宜佳进方便面20箱、电池100节",
+      "source": "audit.jsonl",
+      "score": 7.323
+     },
+     {
+      "title": "2026-11-16 04:28:22 采购入库",
+      "snippet": "2026-11-16 04:28:22 采购入库 美宜佳 方便面×20箱、电池×100节 合计1050.0元 单号00000000734 从美宜佳进方便面20箱、电池100节",
+      "source": "audit.jsonl",
+      "score": 7.323
+     },
+     {
+      "title": "2026-11-16 05:40:44 采购入库",
+      "snippet": "2026-11-16 05:40:44 采购入库 美宜佳 方便面×20箱、电池×100节 合计1050.0元 单号00000000734 从美宜佳进方便面20箱、电池100节",
+      "source": "audit.jsonl",
+      "score": 7.323
+     },
+     {
+      "title": "2026-11-16 04:07:11 销售出库",
+      "snippet": "2026-11-16 04:07:11 销售出库 校园超市 电池×30节、矿泉水×50瓶 合计230.0元 单号00000000727 卖给校园超市电池30节、矿泉水50瓶",
+      "source": "audit.jsonl",
+      "score": 7.18
+     }
+    ],
+    "total_bills": 1329
+   }
+  },
+  {
+   "step": 6,
+   "thought": "商品档案候选已明确，缺失往来单位的三行已用「商品名+单价」历史单据归因（方便面44→张记便利店、可乐4.0→永辉超市、电池3.5→校园超市）；无法识别的乱码行（？？、++++、@@@@、空名）留存人工。",
+   "tool": "submit_verdict",
+   "args": {
+    "fixes": [
+     {
+      "row_index": 9,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "6号电池",
+      "material_id": 685,
+      "confidence": 0.95,
+      "reason": "档案候选唯一命中：6号电池（id 685），原写法「6号电沲」为形近错字"
+     },
+     {
+      "row_index": 10,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "可乐",
+      "material_id": 674,
+      "confidence": 0.95,
+      "reason": "档案候选唯一命中：可乐（id 674），原写法「可樂」为繁体"
+     },
+     {
+      "row_index": 11,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "方便面",
+      "material_id": 676,
+      "confidence": 0.95,
+      "reason": "档案候选唯一命中：方便面（id 676），原写法「方更面」为形近错字"
+     },
+     {
+      "row_index": 12,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "纸箱",
+      "material_id": 678,
+      "confidence": 0.9,
+      "reason": "模糊匹配命中档案：纸箱（id 678），原写法「纸箱儿」为口语化后缀"
+     },
+     {
+      "row_index": 13,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "牛皮纸",
+      "material_id": 679,
+      "confidence": 0.95,
+      "reason": "档案候选唯一命中：牛皮纸（id 679），原写法「牛批纸」为同音错字"
+     },
+     {
+      "row_index": 14,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "肥皂",
+      "material_id": 680,
+      "confidence": 0.9,
+      "reason": "档案候选唯一命中：肥皂（id 680），原写法「肥皀」为形近错字"
+     },
+     {
+      "row_index": 15,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "螺丝",
+      "material_id": 681,
+      "confidence": 0.85,
+      "reason": "模糊匹配命中档案：螺丝 型号M8×20（id 681），原写法「螺丝M8」含规格"
+     },
+     {
+      "row_index": 16,
+      "item_index": 0,
+      "field": "party",
+      "value": "张记便利店",
+      "confidence": 0.85,
+      "reason": "历史单据「方便面 44.0」命中：张记便利店 方便面×10箱 合计440.0元，单价一致"
+     },
+     {
+      "row_index": 17,
+      "item_index": 0,
+      "field": "party",
+      "value": "永辉超市",
+      "confidence": 0.85,
+      "reason": "历史单据「可乐 4.0」命中：永辉超市 可乐×2瓶 合计8.0元，单价一致"
+     },
+     {
+      "row_index": 18,
+      "item_index": 0,
+      "field": "party",
+      "value": "校园超市",
+      "confidence": 0.85,
+      "reason": "历史单据「电池 3.5」命中：校园超市 电池×10 合计35.0元，单价一致"
+     }
+    ]
+   },
+   "ok": true,
+   "latency_ms": 0,
+   "observation": {
+    "received": true,
+    "fixes": 10
+   }
+  },
+  {
+   "step": 7,
+   "thought": "商品档案与缺失往来单位均已取证完毕，无法识别的乱码行留待人工处理，提交最终修复结论。",
+   "tool": "submit_verdict",
+   "args": {
+    "fixes": [
+     {
+      "row_index": 9,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "6号电池",
+      "material_id": 685,
+      "confidence": 0.95,
+      "reason": "档案中唯一命中候选：6号电池（id 685），「6号电沲」是形近错字"
+     },
+     {
+      "row_index": 10,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "可乐",
+      "material_id": 674,
+      "confidence": 0.95,
+      "reason": "档案中唯一命中候选：可乐（id 674），「可樂」是繁体写法"
+     },
+     {
+      "row_index": 11,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "方便面",
+      "material_id": 676,
+      "confidence": 0.95,
+      "reason": "档案中唯一命中候选：方便面（id 676），「方更面」是形近错字"
+     },
+     {
+      "row_index": 12,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "纸箱",
+      "material_id": 678,
+      "confidence": 0.9,
+      "reason": "模糊匹配命中档案：纸箱（id 678），「纸箱儿」是口语化后缀写法"
+     },
+     {
+      "row_index": 13,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "牛皮纸",
+      "material_id": 679,
+      "confidence": 0.95,
+      "reason": "档案中唯一命中候选：牛皮纸（id 679），「牛批纸」是同音错字"
+     },
+     {
+      "row_index": 14,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "肥皂",
+      "material_id": 680,
+      "confidence": 0.9,
+      "reason": "档案中唯一命中候选：肥皂（id 680），「肥皀」是形近错字"
+     },
+     {
+      "row_index": 15,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "螺丝",
+      "material_id": 681,
+      "confidence": 0.85,
+      "reason": "模糊匹配命中档案：螺丝 型号M8×20（id 681），「螺丝M8」把规格写进了名称"
+     },
+     {
+      "row_index": 16,
+      "item_index": 0,
+      "field": "party",
+      "value": "张记便利店",
+      "confidence": 0.85,
+      "reason": "历史单据「方便面 44.0」命中张记便利店，方便面×10箱、合计440.0元，单价一致"
+     },
+     {
+      "row_index": 17,
+      "item_index": 0,
+      "field": "party",
+      "value": "永辉超市",
+      "confidence": 0.85,
+      "reason": "历史单据「可乐 4.0」命中永辉超市，可乐×2瓶、合计8.0元，单价一致"
+     },
+     {
+      "row_index": 18,
+      "item_index": 0,
+      "field": "party",
+      "value": "校园超市",
+      "confidence": 0.85,
+      "reason": "历史单据「电池 3.5」命中校园超市，电池×10、合计35.0元，单价一致"
+     }
+    ]
+   },
+   "ok": true,
+   "latency_ms": 0,
+   "observation": {
+    "received": true,
+    "fixes": 10
+   }
+  },
+  {
+   "step": 8,
+   "thought": "商品名与缺失往来单位均已通过档案和历史单据取证完成，乱码/空行无法可靠修复，留人工处理；现在提交最终修复结论。",
+   "tool": "submit_verdict",
+   "args": {
+    "fixes": [
+     {
+      "row_index": 9,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "6号电池",
+      "material_id": 685,
+      "confidence": 0.95,
+      "reason": "档案唯一候选：6号电池（id 685），「6号电沲」为形近错字"
+     },
+     {
+      "row_index": 10,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "可乐",
+      "material_id": 674,
+      "confidence": 0.95,
+      "reason": "档案唯一候选：可乐（id 674），「可樂」为繁体写法"
+     },
+     {
+      "row_index": 11,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "方便面",
+      "material_id": 676,
+      "confidence": 0.95,
+      "reason": "档案唯一候选：方便面（id 676），「方更面」为形近错字"
+     },
+     {
+      "row_index": 12,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "纸箱",
+      "material_id": 678,
+      "confidence": 0.9,
+      "reason": "模糊匹配命中：纸箱（id 678），「纸箱儿」为口语化后缀"
+     },
+     {
+      "row_index": 13,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "牛皮纸",
+      "material_id": 679,
+      "confidence": 0.95,
+      "reason": "档案唯一候选：牛皮纸（id 679），「牛批纸」为同音错字"
+     },
+     {
+      "row_index": 14,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "肥皂",
+      "material_id": 680,
+      "confidence": 0.9,
+      "reason": "档案唯一候选：肥皂（id 680），「肥皀」为形近错字"
+     },
+     {
+      "row_index": 15,
+      "item_index": 0,
+      "field": "item_name",
+      "value": "螺丝",
+      "material_id": 681,
+      "confidence": 0.85,
+      "reason": "模糊匹配命中：螺丝（型号M8×20，id 681），「螺丝M8」把规格写进名称"
+     },
+     {
+      "row_index": 16,
+      "item_index": 0,
+      "field": "party",
+      "value": "张记便利店",
+      "confidence": 0.85,
+      "reason": "历史单据「方便面 44.0」命中张记便利店，单价一致"
+     },
+     {
+      "row_index": 17,
+      "item_index": 0,
+      "field": "party",
+      "value": "永辉超市",
+      "confidence": 0.85,
+      "reason": "历史单据「可乐 4.0」命中永辉超市，单价一致"
+     },
+     {
+      "row_index": 18,
+      "item_index": 0,
+      "field": "party",
+      "value": "校园超市",
+      "confidence": 0.85,
+      "reason": "历史单据「电池 3.5」命中校园超市，单价一致"
+     }
+    ]
+   },
+   "ok": true,
+   "latency_ms": 0,
+   "observation": {
+    "received": true,
+    "fixes": 10
+   }
+  },
+  {
+   "step": 9,
+   "thought": "8 轮取证与提交预算已用完，商品档案匹配和缺失往来单位归因均已有观察依据，无法识别的乱码行保留人工处理。",
+   "tool": null,
+   "forced_final": true,
+   "final": "已完成可修复项的判定并提交：\n\n商品名修复（item_name）：\n- row_index 9「6号电沲」→ 6号电池（id 685，形近错字）\n- row_index 10「可樂」→ 可乐（id 674，繁体写法）\n- row_index 11「方更面」→ 方便面（id 676，形近错字）\n- row_index 12「纸箱儿」→ 纸箱（id 678，口语化后缀）\n- row_index 13「牛批纸」→ 牛皮纸（id 679，同音错字）\n- row_index 14「肥皀」→ 肥皂（id 680，形近错字）\n- row_index 15「螺丝M8」→ 螺丝（id 681，型号 M8×20，规格写进名称）\n\n缺失往来单位补全（party，按商品名+单价历史单据归因）：\n- row_index 16（方便面 44.0）→ 张记便利店\n- row_index 17（可乐 4.0）→ 永辉超市\n- row_index 18（电池 3.5）→ 校园超市\n\n留给人工处理（无法可靠识别，不出 fix）：\n- row_index 19「廿五瓶」矿泉水：数量无法解析，party「永辉」可模糊对应永辉超市，但数量问题非本次可改字段，需人工修正数量。\n- row_index 20「十二个」纸箱：数量无法解析，party「张记」可模糊对应张记便利店，数量需人工修正。\n- row_index 21「六卷」牛皮纸：数量无法解析，party「校园」可模糊对应校园超市，数量需人工修正。\n- row_index 22「？？」、row_index 23「++++」、row_index 24（空商品名/yyy）、row_index 25「@@@@」：商品名与单价均为乱码或空值，档案无任何候选，属无效行，建议人工确认后删除或补录。\n- row_index 26「几箱」矿泉水：数量为中文约数「几箱」无法解析，party「靐齉」无对应档案，需人工确认。\n\n说明：按规则仅修复 item_name 与 party，数量、单价、日期均未改动；所有 value 均来自 find_material / find_party / search_history 的真实观察，未凭空造名。"
+  }
+ ]
+}
