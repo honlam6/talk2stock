@@ -21,6 +21,7 @@
     </div>
     <div class="chat-input-row">
       <textarea id="q" rows="1" placeholder="问经营数据，或直接说要录什么单…"></textarea>
+      <button class="btn btn-ghost" id="mic" title="语音输入">🎙</button>
       <button class="btn btn-primary" id="send">发送</button>
     </div>
   </div>
@@ -398,6 +399,88 @@ log.addEventListener('click', e => {
   const el = e.target.closest('[data-retry]');
   if (el && !busy) doAsk(el.dataset.retry, false);
 });
+
+// ---- 语音输入（Web Speech API）----
+// 可用性三级降级（为什么：语音 API 与 getUserMedia 一样只在安全上下文开放，
+// 公网 HTTP 部署下必须先探明再亮按钮，不能让用户点了才知道不可用）：
+//   1) 浏览器没有 SpeechRecognition → 按钮隐藏；
+//   2) 有 API 但页面非安全上下文（HTTP 部署）→ 置灰，点击弹 toast 指路部署文档；
+//   3) 安全上下文（HTTPS / localhost）→ 正常可用。
+// 详见 docs/语音输入HTTPS部署.md。
+// 已知约束：Chrome 的识别在部分环境走 Google 服务（断网/被墙时报 network 错）；
+// iframe 内嵌 WebView 可能整体不暴露该 API——第 1/2 级探测已覆盖这两种情况。
+const micBtn = $('#mic');
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recBusy = false;   // 防双开：授权弹窗期间再点不会重复 start
+let rec = null;        // 当前识别实例（每次新建不复用：Chrome 复用旧实例有状态残留）
+let micBase = '';      // 录音开始时的输入框内容：识别结果拼在已打字草稿后面，不覆盖
+
+// 录音态复用发送键在飞时的红色停止样式（.chat-input-row .btn.stop，不动 style.css）
+const paintMic = on => {
+  micBtn.textContent = on ? '■' : '🎙';
+  micBtn.classList.toggle('stop', on);
+  micBtn.title = on ? '停止录音' : '语音输入';
+};
+
+if (!SR) {
+  micBtn.style.display = 'none';
+} else if (!window.isSecureContext) {
+  // 置灰但不用 disabled 属性——disabled 元素不派发 click，点上去的提示就弹不出来了；
+  // 用 aria-disabled + 内联灰样式表达同一语义（title 照常显示）。
+  micBtn.setAttribute('aria-disabled', 'true');
+  micBtn.style.opacity = '.45';
+  micBtn.style.cursor = 'not-allowed';
+  micBtn.title = '语音需要 HTTPS 或本地访问（当前页面非安全上下文）';
+  micBtn.onclick = () =>
+    toast('语音输入需要 HTTPS 或本地访问（当前页面非安全上下文）；部署方法见 docs/语音输入HTTPS部署.md', 'warn');
+} else {
+  micBtn.onclick = () => {
+    if (recBusy) { if (rec) try { rec.stop(); } catch (e) { /* 已在收尾 */ } return; }   // 再点 = 停止
+    const r = new SR();
+    rec = r;
+    r.lang = 'zh-CN';
+    r.interimResults = true;   // 边说边出字，所见即所说
+    r.continuous = false;      // 单句模式：停顿即收尾，不一直占着麦
+    micBase = qEl.value;
+    recBusy = true;
+    paintMic(true);
+    r.onresult = ev => {
+      // 发送会把输入框清空：当前值不再以基线开头 → 基线作废，旧草稿不能被拼回来
+      if (micBase && !qEl.value.startsWith(micBase)) micBase = '';
+      let interim = '', finalTxt = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const t = ev.results[i][0].transcript;
+        if (ev.results[i].isFinal) finalTxt += t; else interim += t;
+      }
+      if (finalTxt) micBase += finalTxt;   // 已落定的句子成为后续内容的基线
+      qEl.value = micBase + interim;
+      qEl.dispatchEvent(new Event('input'));   // 走一遍输入框自适应高度
+    };
+    r.onerror = ev => {
+      // no-speech（没出声）/ aborted（正常打断）静默；权限与网络错误要给用户一句话
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+        toast('麦克风权限被拒，请在浏览器允许麦克风后重试', 'bad');
+      } else if (ev.error === 'network') {
+        toast('语音识别服务网络错误，请稍后重试', 'bad');
+      }
+    };
+    r.onend = () => {
+      recBusy = false;
+      rec = null;
+      paintMic(false);
+      qEl.focus({ preventScroll: true });   // 说完直接可改字 / 发送
+    };
+    try {
+      r.start();
+    } catch (e) {
+      // start() 同步抛错时 onend 不会来，这里手动收状态
+      recBusy = false;
+      rec = null;
+      paintMic(false);
+      toast('语音启动失败：' + (e.message || e), 'bad');
+    }
+  };
+}
 
 // ---- 启动：有历史恢复，否则空状态 ----
 if (hist.length) {
