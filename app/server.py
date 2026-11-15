@@ -828,6 +828,11 @@ def api_commit(_q, body):
             habitsmod.record(operator, d, res)
         except Exception:
             pass
+        try:
+            from core import daily as dailymod
+            dailymod.invalidate()
+        except Exception:
+            pass
         # ERP 侧留痕：往 ERP 自带日志模块写一条「谁通过 Talk2Stock 录的单」。
         # 单据 creator 跟写入 token 走（= 服务账号，ERP 机制限制），但日志按
         # userId 展示操作人——成员登录时其 ERP userId 已签进会话令牌。
@@ -891,6 +896,18 @@ def api_daily_report(_q, _body):
     """每日经营日报数据包（图文卡渲染交给前端）。"""
     from core import insight as insmod
     return insmod.daily_report(_erp())
+
+
+def api_daily_agent(_q, _body):
+    """老板日报 agent（P-D）：当日懒触发 + 缓存；仅管理员（老板视角）。"""
+    from core import daily as dailymod
+    return dailymod.morning_report(_erp(), operator=cfgmod.current_username() or "")
+
+
+def api_daily_regenerate(_q, _body):
+    """强制重跑日报 agent（管理员门禁在 _handle 层）。"""
+    from core import daily as dailymod
+    return dailymod.morning_report(_erp(), operator=cfgmod.current_username() or "", force=True)
 
 
 def api_usage(_q, _body):
@@ -1055,6 +1072,8 @@ ROUTES = {
     ("GET", "/api/alerts"): api_alerts,
     ("GET", "/api/insight"): api_insight,
     ("GET", "/api/daily-report"): api_daily_report,
+    ("GET", "/api/daily/agent"): api_daily_agent,
+    ("POST", "/api/daily/regenerate"): api_daily_regenerate,
     ("GET", "/api/usage"): api_usage,
     ("POST", "/api/parse"): api_parse,
     ("POST", "/api/resolve"): api_resolve,
@@ -1265,6 +1284,11 @@ class Handler(BaseHTTPRequestHandler):
             cfgmod.set_request_user(login, role, uname, uid)
             # 管理员门禁：/api/config/* 是共享配置（ERP 连接 + 共享模型档案），
             # 成员在接口层就被拒绝，而不是前端藏一下
+            if path.startswith("/api/daily/") and role != "admin":
+                # 老板日报是老板视角（admin）：成员在接口层被拒，前端据此隐藏卡片
+                self._json({"ok": False, "need_admin": True,
+                            "message": "该接口仅管理员可用（老板日报）"}, 403)
+                return
             if path.startswith("/api/config") and role != "admin":
                 self._json({"ok": False, "need_admin": True,
                             "message": "该接口仅管理员可用（共享配置）"}, 403)

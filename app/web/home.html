@@ -69,6 +69,25 @@
     <div class="marquee-track" id="marqueeTrack"></div>
   </div>
 
+  <!-- 老板日报（P-D：agent 早报，当日懒触发 + 缓存；403 整卡隐藏，401 由 api() 弹登录重试） -->
+  <div class="card mt-4" id="dailyCard" hidden>
+    <h2><span class="bar"></span>老板日报
+      <span class="flex-1"></span>
+      <span class="hint" id="dailyDate"></span>
+      <button class="btn btn-sm btn-ghost" id="dailyRerun" hidden title="重新取证生成（仅管理员）">↻ 强制重跑</button>
+    </h2>
+    <div id="dailyPoints"></div>
+    <div id="dailyDrafts" class="mt-2"></div>
+    <details id="dailyMdWrap" class="mt-2" hidden>
+      <summary class="hint" style="cursor:pointer;user-select:none">日报全文</summary>
+      <pre id="dailyMd" style="white-space:pre-wrap;word-break:break-word;margin:8px 0 0;font-size:13px;line-height:1.7"></pre>
+    </details>
+    <div class="mt-2" id="dailyTrace" hidden>
+      <button class="btn btn-sm btn-ghost" id="dailyTraceBtn">▸ 展开执行轨迹</button>
+      <div id="dailySteps" class="al-steps mt-1" style="display:none"></div>
+    </div>
+  </div>
+
   <!-- 最近录单 + 系统状态 -->
   <div class="two-col mt-4">
     <div class="card mb-0" id="recentCard" hidden>
@@ -224,10 +243,120 @@ async function loadMarquee() {
   } catch (e) { /* 静默：跑马灯只是装饰 */ }
 }
 
+// ---------- 老板日报（P-D：结论卡 + 补货草稿 + 执行轨迹；server 端懒触发 + 当日缓存） ----------
+const DAILY_LABEL = {
+  today_stats: '今日经营', month_stats: '本月经营', debts: '应收应付',
+  low_stock: '库存预警', stock_value: '库存货值', recent_bills: '最近单据',
+  query_bills: '单据明细', sql_query: '只读SQL', submit_verdict: '结论',
+};
+const DAILY_SEV = { warn: ['t-red', '⚠ 注意'], good: ['tag-ok', '✓ 向好'], info: ['tag-new', '• 动态'] };
+
+// 复用 ask.html stepRow 思路：一行「图标 工具(参数) 耗时 ▾」，点击展开思考+观察 JSON（al-* 样式全局可用）
+function dailyStepRow(s) {
+  const row = document.createElement('div');
+  row.className = 'al-step' + (s.ok === false ? ' al-err' : '');
+  const args = s.args && Object.values(s.args).filter(v => v !== '' && v != null).join(' · ');
+  const obs = JSON.stringify(s.observation, null, 1) || '';
+  // 模板单行拼接：块间不留空白，避免空白被渲染成空行
+  row.innerHTML = `<div class="al-hd"><span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span><span class="al-name">${esc(DAILY_LABEL[s.tool] || s.tool)}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}<span class="al-caret" aria-hidden="true">▾</span></div><div class="al-body">${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}<pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre></div>`;
+  row.querySelector('.al-hd').onclick = () => {
+    row.classList.toggle('open');
+    row.querySelector('.al-caret').textContent = row.classList.contains('open') ? '▴' : '▾';
+  };
+  return row;
+}
+
+function renderDaily(r) {
+  $('#dailyCard').hidden = false;
+  $('#dailyDate').textContent = r.date || '';
+  $('#dailyRerun').hidden = false;   // 有日报才有「强制重跑」；403（非管理员）在点击时静默隐藏
+  const sevTag = ([cls, txt]) => `<span class="tag ${cls}">${txt}</span>`;
+  // min-width:0 + white-space:normal：390px 移动端长句可换行，不撑破卡片
+  $('#dailyPoints').innerHTML = (r.points || []).map(p => {
+    const tag = sevTag(DAILY_SEV[p.severity] || DAILY_SEV.info);
+    return '<div class="hist-row" style="min-width:0"><div class="hist-main">' + tag +
+      '<b style="flex:1;min-width:0">' + esc(p.title || '') + '</b></div>' +
+      '<div class="hist-sub" style="white-space:normal">' + esc(p.detail || '') + '</div></div>';
+  }).join('') || '<div class="hint">今天没有特别要说的。</div>';
+  $('#dailyDrafts').innerHTML = (r.suggest_drafts || []).map((d, i) =>
+    '<div class="hist-row" style="min-width:0"><div class="hist-main">' +
+    '<span class="pill pill-ai">补货</span>' +
+    '<b style="flex:1;min-width:0">向 ' + esc(d.party || '？') + ' 补 ' + (d.items || []).length + ' 项</b>' +
+    '<button class="btn btn-sm btn-primary" data-draft="' + i + '">生成采购草稿</button></div>' +
+    '<div class="hist-sub" style="white-space:normal">' +
+    esc((d.items || []).map(it => `${it.name}×${it.qty}${it.unit || ''}`).join('、')) +
+    '</div></div>').join('');
+  const degradedHint = r.degraded ? '<div class="hint mt-1">AI 模型暂不可用，以下为规则统计兜底。</div>' : '';
+  $('#dailyPoints').insertAdjacentHTML('beforebegin', degradedHint);
+  // 补货建议 → /api/resolve 换预览+确认令牌 → showPreview 确认卡；真正写入由
+  // common.js 的确认卡走 /api/commit（与录单同一条闸门），成功后重拉日报
+  $$('#dailyDrafts [data-draft]').forEach(btn => {
+    btn.onclick = async () => {
+      const d = (r.suggest_drafts || [])[+btn.dataset.draft];
+      if (!d) return;
+      btn.disabled = true; btn.textContent = '预览中…';
+      try {
+        const res = await api('/api/resolve', { method: 'POST', body: {
+          draft: { biz: d.biz || 'purchase_in', party: d.party || '', depot: '',
+                   items: (d.items || []).map(it => ({ name: it.name, qty: num(it.qty), unit: it.unit || '个' })) },
+          source: 'ai',
+        } });
+        if (!res.ok) { toast(res.message || '生成预览失败', 'bad'); btn.disabled = false; btn.textContent = '生成采购草稿'; return; }
+        showPreview(res.preview, res.draft, (res2) => {
+          if (res2 && res2.ok) { toast('✓ ' + (res2.message || '补货单已写入')); loadDaily(); }
+          else toast((res2 && res2.message) || '写入失败', 'bad');
+        }, [], { source: 'ai', rawText: '老板日报补货建议' });
+      } catch (e) { toast(e.message, 'bad'); btn.disabled = false; btn.textContent = '生成采购草稿'; }
+    };
+  });
+  // 日报全文折叠 + 执行轨迹
+  const md = r.report_md || '';
+  $('#dailyMdWrap').hidden = !md;
+  $('#dailyMd').textContent = md;
+  const steps = (r.steps || []).filter(s => s.tool);
+  $('#dailyTrace').hidden = !steps.length;
+  const stepsEl = $('#dailySteps');
+  stepsEl.innerHTML = '';
+  steps.forEach(s => stepsEl.appendChild(dailyStepRow(s)));
+  $('#dailyTraceBtn').onclick = () => {
+    const open = stepsEl.style.display === 'none';
+    stepsEl.style.display = open ? '' : 'none';
+    $('#dailyTraceBtn').textContent = open ? '▾ 收起执行轨迹' : '▸ 展开执行轨迹';
+  };
+}
+
+async function loadDaily(rerun) {
+  const card = $('#dailyCard');
+  try {
+    const r = await api(rerun ? '/api/daily/regenerate' : '/api/daily/agent',
+                        rerun ? { method: 'POST' } : undefined);
+    if (!r || r.ok === false) { card.hidden = true; return; }   // 未配模型/数据不可用：不占版面
+    renderDaily(r);
+  } catch (e) {
+    // 403（仅管理员可见）→ 整卡隐藏；401 已由 api() 弹登录框并自动重试
+    if (/管理员/.test(e.message || '')) card.hidden = true;
+    // 登录取消 / 断网等其他失败静默：工作台主体不受影响
+  }
+}
+
+$('#dailyRerun').onclick = async () => {
+  const btn = $('#dailyRerun');
+  btn.disabled = true; btn.textContent = '重跑中…';
+  try {
+    const r = await api('/api/daily/regenerate', { method: 'POST' });
+    if (!r || r.ok === false) toast((r && r.message) || '重跑失败', 'bad');
+    else { renderDaily(r); toast('已重新生成', 'ok'); }
+  } catch (e) {
+    if (/管理员/.test(e.message || '')) btn.hidden = true;   // 非管理员：静默隐藏按钮
+    else toast(e.message, 'bad');
+  }
+  btn.disabled = false; btn.textContent = '↻ 强制重跑';
+};
+
 // ---------- 状态 ----------
 (async () => {
   renderKPISkeleton();      // KPI 先出骨架，数据到了再替换
-  refreshKPI(); refreshHistory(); loadMarquee(); loadAlerts();
+  refreshKPI(); refreshHistory(); loadMarquee(); loadAlerts(); loadDaily();
   try {
     const r = await api('/api/config');
     const cfg = r.config || r;

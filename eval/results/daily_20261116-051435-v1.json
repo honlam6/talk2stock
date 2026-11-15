@@ -1,0 +1,78 @@
+{
+ "summary": {
+  "corpus_version": "daily-v1-20261116",
+  "model": "hy4",
+  "n": 3,
+  "acc": 1.0,
+  "latency_avg_s": 24.94,
+  "tokens_avg": 16424
+ },
+ "results": [
+  {
+   "id": "d1",
+   "type": "general",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "contains_today_numbers": true,
+    "min_points": true,
+    "draft_max": true,
+    "no_fabricated": true
+   },
+   "latency_s": 25.74,
+   "tokens": 15331,
+   "gold_today": [
+    257.0
+   ],
+   "points": 4,
+   "drafts": 1,
+   "degraded": false,
+   "grounded": false,
+   "error": ""
+  },
+  {
+   "id": "d2",
+   "type": "stock_focus",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "contains_today_numbers": true,
+    "min_points": true,
+    "draft_max": true,
+    "no_fabricated": true
+   },
+   "latency_s": 24.92,
+   "tokens": 17108,
+   "gold_today": [
+    257.0
+   ],
+   "points": 3,
+   "drafts": 1,
+   "degraded": false,
+   "grounded": false,
+   "error": ""
+  },
+  {
+   "id": "d3",
+   "type": "debt_focus",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "contains_today_numbers": true,
+    "min_points": true,
+    "draft_max": true,
+    "no_fabricated": true
+   },
+   "latency_s": 24.17,
+   "tokens": 16833,
+   "gold_today": [
+    257.0
+   ],
+   "points": 3,
+   "drafts": 2,
+   "degraded": false,
+   "grounded": false,
+   "error": ""
+  }
+ ]
+}

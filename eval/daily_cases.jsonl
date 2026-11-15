@@ -1,0 +1,4 @@
+{"_comment": "老板日报 agent 冻结语料 v1-20261116。gold 数字不写死在语料里：跑分器当天先调 core.report.official_stats(erp) 动态取 today.sell/today.buy 填 gold（seed_demo 播种的当日数据随日期变化，写死必腐）。前置：当天先跑 seed_demo.py --yes。判定：contains_today_numbers 早报必须引用今日采销实数（归一化容差 0.01）；min_points 至少 3 个点（agent 真在组织内容）；draft_max 补货建议至多 2 条（宁缺勿错上限）；no_fabricated 每个点的数字都能在 steps 的观察 JSON 里找到（复用 core.agent.numeric_grounded 逐 point 校验）。"}
+{"id": "d1", "type": "general", "desc": "日常早报：今日采销 + 欠款 + 库存全景，可给补货建议", "expect": {"contains_today_numbers": true, "min_points": 3, "draft_max": 2, "no_fabricated": true}}
+{"id": "d2", "type": "stock_focus", "desc": "库存紧张日：低库存/负库存优先报，给补货建议（party 来自历史供应商）", "expect": {"contains_today_numbers": true, "min_points": 3, "draft_max": 2, "no_fabricated": true}}
+{"id": "d3", "type": "debt_focus", "desc": "欠款集中日：应收/应付大头要点名，detail 引用观察数字", "expect": {"contains_today_numbers": true, "min_points": 3, "draft_max": 2, "no_fabricated": true}}
