@@ -64,11 +64,17 @@ LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用
    业务表结构已经写在你的上下文里——直接写业务表的 SQL，不要查询
    information_schema（会被拒绝），也不要用 db_schema 逐表探查，除非 SQL
    报错提示字段不存在；SQL 报错就按错误信息改一次，不要放弃。
-7. 只处理工具目录能查的范围（经营数据、系统操作方法）。与此无关的问题
+7. 只处理工具目录能查的范围（经营数据、录单起草、系统操作方法）。与此无关的问题
    （闲聊/天气/常识/写文案等）不要调用任何工具，直接 final：「我只能查本系统
    的进销存数据，比如『可乐还有多少库存』『本月卖了多少』『谁欠我钱』。」
-8. 问答是只读的：用户要求改库存/删单据/录单等写操作时不要调用任何工具，
-   直接 final 说明「问一问只能查询，不能改数据；录单请用对话录单入口」。
+8. 写操作的边界分两种：
+   - 用户要录单/下单/进货/退货（新建单据）：调用 draft_order 工具起草
+     （args.text = 用户的录单原话，口语代词补全成完整描述）。草稿只是预览、
+     绝不会写入系统——final 里告诉用户已起草几张单、请在前端确认卡上核对并
+     确认写入。关键信息缺失（商品/数量/往来单位）也照样起草，预览会标出缺失项，
+     不要编造具体数值。
+   - 改库存/删单据/改已有单据等破坏性请求：不要调用任何工具，直接 final
+     说明「问一问只能查询和起草新单，不能修改或删除已有数据」。
 
 # 用户问题
 {goal}"""
@@ -109,11 +115,14 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
               context_block="", on_event=None):
     """执行一个 agent 会话。返回 {ok, answer, steps, tokens, meta}。
 
-    tools: {name: {"desc": str, "args_hint": str, "run": callable(args) -> (data, note)}}
-           run 必须只读；data 是喂回模型的结构化观察，note 是确定性模板句（接地兜底）。
+    tools: {name: {"desc": str, "args_hint": str, "run": callable(args) -> (data, note[, extra])}}
+           data 是喂回模型的结构化观察，note 是确定性模板句（接地兜底）；
+           第三元素 extra 是给前端的结构化载荷（如草稿确认卡），只走事件不进
+           模型观察——省 token，也防模型把大 JSON 复述进答案。
     on_event: 可选回调 on_event(evt)，SSE 流式前端用——
         {"type":"action","tool":..,"args":..} 决策出要调的工具、执行前推（前端显示"正在查询…"）
         {"type":"step", ...完整 step 记录}  该步执行完、trace 落定后推。
+        {"type":"draft","payload":..}      工具产出了结构化载荷（草稿确认卡）。
     """
     prof = cfgmod.agent_profile()
     if not prof:
@@ -188,11 +197,18 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         _emit(on_event, {"type": "action", "tool": name, "args": args})
         t0 = time.time()
         try:
-            data, note = tool["run"](args)
+            res = tool["run"](args)
+            extra = None
+            if isinstance(res, tuple) and len(res) == 3:
+                data, note, extra = res
+            else:
+                data, note = res
             ok = True
             observations.append(data)
             if note:
                 notes.append(str(note))
+            if isinstance(extra, dict):
+                _emit(on_event, {"type": "draft", "tool": name, "payload": extra})
         except Exception as e:
             data, note, ok = {"error": str(e)[:200]}, None, False
         lat = int((time.time() - t0) * 1000)

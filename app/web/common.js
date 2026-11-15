@@ -1510,7 +1510,7 @@ function trapFocus(container, onEscape) {
 const CMD_ITEMS = [
   { sec: '录单', ico: '✎', t: '对话录单', d: '说一句话，AI 拆成草稿', go: () => '/new?mode=ai' },
   { sec: '录单', ico: '▤', t: '表单录单', d: '逐字段精确控制，不依赖 AI', go: () => '/new?mode=form' },
-  { sec: '经营', ico: '❝', t: '问一问', d: '库存 / 采销 / 欠款，随口问', go: () => '/ask' },
+  { sec: '经营', ico: '❝', t: '智能助手', d: '查账随口问；录单直接说，草稿确认后写入', go: () => '/ask' },
   { sec: '经营', ico: '◫', t: '经营看板', d: '趋势 / 账龄 / 预警，一页看完', go: () => '/dashboard' },
   { sec: '系统', ico: '⚙', t: '设置', d: 'ERP 连接与 AI 模型档案', go: () => '/settings' },
   { sec: '系统', ico: '▦', t: '原版 ERP', d: '新标签页打开 jshERP 本体', go: () => { window.open(ERP_URL, '_blank', 'noopener'); return null; } },
@@ -1558,7 +1558,7 @@ function commandPalette() {
     if (resetSel !== false) sel = 0;
     if (sel >= shown.length) sel = Math.max(0, shown.length - 1);
     if (!shown.length) {
-      list.innerHTML = '<div class="cmdk-empty">没有匹配的命令<br><span style="font-size:12.5px">试试「看板」「录单」「问一问」</span></div>';
+      list.innerHTML = '<div class="cmdk-empty">没有匹配的命令<br><span style="font-size:12.5px">试试「看板」「录单」「智能助手」</span></div>';
       return;
     }
     let html = '', lastSec = '';
@@ -1648,7 +1648,7 @@ document.addEventListener('keydown', e => {
 const NAV_ITEMS = [
   ['/', '工作台', '⌂'],
   ['/new', '录单', '✎'],
-  ['/ask', '问一问', '❝'],
+  ['/ask', '智能助手', '❝'],
   ['/dashboard', '经营看板', '◫'],
   ['/settings', '设置', '⚙'],
 ];

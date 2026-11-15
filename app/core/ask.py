@@ -19,13 +19,15 @@
 """
 import re
 import time
+import uuid
 
 from . import config as cfgmod
 from . import dbread as dbmod
+from . import draft as draftmod
 from .report import official_stats, recent_bills as _rb, stock_overview, summary
 from .erp import get_client, parallel
 
-PROMPT_VERSION = "ask-v7-20261109"   # v7: 步数预算 6→4（专用工具 1~2 步即答）+ 歧义候选不许 SQL 合并 + recent_bills 非全量语义（F11）
+PROMPT_VERSION = "ask-v8-20261116"   # v8: supervisor 化——draft_order 起草工具上线（写意图路由到草稿预览，写入仍过 HMAC 闸门，ADR-10）
 
 # --------------------------------------------------------------------------
 # 第 1 层：规则直答（0 token）。只收录无参数的统计意图，带参数的查询
@@ -348,6 +350,72 @@ _RULE_TOOLS = {
 }
 
 
+# --------------------------------------------------------------------------
+# supervisor 写路由（ADR-10）：录单/下单需求 → 起草单据草稿。
+# 写权限边界在这里划死：本函数绝不写库，只产出「预览 + 逐单确认令牌」；
+# 令牌与对话录单共用同一闸门（gate.issue，与草稿内容哈希绑定），真正写入
+# 必须由用户在确认卡上确认（/api/commit 校验令牌）——agent 自主性到草稿为止。
+# --------------------------------------------------------------------------
+DRAFT_TEXT_MAX = 1000   # 与多单解析口径一致（「；」分段一段话多单）
+# 草稿工具只管「新建」：改/删/调整类请求即使模型误路由也在这里拦下（防把
+# 「把可乐库存改成999」解析成一张出货 999 的单——工具层护栏，不信任 prompt 单层约束）
+_DRAFT_DENY = re.compile(r"改|删|修改|更新|作废|冲销|调整|撤销|红冲")
+
+
+def _draft_order(args, erp):
+    text = str(args.get("text") or "").strip()
+    if not text:
+        return ({"error": "缺少 text 参数（用户的录单原话）"},
+                "draft_order 需要 text 参数：把用户的录单需求原话传进来。")
+    if _DRAFT_DENY.search(text):
+        return ({"refused": "modification_not_supported", "text": text},
+                "起草工具只能新建单据，不能修改或删除已有数据——请向用户说明。")
+    if len(text) > DRAFT_TEXT_MAX:
+        return ({"error": "内容过长（%d 字，上限 %d）" % (len(text), DRAFT_TEXT_MAX)},
+                "录单内容太长（上限 %d 字），请让用户分次录入。" % DRAFT_TEXT_MAX)
+    from . import llm as llmmod
+    try:
+        drafts, meta = llmmod.parse(text, erp)
+    except Exception as e:
+        return ({"error": "解析失败：%s" % str(e)[:120]}, "单据解析失败：%s" % str(e)[:120])
+    if not drafts:
+        return ({"parsed": False, "text": text},
+                "这段话里没有识别出可起草的单据——请向用户确认要录什么。")
+    batch_id = uuid.uuid4().hex[:12]
+    bills = draftmod.prepare_bills(drafts, meta, erp, "ai", text, batch_id)
+    rows = []
+    for b in bills:
+        d, pv = b["draft"], b["preview"]
+        items = []
+        for it, pvit in zip(d.get("items") or [], (pv.get("items") or [])):
+            items.append({"name": it.get("name"), "qty": it.get("qty"),
+                          "unit": it.get("unit"), "price": it.get("price"),
+                          "matched": (pvit.get("matched_name") or it.get("name") or "")})
+        rows.append({
+            "biz": draftmod.BIZ_LABEL.get(d.get("biz"), d.get("biz") or ""),
+            "party": d.get("party") or "", "depot": d.get("depot") or "",
+            "items": items,
+            "total": pv.get("total"),
+            "missing_price_lines": sum(1 for x in (pv.get("items") or []) if x.get("price_missing")),
+            "warnings": pv.get("warnings") or [],
+            "errors": pv.get("errors") or [],
+        })
+    cl = meta.get("clarify") if isinstance(meta.get("clarify"), dict) else None
+    data = {"drafts": len(bills), "bills": rows, "written": False,
+            "needs_user_confirm": True}
+    if cl:
+        data["clarify"] = cl.get("question", "")
+    note = ("已起草 %d 张单据草稿（仅预览，未写入系统）：%s。请告诉用户在确认卡上核对"
+            "内容并确认写入；有缺失项的草稿请提醒用户补全。" % (
+                len(bills),
+                "；".join("%s %s %d行" % (r["biz"], r["party"] or "？", len(r["items"])) for r in rows)))
+    if cl:
+        note = note + "待补信息：" + str(cl.get("question") or "")
+    extra = {"batch_id": batch_id, "bills": bills,
+             "meta": draftmod.meta_public(meta), "raw_text": text}
+    return data, note, extra
+
+
 def _tools(erp):
     """构造 agent 工具注册表（全部只读）。"""
     def bind(fn):
@@ -384,6 +452,9 @@ def _tools(erp):
         "db_schema": {"desc": "看某张表的全部字段与取值样本（写 SQL 前不确定字段/枚举值先查它）",
                       "args_hint": '{"table":"表名，如 jsh_supplier"}',
                       "run": lambda a: dbmod.db_schema(a)},
+        "draft_order": {"desc": "用户要录单/下单/进货/退货时，把需求起草成单据草稿（只出预览绝不写库，写入由用户在确认卡上确认）",
+                        "args_hint": '{"text":"用户的录单原话（把口语代词补全成完整描述，如「给永辉卖50瓶可乐单价3块5」）"}',
+                        "run": lambda a: _draft_order(a, erp)},
     }
 
 
@@ -391,15 +462,19 @@ def _tools(erp):
 # 入口：三层递进
 # --------------------------------------------------------------------------
 def ask(text, erp=None, on_event=None):
-    """只读问答。返回 {ok, answer, tool, route, steps, tokens, meta}。
-    on_event：SSE 流式回调——规则直答发一条 step，agent loop 发 action/step 序列。"""
+    """问答 + 起草。返回 {ok, answer, tool, route, steps, tokens, meta, drafts}。
+    on_event：SSE 流式回调——规则直答发一条 step，agent loop 发 action/step 序列；
+    draft 事件（草稿确认卡载荷）同时收集进返回值 drafts，一次性接口也能拿到。"""
     erp = erp or get_client()
     prof = cfgmod.agent_profile()
     if not prof:
         return {"ok": False, "message": "尚未配置 AI 模型，请先在「设置」里添加。"}
     meta = {"model": prof.get("model", ""), "prompt_version": PROMPT_VERSION}
+    draft_events = []   # draft_order 产出的确认卡载荷（前端渲染确认卡用）
 
     def _emit(evt):
+        if evt.get("type") == "draft":
+            draft_events.append(evt.get("payload") or {})
         if on_event:
             try:
                 on_event(evt)
@@ -418,15 +493,17 @@ def ask(text, erp=None, on_event=None):
                "args": args, "ok": True, "observation": data}
         _emit({"type": "step", "step": rec})
         return {"ok": True, "tool": tool, "answer": tpl, "data": data,
-                "route": "rule", "grounded": True, "meta": meta,
+                "route": "rule", "grounded": True, "meta": meta, "drafts": [],
                 "steps": [rec],
                 "tokens": {"prompt": 0, "completion": 0, "estimated": False}}
 
     # ---- 第 2 层：agent loop（多步取证 + 第 3 层接地兜底在 loop 内）----
+    # 事件统一走 _emit：draft 载荷既转发给流式前端，也收集进返回值 drafts
+    # （一次性接口 /api/ask 没有 SSE，靠返回值把确认卡带给前端）。
     from . import agent as agentmod
     out = agentmod.run_agent(text + _compound_hints(text), _tools(erp),
                              max_steps=6, context_block=_context(erp),
-                             on_event=on_event)
+                             on_event=_emit)
     if not out.get("ok"):
         out["meta"] = meta
         return out
@@ -442,4 +519,5 @@ def ask(text, erp=None, on_event=None):
         "steps": out.get("steps", []),
         "tokens": out.get("tokens", {}),
         "meta": dict(out.get("meta") or {}, **meta),
+        "drafts": draft_events,
     }

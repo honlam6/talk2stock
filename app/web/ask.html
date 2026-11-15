@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>问一问 · Talk2Stock</title>
+<title>智能助手 · Talk2Stock</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -17,10 +17,11 @@
       <span class="tag tag-new" style="cursor:pointer" data-q="今天卖了多少？">今天卖了多少？</span>
       <span class="tag tag-new" style="cursor:pointer" data-q="谁欠我钱？">谁欠我钱？</span>
       <span class="tag tag-new" style="cursor:pointer" data-q="什么货快没了？">什么货快没了？</span>
+      <span class="tag tag-blue" style="cursor:pointer" data-q="给永辉超市卖50瓶可乐，单价3块5">给永辉超市卖50瓶可乐，单价3块5</span>
     </div>
     <div class="chat-input-row">
-      <textarea id="q" rows="1" placeholder="问一句经营数据…"></textarea>
-      <button class="btn btn-primary" id="send">提问</button>
+      <textarea id="q" rows="1" placeholder="问经营数据，或直接说要录什么单…"></textarea>
+      <button class="btn btn-primary" id="send">发送</button>
     </div>
   </div>
 </div>
@@ -28,7 +29,7 @@
 <script src="/common.js"></script>
 <script>
 shell('/ask');
-$('#ph').innerHTML = pageHead('ASK', '问一问', '库存 / 采销 / 欠款，随口问，答案带数据来源');
+$('#ph').innerHTML = pageHead('ASK', '智能助手', '库存 / 采销 / 欠款随口问；录单直接说，草稿确认后写入');
 
 const log = $('#log');
 const qEl = $('#q');
@@ -54,8 +55,8 @@ function emptyState() {
   d.innerHTML = `
     <div class="ah-ico">❝</div>
     <div class="ah-t">问一句，就对账</div>
-    <div class="ah-d">库存余量 · 今日 / 本月采销 · 谁欠谁钱 · 哪些货快没了 · 库存值多少钱</div>
-    <div class="ah-note">所有回答只读 · 数字实时取自 ERP</div>`;
+    <div class="ah-d">库存余量 · 采销统计 · 谁欠谁钱 · 直接送货下单也能说</div>
+    <div class="ah-note">查账只读 · 录单先出草稿、确认后才写入 · 数字实时取自 ERP</div>`;
   log.appendChild(d);
 }
 
@@ -119,6 +120,7 @@ const TOOL_LABEL = {
   stock_query: '库存查询', low_stock: '库存预警',
   today_stats: '今日经营', month_stats: '本月经营',
   debts: '应收应付', recent_bills: '最近单据', stock_value: '库存货值',
+  draft_order: '起草单据',
   agent: 'agent 多步取证',
 };
 // 进行时文案（SSE action 事件到达瞬间即显示，不等执行完）
@@ -126,7 +128,7 @@ const TOOL_VERB = {
   stock_query: '正在查询库存', low_stock: '正在扫描库存预警',
   today_stats: '正在调取今日经营', month_stats: '正在调取本月经营',
   debts: '正在核算应收应付', recent_bills: '正在翻最近单据',
-  stock_value: '正在估算库存货值',
+  stock_value: '正在估算库存货值', draft_order: '正在起草单据草稿',
 };
 
 const fmtTok = t => t >= 10000 ? (t / 1000).toFixed(1) + 'k' : String(t);
@@ -186,11 +188,45 @@ function botShell() {
   };
 }
 
+// ---- 草稿确认卡（draft_order 产出）：对话流里的轻量摘要 + 「确认写入」入口 ----
+// 真正的确认/改数/逐单提交在 showMultiPreview（与对话录单同一套 UI、同一个闸门），
+// 这里只展示摘要；写入回执就地落一条。注意：.msg 有 pre-wrap，模板必须单行拼接。
+function draftCard(payload, quiet) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ask-draft';
+  const bills = payload.bills || [];
+  const rows = bills.map((b, i) => {
+    const d = b.draft || {};
+    const biz = (BIZ[d.biz] || {}).label || d.biz || '?';
+    const items = d.items || [];
+    const total = items.reduce((t, it) => t + num(it.qty) * num(it.price), 0);
+    const bad = (b.preview && (b.preview.errors || []).length) ? ' <span class="tag tag-new">有缺项</span>' : '';
+    return `<div class="ad-row"><b>#${i + 1} ${esc(biz)}</b><span>${esc(d.party || '？')} · ${items.length} 行</span><span class="ad-amt">￥${money(total)}</span>${bad}</div>`;
+  }).join('');
+  wrap.innerHTML = `<div class="ad-hd">🗒 已起草 ${bills.length} 张单据草稿<span class="ad-sub">（仅预览未写入，确认后才入库）</span></div>${rows}<div class="ad-btns"><button class="btn btn-primary" data-draft-open>确认并写入</button><span class="hint">卡片上可改数；写入前逐单校验令牌</span></div><div class="ad-res"></div>`;
+  wrap.querySelector('[data-draft-open]').onclick = () => {
+    showMultiPreview(bills, {
+      source: 'ai',
+      rawText: payload.raw_text || '',
+      onClose: bills2 => {
+        const okN = (bills2 || []).filter(b => b.state === 'committed').length;
+        const resEl = wrap.querySelector('.ad-res');
+        if (okN) {
+          resEl.innerHTML = `<span class="tag tag-ok">✓ ${okN} 张已写入 ERP</span>`;
+          if (!quiet) { hist.push({ t: 'r', m: `✓ ${okN} 张单据经助手草稿确认写入` }); saveHist(); }
+        }
+      },
+    });
+  };
+  return wrap;
+}
+
 // 收尾渲染：live 行移除、答案落位、徽章 + 数据来源；quiet=true 用于历史恢复（不滚动不记账）
-function finalizeOn(shell, r, quiet) {
+function finalizeOn(shell, r, quiet, drafts) {
   shell.liveRow.remove();
   shell.bodyEl.innerHTML = '';
   shell.bodyEl.textContent = r.answer || '（无回答）';
+  (drafts || []).forEach(p => shell.bodyEl.appendChild(draftCard(p, quiet)));
   const head = document.createElement('div');
   head.className = 'al-head';
   head.innerHTML = badgeLine(r);
@@ -203,7 +239,7 @@ function finalizeOn(shell, r, quiet) {
   }
   if (!quiet) {
     shell.msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    hist.push({ t: 'b', r: slimResult(r) });
+    hist.push({ t: 'b', r: slimResult(r), d: drafts || [] });
     saveHist();
     qEl.focus({ preventScroll: true });
   }
@@ -246,6 +282,7 @@ async function doAsk(q, fromInput) {
   ctrl = new AbortController();
   let gotAny = false;       // 是否收到过任何 SSE 事件（决定能否安全降级）
   let done = false;
+  let drafts = [];          // 流式收到的草稿载荷（done 事件里也会带，两处取其一）
   const touch = () => {
     clearTimeout(watchdog);
     watchdog = setTimeout(() => { if (ctrl) ctrl.abort(); }, 90000);
@@ -288,10 +325,15 @@ async function doAsk(q, fromInput) {
         if (ev.type === 'action') {
           shell.liveRow.classList.remove('hidden');
           shell.liveTxt.textContent = (TOOL_VERB[ev.tool] || '正在调用 ' + (TOOL_LABEL[ev.tool] || ev.tool)) + '…';
+        } else if (ev.type === 'draft') {
+          drafts.push(ev.payload || {});
+          shell.liveRow.classList.remove('hidden');
+          shell.liveTxt.textContent = '草稿已出，等模型收尾…';
         } else if (ev.type === 'step') {
           paintStep(ev.step);
         } else if (ev.type === 'done') {
-          finalizeOn(shell, ev.result || {});
+          const r = ev.result || {};
+          finalizeOn(shell, r, false, (r.drafts && r.drafts.length) ? r.drafts : drafts);
           done = true;
         } else if (ev.type === 'error') {
           throw new Error(ev.message || '查询失败');
@@ -319,7 +361,7 @@ async function doAsk(q, fromInput) {
           addErr(r.message || '查询失败', q);
         } else {
           (r.steps || []).filter(s => s.tool).forEach(s => shell.stepsEl.appendChild(stepRow(s)));
-          finalizeOn(shell, r);
+          finalizeOn(shell, r, false, r.drafts || []);
         }
       } catch (e2) {
         shell.msg.remove();
@@ -363,11 +405,12 @@ if (hist.length) {
   hist.forEach(m => {
     if (m.t === 'u') add('user', m.q, true);
     else if (m.t === 'e') log.appendChild(errBubble(m.m, m.q));
+    else if (m.t === 'r') add('bot', m.m, true);
     else if (m.t === 'b') {
       const shell = botShell();
       log.appendChild(shell.msg);
       (m.r.steps || []).filter(s => s.tool).forEach(s => shell.stepsEl.appendChild(stepRow(s)));
-      finalizeOn(shell, m.r, true);
+      finalizeOn(shell, m.r, true, m.d || []);
     }
   });
   const last = log.lastElementChild;

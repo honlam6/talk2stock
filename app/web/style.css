@@ -1579,3 +1579,12 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
   .cam-btn { width: 44px; height: 44px; bottom: 12px; }
   .imp-summary { gap: 10px; }
 }
+
+/* ---- 智能助手草稿确认卡（draft_order：对话流里的摘要 + 确认入口） ---- */
+.ask-draft { border: 1px solid var(--paper-3); border-left: 3px solid var(--gold); border-radius: 10px; padding: 10px 12px; margin: 10px 0 4px; background: var(--gold-bg); }
+.ad-hd { font-weight: 700; font-size: 13px; }
+.ad-sub { font-weight: 400; color: var(--text-3); font-size: 12px; margin-left: 4px; }
+.ad-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; font-size: 13px; color: var(--text-2); }
+.ad-amt { margin-left: auto; font-weight: 700; white-space: nowrap; }
+.ad-btns { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.ad-res { margin-top: 6px; }

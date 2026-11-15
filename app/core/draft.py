@@ -17,6 +17,7 @@ Draft 结构（前后端统一契约）：
 """
 import time
 
+from . import gate as gatemod
 from .erp import BILL_TYPES, get_client
 
 BIZ_LABEL = {
@@ -335,3 +336,43 @@ def commit(draft, erp=None, auto_create=True):
         return res
     except Exception as e:
         return {"ok": False, "message": str(e), "created": created}
+
+
+# --------------------------------------------------------------------------
+# 解析产物 → 确认载荷：AI 解析 / 问一问起草 / 表格导入共用的「逐单签令牌」管线。
+# 放进 core 层是因为问一问的 draft_order 工具也要走同一份实现——agent 起草
+# 与对话录单必须是同一个确认契约（同一闸门、同一令牌、同一审计形状）。
+# --------------------------------------------------------------------------
+
+def confirm_meta(source, raw_text="", model="", extra=None):
+    """签发确认令牌时随令牌保存的审计上下文。"""
+    meta = {"source": source, "raw_text": raw_text or "", "model": model or ""}
+    meta.update(gatemod.prompt_fingerprint())
+    meta.update(extra or {})
+    return meta
+
+
+def prepare_bills(drafts, meta, erp, source, raw_text, batch_id=""):
+    """llm.parse / parse_images 产出的草稿数组 → bills[]：逐单 resolve + 签发独立令牌。
+
+    每单一个令牌（与单内容哈希绑定）——批量确认时逐单过闸门，篡改哪单拒哪单，
+    C1-C4 不变量在批量语义下原样成立。"""
+    bills = []
+    for i, d in enumerate(drafts):
+        preview = resolve(d, erp)
+        bm = (meta.get("bills") or [{}])[i] or {}
+        preview["ai"] = {"confidence": bm.get("confidence", ""),
+                         "note": bm.get("note", ""), "problems": bm.get("problems", [])}
+        m = confirm_meta(source, raw_text, model=meta.get("model", ""),
+                         extra={"draft_resolved": d, "profile": meta.get("profile", ""),
+                                "revision": bool(meta.get("revision")),
+                                "bill_index": i, "batch_id": batch_id})
+        preview["confirm_token"] = gatemod.issue(d, m)
+        bills.append({"draft": d, "preview": preview, "confirm_token": preview["confirm_token"]})
+    return bills
+
+
+def meta_public(meta):
+    """回给前端的解析 meta（裁掉内嵌 drafts / raw，避免响应膨胀）。"""
+    return {k: meta.get(k) for k in ("model", "profile", "confidence", "note",
+                                     "problems", "count", "revision")}

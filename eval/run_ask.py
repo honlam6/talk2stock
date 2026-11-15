@@ -31,7 +31,12 @@ from core.erp import get_client      # noqa: E402
 
 CASES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ask_cases.jsonl")
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
-CORPUS_VERSION = "ask-v1-20261109"
+CORPUS_VERSION = "ask-v1-20261109"   # --corpus 指定其他语料时按文件名口径
+
+
+def _is_comment(obj):
+    """注释行（{"_comment": ...}）不作为用例。"""
+    return isinstance(obj, dict) and obj and all(str(k).startswith("_") for k in obj)
 
 
 def _numbers(text):
@@ -71,6 +76,11 @@ def score_case(case, r):
         checks["min_tools"] = len(used_tools) >= e["min_tools"]
     if e.get("tools_any"):
         checks["tools_any"] = any(t in (e["tools_any"] or []) for t in used_tools)
+    if e.get("has_drafts"):
+        checks["has_drafts"] = len(r.get("drafts") or []) >= e["has_drafts"]
+    if e.get("min_draft_bills"):
+        nb = sum(len((p or {}).get("bills") or []) for p in (r.get("drafts") or []))
+        checks["min_draft_bills"] = nb >= e["min_draft_bills"]
     if e.get("route") == "agent" and r.get("ok"):
         checks["grounded"] = r.get("grounded") is True
     return all(checks.values()), checks
@@ -79,15 +89,26 @@ def score_case(case, r):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--type", choices=["rule", "agent", "compound", "boundary", "all"], default="all")
+    ap.add_argument("--type", choices=["rule", "agent", "compound", "boundary", "draft", "all"], default="all")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--corpus", default=CASES_PATH, help="语料文件（默认冻结 v1.2；v2 传 eval/ask_cases_v2.jsonl）")
     args = ap.parse_args()
 
-    cases = [json.loads(l) for l in open(CASES_PATH, encoding="utf-8") if l.strip() and not l.startswith('{"_comment')]
+    corpus_path = args.corpus if os.path.isabs(args.corpus) else \
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.basename(args.corpus))
+    cases = []
+    for l in open(corpus_path, encoding="utf-8"):
+        if not l.strip():
+            continue
+        obj = json.loads(l)
+        if _is_comment(obj):
+            continue
+        cases.append(obj)
     if args.type != "all":
         cases = [c for c in cases if c["type"] == args.type]
     if args.limit:
         cases = cases[:args.limit]
+    corpus_version = os.path.splitext(os.path.basename(corpus_path))[0]
 
     prof = cfgmod.active_profile()
     if not prof:
@@ -118,16 +139,16 @@ def main():
     n = len(results)
     passed = [r for r in results if r["ok"]]
     lats = [r["latency_s"] for r in results]
-    agent_lats = [r["latency_s"] for r in results if r["type"] in ("agent", "compound", "boundary")]
-    toks_list = [r["tokens"] for r in results if r["type"] in ("agent", "compound", "boundary")]
+    agent_lats = [r["latency_s"] for r in results if r["type"] in ("agent", "compound", "boundary", "draft")]
+    toks_list = [r["tokens"] for r in results if r["type"] in ("agent", "compound", "boundary", "draft")]
     by_type = {}
-    for t in ("rule", "agent", "compound", "boundary"):
+    for t in ("rule", "agent", "compound", "boundary", "draft"):
         rows = [r for r in results if r["type"] == t]
         if rows:
             by_type[t] = round(sum(1 for r in rows if r["ok"]) / len(rows), 3)
 
     summary = {
-        "corpus_version": CORPUS_VERSION, "model": "hy4", "n": n,
+        "corpus_version": corpus_version, "model": "hy4", "n": n,
         "acc": round(len(passed) / n, 4) if n else 0,
         "by_type": by_type,
         "route_acc": round(sum(1 for r in results if r.get("checks", {}).get("route", True)) / n, 3) if n else 0,

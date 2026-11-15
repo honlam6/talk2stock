@@ -418,42 +418,16 @@ def api_master(_q, _body):
     }
 
 
-def _confirm_meta(source, raw_text="", model="", extra=None):
-    """签发确认令牌时随令牌保存的审计上下文。"""
-    meta = {"source": source, "raw_text": raw_text or "", "model": model or ""}
-    meta.update(gatemod.prompt_fingerprint())
-    meta.update(extra or {})
-    return meta
+# 签令牌 / 批量预览管线在 core/draft.py：问一问的 draft_order 起草工具与
+# 对话录单共用同一份实现——同一个闸门、同一种令牌、同一种审计形状。
+_confirm_meta = draftmod.confirm_meta
+_parse_to_bills = draftmod.prepare_bills
+_bill_meta_public = draftmod.meta_public
 
 
 MAX_PARSE_CHARS = 1000   # 多单契约放宽：一段话多单（；分单）允许更长，但仍拒绝整篇文章
 MAX_IMAGES = 4           # 单次识别图片上限（一次调用带全部图，token 一次花完）
 MAX_IMG_BYTES = 8 * 1024 * 1024
-
-
-def _parse_to_bills(drafts, meta, erp, source, raw_text, batch_id=""):
-    """llm.parse / parse_images 产出的草稿数组 → bills[]：逐单 resolve + 签发独立令牌。
-    每单一个令牌（与单内容哈希绑定）——批量确认时逐单过闸门，篡改哪单拒哪单，
-    C1-C4 不变量在批量语义下原样成立。"""
-    bills = []
-    for i, d in enumerate(drafts):
-        preview = draftmod.resolve(d, erp)
-        bm = (meta.get("bills") or [{}])[i] or {}
-        preview["ai"] = {"confidence": bm.get("confidence", ""),
-                         "note": bm.get("note", ""), "problems": bm.get("problems", [])}
-        m = _confirm_meta(source, raw_text, model=meta.get("model", ""),
-                          extra={"draft_resolved": d, "profile": meta.get("profile", ""),
-                                 "revision": bool(meta.get("revision")),
-                                 "bill_index": i, "batch_id": batch_id})
-        preview["confirm_token"] = gatemod.issue(d, m)
-        bills.append({"draft": d, "preview": preview, "confirm_token": preview["confirm_token"]})
-    return bills
-
-
-def _bill_meta_public(meta):
-    """回给前端的解析 meta（裁掉内嵌 drafts / raw，避免响应膨胀）。"""
-    return {k: meta.get(k) for k in ("model", "profile", "confidence", "note",
-                                     "problems", "count", "revision")}
 
 
 def api_parse(_q, body):
