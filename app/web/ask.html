@@ -10,6 +10,21 @@
 <div class="wrap">
   <div id="ph"></div>
 
+  <!-- 经营速览（原工作台并入）：KPI 条 + 预警一行 + 老板日报折叠卡——全部只读 -->
+  <section class="ask-brief" id="brief">
+    <div class="ask-kpis" id="kpis"></div>
+    <div id="alertBar"></div>
+    <details class="daily-brief" id="dailyBrief" hidden>
+      <summary>
+        <span class="db-ico">📋</span><span class="db-title">今日经营速览</span>
+        <span class="db-date" id="dailyDate"></span>
+        <span class="db-count" id="dailyCount"></span>
+        <span class="db-caret" aria-hidden="true">▾</span>
+      </summary>
+      <div class="daily-body" id="dailyBody"></div>
+    </details>
+  </section>
+
   <div class="chat-wrap">
     <div class="chat-log" id="log" role="log" aria-live="polite"></div>
     <div class="ask-samples" id="askSamples">
@@ -19,8 +34,15 @@
       <span class="tag tag-new" style="cursor:pointer" data-q="什么货快没了？">什么货快没了？</span>
       <span class="tag tag-blue" style="cursor:pointer" data-q="给永辉超市卖50瓶可乐，单价3块5">给永辉超市卖50瓶可乐，单价3块5</span>
     </div>
+    <!-- 录入类工具收进助手（不再单列入口）：跳到录入页对应模式 -->
+    <div class="ask-toolbar" id="askTools">
+      <a class="tool-chip" href="/new?mode=import" title="Excel / CSV 批量导入"><span class="tc-ico">▦</span>表格导入</a>
+      <a class="tool-chip" href="/new?mode=ai" title="拍照 / 粘贴图片录入"><span class="tc-ico">📷</span>拍照录入</a>
+      <a class="tool-chip" href="/new?mode=form" title="逐字段表单录入"><span class="tc-ico">▤</span>表单模式</a>
+      <span class="tc-note">写库仍须在确认卡上确认</span>
+    </div>
     <div class="chat-input-row">
-      <textarea id="q" rows="1" placeholder="问经营数据，或直接说要录什么单…"></textarea>
+      <textarea id="q" rows="1" placeholder="问数据，或说要录的单…"></textarea>
       <button class="btn btn-ghost" id="mic" title="语音输入">🎙</button>
       <button class="btn btn-primary" id="send">发送</button>
     </div>
@@ -30,12 +52,138 @@
 <script src="/common.js"></script>
 <script>
 shell('/ask');
-$('#ph').innerHTML = pageHead('ASK', '智能助手', '库存 / 采销 / 欠款随口问；录单直接说，草稿确认后写入');
+$('#ph').innerHTML = pageHead('ASK', '智能助手', '查账随口问 · 录单直接说 · 表格/拍照导入都在这里 · 草稿确认后写入');
 
 const log = $('#log');
 const qEl = $('#q');
 const sendBtn = $('#send');
 const samplesEl = $('#askSamples');
+
+// ==========================================================================
+// 经营速览（原工作台并入助手页）：KPI 条 + 预警一行 + 老板日报折叠卡
+// 原则：只读、可折叠、失败静默——任何一块拉取失败都不影响对话主体
+// ==========================================================================
+const KPI_SLOTS = [['g', '今日销售'], ['b', '今日采购'], ['r', '应收欠款'], ['b', '库存预警']];
+
+function renderKPI(d) {
+  const el = $('#kpis');
+  if (!d || d.ok === false) { el.innerHTML = ''; return; }
+  const t = d.today || {}, st = d.stock || {};
+  const warnN = (st.negative || 0) + (st.low || 0);
+  el.innerHTML = `
+    <a class="ask-kpi g" href="/dashboard"><span class="ak-l">今日销售</span><span class="ak-v">￥${money(t.sell)}</span><span class="ak-s">${t.sell_n || 0} 笔</span></a>
+    <a class="ask-kpi b" href="/dashboard"><span class="ak-l">今日采购</span><span class="ak-v">￥${money(t.buy)}</span><span class="ak-s">${t.buy_n || 0} 笔</span></a>
+    <a class="ask-kpi r" href="/dashboard"><span class="ak-l">应收欠款</span><span class="ak-v">￥${money(d.debt_recv_total)}</span><span class="ak-s">${(d.debt_recv || []).length ? '最多：' + esc(d.debt_recv[0].name) : '暂无欠款'}</span></a>
+    <a class="ask-kpi ${warnN > 0 ? 'r' : 'g'}" href="/dashboard"><span class="ak-l">库存预警</span><span class="ak-v">${warnN}</span><span class="ak-s">负 ${st.negative || 0} · 低 ${st.low || 0}</span></a>`;
+}
+async function loadKPI() {
+  try { renderKPI(await api('/api/dashboard?lite=1')); } catch (e) { /* 静默 */ }
+}
+
+// 主动预警（零 LLM 规则层）：有异常才渲染一行，点击进看板
+async function loadAlerts() {
+  const el = $('#alertBar');
+  try {
+    const r = await api('/api/alerts');
+    const list = (r.ok && r.alerts || []).slice(0, 2);
+    if (!list.length) return;
+    const hasWarn = list.some(a => a.level === 'warn');
+    el.innerHTML = `<a class="alert-bar ask-alert" href="/dashboard"><span class="ab-ico">${hasWarn ? '⚠' : '📣'}</span><span class="ab-lines">${list.map(a => `<span class="ab-line ${a.level}">${esc(a.text)}</span>`).join('')}</span><span class="ab-more">看板 →</span></a>`;
+  } catch (e) { /* 静默 */ }
+}
+
+// 老板日报（P-D）：折叠态只占一行；展开看关注点/补货建议/执行轨迹
+const DAILY_LABEL = {
+  today_stats: '今日经营', month_stats: '本月经营', debts: '应收应付',
+  low_stock: '库存预警', stock_value: '库存货值', recent_bills: '最近单据',
+  query_bills: '单据明细', sql_query: '只读SQL', submit_verdict: '结论',
+};
+const DAILY_SEV = { warn: ['t-red', '⚠ 注意'], good: ['tag-ok', '✓ 向好'], info: ['tag-new', '• 动态'] };
+
+function dailyStepRow(s) {
+  const row = document.createElement('div');
+  row.className = 'al-step' + (s.ok === false ? ' al-err' : '');
+  const args = s.args && Object.values(s.args).filter(v => v !== '' && v != null).join(' · ');
+  const obs = JSON.stringify(s.observation, null, 1) || '';
+  row.innerHTML = `<div class="al-hd"><span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span><span class="al-name">${esc(DAILY_LABEL[s.tool] || s.tool)}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}<span class="al-caret" aria-hidden="true">▾</span></div><div class="al-body">${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}<pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre></div>`;
+  row.querySelector('.al-hd').onclick = () => {
+    row.classList.toggle('open');
+    row.querySelector('.al-caret').textContent = row.classList.contains('open') ? '▴' : '▾';
+  };
+  return row;
+}
+
+function renderDailyBrief(r) {
+  const brief = $('#dailyBrief');
+  brief.hidden = false;
+  $('#dailyDate').textContent = r.date || '';
+  const pts = r.points || [];
+  $('#dailyCount').textContent = pts.length ? `${pts.length} 个关注点` : '暂无';
+  const sevTag = ([cls, txt]) => `<span class="tag ${cls}">${txt}</span>`;
+  const rows = pts.map(p => {
+    const tag = sevTag(DAILY_SEV[p.severity] || DAILY_SEV.info);
+    return '<div class="db-row"><div class="db-row-hd">' + tag + '<b>' + esc(p.title || '') + '</b></div>' +
+      '<div class="db-row-d">' + esc(p.detail || '') + '</div></div>';
+  }).join('');
+  const drafts = (r.suggest_drafts || []).map((d, i) =>
+    '<div class="db-row"><div class="db-row-hd"><span class="pill pill-ai">补货</span>' +
+    '<b>向 ' + esc(d.party || '？') + ' 补 ' + (d.items || []).length + ' 项</b>' +
+    '<span class="flex-1"></span><button class="btn btn-sm btn-primary" data-draft="' + i + '">生成采购草稿</button></div>' +
+    '<div class="db-row-d">' + esc((d.items || []).map(it => `${it.name}×${it.qty}${it.unit || ''}`).join('、')) + '</div></div>').join('');
+  const steps = (r.steps || []).filter(s => s.tool);
+  $('#dailyBody').innerHTML =
+    (r.degraded ? '<div class="hint">AI 暂不可用，以下为规则统计兜底。</div>' : '') +
+    `<div class="db-pts">${rows || '<div class="hint">今天没有特别要说的。</div>'}</div>` +
+    (drafts ? `<div class="db-drafts">${drafts}</div>` : '') +
+    `<div class="db-foot"><button class="btn btn-sm btn-ghost" id="dailyTraceBtn" ${steps.length ? '' : 'hidden'}>▸ 执行轨迹</button><span class="flex-1"></span><button class="btn btn-sm btn-ghost" id="dailyRerun" title="重新取证生成（仅管理员）">↻ 重跑</button></div>` +
+    '<div class="al-steps" id="dailySteps" style="display:none"></div>';
+  // 补货建议 → /api/resolve 出预览+令牌 → showPreview 同一套闸门
+  $$('#dailyBody [data-draft]').forEach(btn => {
+    btn.onclick = async () => {
+      const d = (r.suggest_drafts || [])[+btn.dataset.draft];
+      if (!d) return;
+      btn.disabled = true; btn.textContent = '预览中…';
+      try {
+        const res = await api('/api/resolve', { method: 'POST', body: {
+          draft: { biz: d.biz || 'purchase_in', party: d.party || '', depot: '',
+                   items: (d.items || []).map(it => ({ name: it.name, qty: num(it.qty), unit: it.unit || '个' })) },
+          source: 'ai',
+        } });
+        if (!res.ok) { toast(res.message || '生成预览失败', 'bad'); btn.disabled = false; btn.textContent = '生成采购草稿'; return; }
+        showPreview(res.preview, res.draft, res2 => {
+          if (res2 && res2.ok) { toast('✓ ' + (res2.message || '补货单已写入')); loadDaily(); }
+          else toast((res2 && res2.message) || '写入失败', 'bad');
+        }, [], { source: 'ai', rawText: '老板日报补货建议' });
+      } catch (e) { toast(e.message, 'bad'); }
+      btn.disabled = false; btn.textContent = '生成采购草稿';
+    };
+  });
+  $('#dailyRerun').onclick = () => loadDaily(true);
+  const stepsEl = $('#dailySteps');
+  steps.forEach(s => stepsEl.appendChild(dailyStepRow(s)));
+  $('#dailyTraceBtn').onclick = () => {
+    const open = stepsEl.style.display === 'none';
+    stepsEl.style.display = open ? '' : 'none';
+    $('#dailyTraceBtn').textContent = open ? '▾ 收起执行轨迹' : '▸ 执行轨迹';
+  };
+}
+
+async function loadDaily(rerun) {
+  const brief = $('#dailyBrief');
+  try {
+    const r = await api(rerun ? '/api/daily/regenerate' : '/api/daily/agent',
+                        rerun ? { method: 'POST' } : undefined);
+    if (!r || r.ok === false) { brief.hidden = true; return; }
+    renderDailyBrief(r);
+  } catch (e) {
+    if (/管理员/.test(e.message || '')) brief.hidden = true;   // 仅管理员可见
+  }
+}
+
+// 速览初始化（并行拉取，互不阻塞对话；390px 下 CSS 默认收窄为一行日报）
+loadKPI();
+loadAlerts();
+loadDaily();
 
 // ---- 会话历史（sessionStorage，只存本页：刷新不丢；上限 30 条） ----
 const HKEY = 't2s_ask_v1';

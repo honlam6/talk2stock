@@ -7,7 +7,7 @@
     PORT=8099 python3 app/server.py
 
 路由：
-    GET    /                      → 工作台（home.html）
+    GET    /                      → 302 智能助手（/ask；原工作台保留 /home）
     GET    /new                   → 录单页（对话/表单双模式；/ai /form 跳转到这里）
     GET    /ask                   → 问一问（只读问答）
     GET    /dashboard             → 经营看板
@@ -1379,8 +1379,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "message": "不支持的请求方式"}, 405)
             return
 
-        if path == "/":
+        if path == "/home":            # 原工作台（入口已收敛到智能助手，保留直链）
             self._static("home.html")
+            return
+        if path == "/":
+            # 入口收敛：智能助手是唯一主入口，首页直接进助手
+            self.send_response(302)
+            self.send_header("Location", "/ask")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         elif path in ("/new", "/bill", "/bill.html"):
             self._static("bill.html")
         elif path in ("/ai", "/index", "/index.html", "/ai.html", "/form", "/form.html"):

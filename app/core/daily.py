@@ -29,8 +29,9 @@ from . import config as cfgmod
 from .erp import get_client
 
 DAILY_PROMPT_VERSION = "daily-v1-20261116"
-MAX_STEPS = 6   # 四个基础面各查一次 + 可选深挖一步 + submit_verdict 收口——
-                # 实测 5 步会被「想多看一眼」烧满，被迫走降级模板（v1 评测教训）
+MAX_STEPS = 7   # 四个基础面 + 可选深挖两步 + submit_verdict 收口——实测 5/6 步
+                # 都会被「想多看一眼」烧满（6 步时 5 工具正好吃满、结论没坑位），
+                # 被迫走降级模板；7 步给收口留冗余（两轮实测教训）
 
 DAILY_PROMPT = """你是给老板看的经营早报编辑。通过调用只读工具收集经营数据，
 自主决定最值得告诉老板的 3~5 个点，并给出至多 2 条补货建议。

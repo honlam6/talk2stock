@@ -1526,9 +1526,10 @@ function trapFocus(container, onEscape) {
 // ---------- 命令面板（⌘K / Ctrl+K） ----------
 /** 只做导航与填入输入框，绝不触发解析/提交（沿用用户「少一步」偏好）。 */
 const CMD_ITEMS = [
-  { sec: '录单', ico: '✎', t: '对话录单', d: '说一句话，AI 拆成草稿', go: () => '/new?mode=ai' },
-  { sec: '录单', ico: '▤', t: '表单录单', d: '逐字段精确控制，不依赖 AI', go: () => '/new?mode=form' },
-  { sec: '经营', ico: '❝', t: '智能助手', d: '查账随口问；录单直接说，草稿确认后写入', go: () => '/ask' },
+  { sec: '主入口', ico: '❝', t: '智能助手', d: '查账随口问；录单直接说，草稿确认后写入', go: () => '/ask' },
+  { sec: '主入口', ico: '▦', t: '表格导入', d: 'Excel / CSV 批量导入（助手内工具页）', go: () => '/new?mode=import' },
+  { sec: '主入口', ico: '✎', t: '对话录单', d: '说一句话，AI 拆成草稿', go: () => '/new?mode=ai' },
+  { sec: '主入口', ico: '▤', t: '表单录单', d: '逐字段精确控制，不依赖 AI', go: () => '/new?mode=form' },
   { sec: '经营', ico: '◫', t: '经营看板', d: '趋势 / 账龄 / 预警，一页看完', go: () => '/dashboard' },
   { sec: '系统', ico: '⚙', t: '设置', d: 'ERP 连接与 AI 模型档案', go: () => '/settings' },
   { sec: '系统', ico: '▦', t: '原版 ERP', d: '新标签页打开 jshERP 本体', go: () => { window.open(ERP_URL, '_blank', 'noopener'); return null; } },
@@ -1663,9 +1664,8 @@ document.addEventListener('keydown', e => {
 })();
 
 // ---------- 侧边导航骨架 ----------
+// 入口收敛：智能助手是唯一主入口；录单页降级为助手内的工具（/new?mode=…）
 const NAV_ITEMS = [
-  ['/', '工作台', '⌂'],
-  ['/new', '录单', '✎'],
   ['/ask', '智能助手', '❝'],
   ['/dashboard', '经营看板', '◫'],
   ['/settings', '设置', '⚙'],
@@ -1702,7 +1702,8 @@ function shell(active) {
   // 手机底部 Tab（第 6 项「账号」：窄屏侧边栏隐藏，身份徽章/退出要在这里可达）
   const tab = document.createElement('div');
   tab.className = 'tabbar';
-  tab.innerHTML = NAV_ITEMS.slice(0, 5).map(([h, t, i]) =>
+  // 移动端四个 Tab：助手（主入口）· 录入（工具页直达）· 看板 · 账号
+  tab.innerHTML = [NAV_ITEMS[0], ['/new', '录入', '✎'], NAV_ITEMS[1]].map(([h, t, i]) =>
     `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="ico">${i}</span>${t}</a>`).join('')
     + '<a href="javascript:void 0" id="__tabAcct"><span class="ico">◉</span>账号</a>';
   document.body.appendChild(tab);
