@@ -6,10 +6,10 @@ Generated 22 November 2026 from the `feature/unified-agent` working tree.
 
 | File | Language | Pages | Use |
 |---|---|---:|---|
-| `Talk2Stock_Final_Report_EN.docx` | English | 20 | Editable final report |
-| `Talk2Stock_Final_Report_EN.pdf` | English | 20 | Submission / review copy |
-| `Talk2Stock_Final_Report_ZH.docx` | 中文 | 17 | 可编辑最终报告 |
-| `Talk2Stock_Final_Report_ZH.pdf` | 中文 | 17 | 提交 / 评审副本 |
+| `Talk2Stock_Final_Report_EN.docx` | English | 24 | Editable final report |
+| `Talk2Stock_Final_Report_EN.pdf` | English | 24 | Submission / review copy |
+| `Talk2Stock_Final_Report_ZH.docx` | 中文 | 19 | 可编辑最终报告 |
+| `Talk2Stock_Final_Report_ZH.pdf` | 中文 | 19 | 提交 / 评审副本 |
 
 The reports use the same chapters, evidence and figures. The Chinese PDF was rendered with an explicit CJK font configuration; the source DOCX uses system CJK fonts and remains editable.
 
@@ -17,10 +17,10 @@ The reports use the same chapters, evidence and figures. The Chinese PDF was ren
 
 | File | Language | Slides | Use |
 |---|---|---:|---|
-| `Talk2Stock_Presentation_EN.pptx` | English | 11 | 10-minute live presentation |
-| `Talk2Stock_Presentation_EN.pdf` | English | 11 | Preview / fallback |
-| `Talk2Stock_Presentation_ZH.pptx` | 中文 | 11 | 10 分钟现场演示 |
-| `Talk2Stock_Presentation_ZH.pdf` | 中文 | 11 | 预览 / 回退 |
+| `Talk2Stock_Presentation_EN.pptx` | English | 12 | 10-minute live presentation |
+| `Talk2Stock_Presentation_EN.pdf` | English | 12 | Preview / fallback |
+| `Talk2Stock_Presentation_ZH.pptx` | 中文 | 12 | 10 分钟现场演示 |
+| `Talk2Stock_Presentation_ZH.pdf` | 中文 | 12 | 预览 / 回退 |
 
 Each presentation includes speaker notes. The suggested 10-minute allocation is:
 

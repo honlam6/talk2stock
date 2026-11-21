@@ -1,6 +1,6 @@
 # Talk2Stock — 10-minute presentation outline (EN)
 
-**Total: 10:00.** Deck: `Talk2Stock_Presentation_EN.pptx` (11 slides).
+**Total: 10:00.** Deck: `Talk2Stock_Presentation_EN.pptx` (12 slides).
 The deck is a demo-led product/technical presentation, not a report walkthrough.
 
 | Time | Slides | Section | Required allocation |
@@ -9,8 +9,8 @@ The deck is a demo-led product/technical presentation, not a report walkthrough.
 | 0:10–1:10 | 2 | Target users, needs, pain points, scenario | 1 min |
 | 1:10–2:10 | 3 | Product positioning and business value | 1 min |
 | 2:10–5:55 | 4–7 | Prototype demo: query, draft + correction, attachments, import | 4 min |
-| 5:55–9:40 | 8–10 | Technical solution: architecture, agent loop, evidence and boundary | 4 min |
-| 9:40–10:00 | 11 | Close and Q&A | — |
+| 5:55–9:40 | 8–11 | Technical solution: development history, architecture, agent loop, evidence and boundary | 4 min |
+| 9:40–10:00 | 12 | Close and Q&A | — |
 
 ## Slide 1 — Title (0:00–0:10)
 
@@ -125,7 +125,21 @@ The deck is a demo-led product/technical presentation, not a report walkthrough.
 
 **Fallback:** if upload is slow, use the static attachment diagram and state the actual test result.
 
-## Slide 8 — Technical solution: architecture (5:55–7:05)
+## Slide 8 — Technical history: four generations (5:55–6:50)
+
+**Purpose:** show that the final architecture is the result of iteration, not a one-off design.
+
+**On slide**
+- Timeline: Transactional prototype (10–19 Oct) → Agent layer + evaluation (24 Oct–9 Nov) → Specialist agents (16 Nov) → Unified boundary (19–22 Nov).
+- Bottom strip: 93 commits, two merges, `feature/unified-agent`.
+- Metrics per phase: 98.3% historical parse; ask 76.5%→94.1%; specialist suites 4/4, 4/4, 3/3 and debt 15,600=15,600; final 183 tests, 5/5 smoke.
+
+**Speaker script**
+“The repository has 93 commits over six weeks and only two merges. Each generation removed a false shortcut: rules became tools, one-shot extraction got validation, free-form writes were replaced by a human token, and many entries became one conversation. The final branch is not merged into main, so this is a proposed final, not a production claim.”
+
+**Answer if asked about branch strategy:** `feature/agent-suite` was pushed but not merged; `feature/unified-agent` is based on it and adds attachments, unified UI, and the final evidence.
+
+## Slide 9 — Technical solution: architecture (6:50–7:45)
 
 **Purpose:** make the separation of responsibilities visible.
 
@@ -139,7 +153,7 @@ The deck is a demo-led product/technical presentation, not a report walkthrough.
 **Speaker script**
 “The Agent can draft, never commit. Reads use the ERP REST business API and a separate read-only SQL channel; writes use the official bill API only after a validated draft and a human confirmation. The ERP source is not modified.”
 
-## Slide 9 — Technical solution: the loop (7:05–8:15)
+## Slide 10 — Technical solution: the loop (7:45–8:40)
 
 **Purpose:** answer “is this really an agent?”
 
@@ -154,7 +168,7 @@ The deck is a demo-led product/technical presentation, not a report walkthrough.
 
 **Possible question:** “Why not native function calling?” Answer: the deployment targets arbitrary OpenAI-compatible endpoints with uneven protocol support; the JSON action loop is portable and auditable.
 
-## Slide 10 — Technical solution: evidence and limits (8:15–9:40)
+## Slide 11 — Technical solution: evidence and limits (8:40–9:40)
 
 **Purpose:** put evidence and limits on the same slide, so the claim is defensible.
 
@@ -166,7 +180,7 @@ The deck is a demo-led product/technical presentation, not a report walkthrough.
 **Speaker script**
 “These are the numbers we can defend. The pilot is directional; the smoke suite is five core behaviours; the model endpoint is external. The important evidence is the boundary: an acceptance write was performed only after confirmation and then rolled back through seed. We do not claim production scale or statistical significance.”
 
-## Slide 11 — Close (9:40–10:00)
+## Slide 12 — Close (9:40–10:00)
 
 **On slide**
 - “Model may be uncertain. The system may not invent.”
