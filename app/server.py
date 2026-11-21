@@ -854,7 +854,7 @@ def api_commit(_q, body):
     return res
 
 
-MAX_ASK_CHARS = 500   # 问答输入上限，与录单侧 A15 同口径：复合问题拆开问，超长贴段浪费 token
+MAX_ASK_CHARS = 1000   # 与多单起草共用上限：一个输入框，不再按入口改写业务描述
 
 
 def _ask_text_guard(text):
@@ -866,8 +866,81 @@ def _ask_text_guard(text):
     return None
 
 
+def _ask_attachment_files(fields, erp):
+    """把 multipart 里的 file0..fileN 变成附件目录；同时代理 ERP 附件上传。"""
+    from core import attachments as attachmod
+    out = []
+    keys = sorted((k for k in fields if re.fullmatch(r"file\d+", k)),
+                  key=lambda k: int(k[4:]))
+    for key in keys[:attachmod.MAX_ATTACHMENTS]:
+        up = fields.get(key)
+        if not isinstance(up, tuple) or len(up) != 2 or not up[1]:
+            continue
+        name, data = up
+        name = os.path.basename(name or "附件")
+        if len(data) > attachmod.MAX_ATTACHMENT_BYTES:
+            out.append({"name": name, "kind": "unsupported", "size": len(data),
+                        "error": "文件超过 8MB", "path": None})
+            continue
+        fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(name)[1][:12])
+        path = None
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            item = attachmod.inspect_file(name, data, temp_path=tmp)
+            # ERP 上传白名单不收 csv/tsv/md；内容不变，用受支持的 .txt 载体入库，
+            # 草稿卡和消息气泡仍显示原文件名。
+            ext = os.path.splitext(name)[1].lower()
+            upload_ext = ext if ext in (".gif", ".jpg", ".jpeg", ".png", ".pdf", ".txt",
+                                        ".docx", ".xlsx", ".xlsm", ".doc", ".xls") else ".txt"
+            if upload_ext != os.path.splitext(tmp)[1].lower():
+                renamed = tmp + upload_ext
+                os.replace(tmp, renamed)
+                tmp = renamed
+            try:
+                path = erp.upload_file(tmp, "bill")
+            except Exception as e:
+                item["error"] = (item.get("error") or "") + "；附件入库失败：%s" % str(e)[:80]
+            item["path"] = path
+            out.append(item)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    return out
+
+
+def api_ask_files(_q, body):
+    """带附件的统一会话：file0..fileN 一次多选，Agent 按描述分配附件。"""
+    fields = body.get("_multipart") or {}
+    text = str(fields.get("text") or "").strip()
+    if len(text) > MAX_ASK_CHARS:
+        return {"ok": False, "message": "消息太长了（最多 %d 字），附件可单独发送" % MAX_ASK_CHARS}
+    if not llmmod.is_configured():
+        return {"ok": False, "need_config": True,
+                "message": "尚未配置 AI 模型，请先在「设置」里添加。"}
+    try:
+        history = json.loads(fields.get("history") or "[]")
+        draft = json.loads(fields.get("draft") or "null")
+    except Exception:
+        history, draft = [], None
+    if not isinstance(history, list):
+        history = []
+    erp = _erp()
+    items = _ask_attachment_files(fields, erp)
+    if not items:
+        return {"ok": False, "message": "没有收到可读取的附件"}
+    if not text:
+        names = "、".join(a.get("name") or "附件" for a in items)
+        text = "请识别这些附件（%s），按内容生成待确认草稿。" % names
+    from core import ask as askmod
+    return askmod.ask(text, erp, history=history, previous_draft=draft,
+                      attachments=items)
+
+
 def api_ask(_q, body):
-    """只读问答：选工具 → 查数据 → 依数据作答。绝不写库。"""
+    """统一会话：模型决定查询、起草、澄清或纠错；真实写入仍走确认接口。"""
     text = (body.get("text") or "").strip()
     guard = _ask_text_guard(text)
     if guard:
@@ -877,7 +950,8 @@ def api_ask(_q, body):
                 "message": "尚未配置 AI 模型，请点右上角「设置」添加。"}
     erp = _erp()
     from core import ask as askmod
-    return askmod.ask(text, erp)
+    return askmod.ask(text, erp, history=body.get("history"),
+                      images=body.get("images"), previous_draft=body.get("draft"))
 
 
 def api_alerts(_q, _body):
@@ -1069,6 +1143,7 @@ ROUTES = {
     ("GET", "/api/dashboard"): api_dashboard,
     ("GET", "/api/history"): api_history,
     ("POST", "/api/ask"): api_ask,
+    ("POST", "/api/ask/files"): api_ask_files,
     ("GET", "/api/alerts"): api_alerts,
     ("GET", "/api/insight"): api_insight,
     ("GET", "/api/daily-report"): api_daily_report,
@@ -1089,7 +1164,7 @@ ROUTES = {
 }
 
 # multipart/form-data 路由：_handle 里单独解析，字段字典经 body["_multipart"] 传入
-MULTIPART_ROUTES = {"/api/upload", "/api/parse/image", "/api/sheet/inspect"}
+MULTIPART_ROUTES = {"/api/upload", "/api/parse/image", "/api/sheet/inspect", "/api/ask/files"}
 
 
 # --------------------------------------------------------------------------
@@ -1199,7 +1274,8 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         try:
             from core import ask as askmod
-            r = askmod.ask(text, _erp(), on_event=ev)
+            r = askmod.ask(text, _erp(), on_event=ev, history=body.get("history"),
+                           images=body.get("images"), previous_draft=body.get("draft"))
             ev({"type": "done", "result": r})
         except Exception as e:
             sys.stderr.write(traceback.format_exc())
@@ -1391,9 +1467,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         elif path in ("/new", "/bill", "/bill.html"):
             self._static("bill.html")
-        elif path in ("/ai", "/index", "/index.html", "/ai.html", "/form", "/form.html"):
-            # 旧入口合并：对话录单 / 表单录单 → /new
-            self._redirect("/new")
+        elif path in ("/ai", "/index", "/index.html", "/ai.html"):
+            self._redirect("/ask")
+        elif path in ("/form", "/form.html"):
+            self._redirect("/new?mode=form")
         elif path in ("/settings", "/settings.html", "/config"):
             self._static("settings.html")
         elif path in ("/ask", "/ask.html"):
@@ -1435,7 +1512,7 @@ def main():
     cfg = cfgmod.load()
     print("=" * 58)
     print(" jshERP AI 录入助手已启动")
-    print("   本机访问 : http://localhost:%d/ai" % PORT)
+    print("   本机访问 : http://localhost:%d/ask" % PORT)
     print("   ERP 后端 : %s" % cfg["erp"]["base"])
     prof = cfgmod.active_profile()
     print("   AI 模型  : %s" % (prof["model"] if prof else "未配置（页面右上角「设置」里添加）"))

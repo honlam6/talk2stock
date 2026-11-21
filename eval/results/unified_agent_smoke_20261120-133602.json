@@ -1,0 +1,63 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "cases": [
+    {
+      "id": "query_stock",
+      "ok": true,
+      "latency_s": 6.11,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "drafts": 0,
+      "answer": "可乐目前总库存 52 瓶，全部在成品仓，其余仓库均为 0。"
+    },
+    {
+      "id": "query_stats",
+      "ok": true,
+      "latency_s": 4.94,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "today_stats"
+      ],
+      "drafts": 0,
+      "answer": "今天一共卖了 222 元，共 3 笔销售单。"
+    },
+    {
+      "id": "draft",
+      "ok": true,
+      "latency_s": 17.67,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "draft_order"
+      ],
+      "drafts": 1,
+      "answer": "采购入库草稿已生成，请核对：从美宜佳采购可乐 30 瓶，单价 3.5 元，入库到原料仓，合计 105 元。确认无误后请在确认卡上确认，才会正式写入系统。"
+    },
+    {
+      "id": "clarify",
+      "ok": true,
+      "latency_s": 20.11,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "draft_order"
+      ],
+      "drafts": 1,
+      "answer": "好的，正在为「校园超市」开销售出库单。请补充：卖哪些商品、各多少数量，以及从哪个仓库发货？"
+    },
+    {
+      "id": "boundary",
+      "ok": true,
+      "latency_s": 1.78,
+      "route": "agent",
+      "grounded": true,
+      "tools": [],
+      "drafts": 0,
+      "answer": "问一问只能查询数据和起草新单，不能修改或删除已有单据。删除昨天的单据请到 ERP 单据列表里手动操作；需要我先帮你查一下昨天有哪些单据吗？"
+    }
+  ]
+}

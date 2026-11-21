@@ -2,657 +2,277 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f4f1e8">
 <title>智能助手 · Talk2Stock</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<div class="wrap">
-  <div id="ph"></div>
-
-  <!-- 经营速览（原工作台并入）：KPI 条 + 预警一行 + 老板日报折叠卡——全部只读 -->
-  <section class="ask-brief" id="brief">
-    <div class="ask-kpis" id="kpis"></div>
-    <div id="alertBar"></div>
-    <details class="daily-brief" id="dailyBrief" hidden>
-      <summary>
-        <span class="db-ico">📋</span><span class="db-title">今日经营速览</span>
-        <span class="db-date" id="dailyDate"></span>
-        <span class="db-count" id="dailyCount"></span>
-        <span class="db-caret" aria-hidden="true">▾</span>
-      </summary>
-      <div class="daily-body" id="dailyBody"></div>
-    </details>
-  </section>
-
-  <div class="chat-wrap">
-    <div class="chat-log" id="log" role="log" aria-live="polite"></div>
-    <div class="ask-samples" id="askSamples">
-      <span class="tag tag-new" style="cursor:pointer" data-q="可乐还有多少库存？">可乐还有多少库存？</span>
-      <span class="tag tag-new" style="cursor:pointer" data-q="今天卖了多少？">今天卖了多少？</span>
-      <span class="tag tag-new" style="cursor:pointer" data-q="谁欠我钱？">谁欠我钱？</span>
-      <span class="tag tag-new" style="cursor:pointer" data-q="什么货快没了？">什么货快没了？</span>
-      <span class="tag tag-blue" style="cursor:pointer" data-q="给永辉超市卖50瓶可乐，单价3块5">给永辉超市卖50瓶可乐，单价3块5</span>
+<body class="agent-page">
+<div class="agent-shell">
+  <header class="agent-header">
+    <div class="agent-brand"><span class="agent-mark">T</span><strong>智能助手</strong><span class="agent-presence">正在连接 ERP</span></div>
+    <div class="agent-header-actions"><a href="/dashboard" title="经营看板" aria-label="经营看板">◫</a><a href="/settings" title="模型与账号设置" aria-label="模型与账号设置">⚙</a></div>
+  </header>
+  <main class="agent-main" id="main"><div class="agent-log" id="log" role="log" aria-live="polite"></div></main>
+  <footer class="agent-dock">
+    <div class="agent-suggestions" id="suggestions"><button data-q="今天采销怎么样？">今日经营</button><button data-q="可乐还有多少库存？">查库存</button><button data-q="谁欠我钱？">看欠款</button><button data-q="从美宜佳买30瓶可乐，单价3块5，入原料仓">录一单</button></div>
+    <div class="agent-composer" id="composer">
+      <button class="agent-icon" id="plus" title="添加图片或表格" aria-label="添加图片或表格" aria-expanded="false">＋</button>
+      <textarea id="q" rows="1" maxlength="1000" placeholder="问经营，或说一句要办的事" aria-label="给智能助手发消息"></textarea>
+      <button class="agent-icon agent-mic" id="mic" title="语音输入" aria-label="语音输入"></button>
+      <button class="agent-send" id="send" aria-label="发送" title="发送"><span>↑</span></button>
     </div>
-    <!-- 录入类工具收进助手（不再单列入口）：跳到录入页对应模式 -->
-    <div class="ask-toolbar" id="askTools">
-      <a class="tool-chip" href="/new?mode=import" title="Excel / CSV 批量导入"><span class="tc-ico">▦</span>表格导入</a>
-      <a class="tool-chip" href="/new?mode=ai" title="拍照 / 粘贴图片录入"><span class="tc-ico">📷</span>拍照录入</a>
-      <a class="tool-chip" href="/new?mode=form" title="逐字段表单录入"><span class="tc-ico">▤</span>表单模式</a>
-      <span class="tc-note">写库仍须在确认卡上确认</span>
-    </div>
-    <div class="chat-input-row">
-      <textarea id="q" rows="1" placeholder="问数据，或说要录的单…"></textarea>
-      <button class="btn btn-ghost" id="mic" title="语音输入">🎙</button>
-      <button class="btn btn-primary" id="send">发送</button>
-    </div>
-  </div>
+    <div class="agent-dock-foot"><span id="draftState">草稿确认后才会写入</span><span id="composerHint">Enter 发送 · Shift+Enter 换行</span></div>
+    <div class="agent-thumbs" id="thumbs" hidden></div><input id="imageFile" type="file" accept="image/*,.pdf,.docx,.xlsx,.xlsm,.csv,.tsv,.txt,.md" multiple hidden>
+  </footer>
 </div>
-
 <script src="/common.js"></script>
+<script src="/import.js"></script>
 <script>
-shell('/ask');
-$('#ph').innerHTML = pageHead('ASK', '智能助手', '查账随口问 · 录单直接说 · 表格/拍照导入都在这里 · 草稿确认后写入');
-
-const log = $('#log');
-const qEl = $('#q');
-const sendBtn = $('#send');
-const samplesEl = $('#askSamples');
-
-// ==========================================================================
-// 经营速览（原工作台并入助手页）：KPI 条 + 预警一行 + 老板日报折叠卡
-// 原则：只读、可折叠、失败静默——任何一块拉取失败都不影响对话主体
-// ==========================================================================
-const KPI_SLOTS = [['g', '今日销售'], ['b', '今日采购'], ['r', '应收欠款'], ['b', '库存预警']];
-
-function renderKPI(d) {
-  const el = $('#kpis');
-  if (!d || d.ok === false) { el.innerHTML = ''; return; }
-  const t = d.today || {}, st = d.stock || {};
-  const warnN = (st.negative || 0) + (st.low || 0);
-  el.innerHTML = `
-    <a class="ask-kpi g" href="/dashboard"><span class="ak-l">今日销售</span><span class="ak-v">￥${money(t.sell)}</span><span class="ak-s">${t.sell_n || 0} 笔</span></a>
-    <a class="ask-kpi b" href="/dashboard"><span class="ak-l">今日采购</span><span class="ak-v">￥${money(t.buy)}</span><span class="ak-s">${t.buy_n || 0} 笔</span></a>
-    <a class="ask-kpi r" href="/dashboard"><span class="ak-l">应收欠款</span><span class="ak-v">￥${money(d.debt_recv_total)}</span><span class="ak-s">${(d.debt_recv || []).length ? '最多：' + esc(d.debt_recv[0].name) : '暂无欠款'}</span></a>
-    <a class="ask-kpi ${warnN > 0 ? 'r' : 'g'}" href="/dashboard"><span class="ak-l">库存预警</span><span class="ak-v">${warnN}</span><span class="ak-s">负 ${st.negative || 0} · 低 ${st.low || 0}</span></a>`;
-}
-async function loadKPI() {
-  try { renderKPI(await api('/api/dashboard?lite=1')); } catch (e) { /* 静默 */ }
-}
-
-// 主动预警（零 LLM 规则层）：有异常才渲染一行，点击进看板
-async function loadAlerts() {
-  const el = $('#alertBar');
+(() => {
+'use strict';
+const $id = id => document.getElementById(id);
+const log = $id('log'), q = $id('q'), send = $id('send'), suggestions = $id('suggestions');
+const KEY = 't2s_agent_v2';
+let turns = [], busy = false, controller = null, watchdog = null, pendingImages = [], activeDraft = null, currentBubble = null;
+const TOOL_LABEL = {stock_query:'查询库存',low_stock:'检查库存预警',today_stats:'汇总今日经营',month_stats:'汇总本月经营',debts:'核算应收应付',recent_bills:'查看近期单据',stock_value:'计算库存货值',master_count:'统计档案',search_docs:'查阅操作指引',search_history:'检索历史',query_bills:'查询单据明细',sql_query:'核对业务数据',db_schema:'核对数据结构',draft_order:'生成与校验草稿',stock_check:'校验可用库存',last_price:'参考最近成交价',habit_defaults:'参考录入习惯',party_history:'核对往来记录',submit_verdict:'整理校验结论',response_review:'检查回答',decide:'重新思考'};
+const TOOL_VERB = {stock_query:'正在查库存',low_stock:'正在看库存预警',today_stats:'正在汇总今日经营',month_stats:'正在汇总本月经营',debts:'正在核算欠款',recent_bills:'正在查近期单据',stock_value:'正在计算库存货值',master_count:'正在统计档案',search_docs:'正在查操作指引',search_history:'正在找历史记录',query_bills:'正在查单据',sql_query:'正在核对业务数据',draft_order:'正在整理并校验草稿',stock_check:'正在校验库存',last_price:'正在核对历史价格',habit_defaults:'正在参考录入习惯',party_history:'正在核对往来记录',submit_verdict:'正在整理校验结论'};
+const readJSON = (storage, key, fallback) => { try { const v = JSON.parse(storage.getItem(key)); return v == null ? fallback : v; } catch (_) { return fallback; } };
+function save() {
   try {
-    const r = await api('/api/alerts');
-    const list = (r.ok && r.alerts || []).slice(0, 2);
-    if (!list.length) return;
-    const hasWarn = list.some(a => a.level === 'warn');
-    el.innerHTML = `<a class="alert-bar ask-alert" href="/dashboard"><span class="ab-ico">${hasWarn ? '⚠' : '📣'}</span><span class="ab-lines">${list.map(a => `<span class="ab-line ${a.level}">${esc(a.text)}</span>`).join('')}</span><span class="ab-more">看板 →</span></a>`;
-  } catch (e) { /* 静默 */ }
-}
-
-// 老板日报（P-D）：折叠态只占一行；展开看关注点/补货建议/执行轨迹
-const DAILY_LABEL = {
-  today_stats: '今日经营', month_stats: '本月经营', debts: '应收应付',
-  low_stock: '库存预警', stock_value: '库存货值', recent_bills: '最近单据',
-  query_bills: '单据明细', sql_query: '只读SQL', submit_verdict: '结论',
-};
-const DAILY_SEV = { warn: ['t-red', '⚠ 注意'], good: ['tag-ok', '✓ 向好'], info: ['tag-new', '• 动态'] };
-
-function dailyStepRow(s) {
-  const row = document.createElement('div');
-  row.className = 'al-step' + (s.ok === false ? ' al-err' : '');
-  const args = s.args && Object.values(s.args).filter(v => v !== '' && v != null).join(' · ');
-  const obs = JSON.stringify(s.observation, null, 1) || '';
-  row.innerHTML = `<div class="al-hd"><span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span><span class="al-name">${esc(DAILY_LABEL[s.tool] || s.tool)}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}<span class="al-caret" aria-hidden="true">▾</span></div><div class="al-body">${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}<pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre></div>`;
-  row.querySelector('.al-hd').onclick = () => {
-    row.classList.toggle('open');
-    row.querySelector('.al-caret').textContent = row.classList.contains('open') ? '▴' : '▾';
-  };
-  return row;
-}
-
-function renderDailyBrief(r) {
-  const brief = $('#dailyBrief');
-  brief.hidden = false;
-  $('#dailyDate').textContent = r.date || '';
-  const pts = r.points || [];
-  $('#dailyCount').textContent = pts.length ? `${pts.length} 个关注点` : '暂无';
-  const sevTag = ([cls, txt]) => `<span class="tag ${cls}">${txt}</span>`;
-  const rows = pts.map(p => {
-    const tag = sevTag(DAILY_SEV[p.severity] || DAILY_SEV.info);
-    return '<div class="db-row"><div class="db-row-hd">' + tag + '<b>' + esc(p.title || '') + '</b></div>' +
-      '<div class="db-row-d">' + esc(p.detail || '') + '</div></div>';
-  }).join('');
-  const drafts = (r.suggest_drafts || []).map((d, i) =>
-    '<div class="db-row"><div class="db-row-hd"><span class="pill pill-ai">补货</span>' +
-    '<b>向 ' + esc(d.party || '？') + ' 补 ' + (d.items || []).length + ' 项</b>' +
-    '<span class="flex-1"></span><button class="btn btn-sm btn-primary" data-draft="' + i + '">生成采购草稿</button></div>' +
-    '<div class="db-row-d">' + esc((d.items || []).map(it => `${it.name}×${it.qty}${it.unit || ''}`).join('、')) + '</div></div>').join('');
-  const steps = (r.steps || []).filter(s => s.tool);
-  $('#dailyBody').innerHTML =
-    (r.degraded ? '<div class="hint">AI 暂不可用，以下为规则统计兜底。</div>' : '') +
-    `<div class="db-pts">${rows || '<div class="hint">今天没有特别要说的。</div>'}</div>` +
-    (drafts ? `<div class="db-drafts">${drafts}</div>` : '') +
-    `<div class="db-foot"><button class="btn btn-sm btn-ghost" id="dailyTraceBtn" ${steps.length ? '' : 'hidden'}>▸ 执行轨迹</button><span class="flex-1"></span><button class="btn btn-sm btn-ghost" id="dailyRerun" title="重新取证生成（仅管理员）">↻ 重跑</button></div>` +
-    '<div class="al-steps" id="dailySteps" style="display:none"></div>';
-  // 补货建议 → /api/resolve 出预览+令牌 → showPreview 同一套闸门
-  $$('#dailyBody [data-draft]').forEach(btn => {
-    btn.onclick = async () => {
-      const d = (r.suggest_drafts || [])[+btn.dataset.draft];
-      if (!d) return;
-      btn.disabled = true; btn.textContent = '预览中…';
-      try {
-        const res = await api('/api/resolve', { method: 'POST', body: {
-          draft: { biz: d.biz || 'purchase_in', party: d.party || '', depot: '',
-                   items: (d.items || []).map(it => ({ name: it.name, qty: num(it.qty), unit: it.unit || '个' })) },
-          source: 'ai',
-        } });
-        if (!res.ok) { toast(res.message || '生成预览失败', 'bad'); btn.disabled = false; btn.textContent = '生成采购草稿'; return; }
-        showPreview(res.preview, res.draft, res2 => {
-          if (res2 && res2.ok) { toast('✓ ' + (res2.message || '补货单已写入')); loadDaily(); }
-          else toast((res2 && res2.message) || '写入失败', 'bad');
-        }, [], { source: 'ai', rawText: '老板日报补货建议' });
-      } catch (e) { toast(e.message, 'bad'); }
-      btn.disabled = false; btn.textContent = '生成采购草稿';
-    };
-  });
-  $('#dailyRerun').onclick = () => loadDaily(true);
-  const stepsEl = $('#dailySteps');
-  steps.forEach(s => stepsEl.appendChild(dailyStepRow(s)));
-  $('#dailyTraceBtn').onclick = () => {
-    const open = stepsEl.style.display === 'none';
-    stepsEl.style.display = open ? '' : 'none';
-    $('#dailyTraceBtn').textContent = open ? '▾ 收起执行轨迹' : '▸ 执行轨迹';
-  };
-}
-
-async function loadDaily(rerun) {
-  const brief = $('#dailyBrief');
-  try {
-    const r = await api(rerun ? '/api/daily/regenerate' : '/api/daily/agent',
-                        rerun ? { method: 'POST' } : undefined);
-    if (!r || r.ok === false) { brief.hidden = true; return; }
-    renderDailyBrief(r);
-  } catch (e) {
-    if (/管理员/.test(e.message || '')) brief.hidden = true;   // 仅管理员可见
-  }
-}
-
-// 速览初始化（并行拉取，互不阻塞对话；390px 下 CSS 默认收窄为一行日报）
-loadKPI();
-loadAlerts();
-loadDaily();
-
-// ---- 会话历史（sessionStorage，只存本页：刷新不丢；上限 30 条） ----
-const HKEY = 't2s_ask_v1';
-let hist = [];
-try { hist = JSON.parse(sessionStorage.getItem(HKEY) || '[]'); } catch (e) { hist = []; }
-// 页面关闭时在飞的问题没有答案，恢复出来是条悬空提问，丢掉
-while (hist.length && hist[hist.length - 1].t === 'u') hist.pop();
-const saveHist = () => {
-  try { sessionStorage.setItem(HKEY, JSON.stringify(hist.slice(-30))); } catch (e) { /* 存储满/隐私模式：历史丢弃，不影响当页 */ }
-};
-
-// 空状态引导（首问之后自动消失）。
-// 不用白色气泡：引导不是"AI 回复"，做成全宽居中的欢迎版式，
-// 与真实回复（气泡）在视觉上区分开。窄屏刻意做矮，一屏要装下输入框。
-function emptyState() {
-  const d = document.createElement('div');
-  d.className = 'ask-hello';
-  d.innerHTML = `
-    <div class="ah-ico">❝</div>
-    <div class="ah-t">问一句，就对账</div>
-    <div class="ah-d">库存余量 · 采销统计 · 谁欠谁钱 · 直接送货下单也能说</div>
-    <div class="ah-note">查账只读 · 录单先出草稿、确认后才写入 · 数字实时取自 ERP</div>`;
-  log.appendChild(d);
-}
-
-// 恢复历史时顶部的小操作条：清空入口放在这里，不占输入区
-function restoreBar() {
-  const d = document.createElement('div');
-  d.className = 'ask-restore';
-  d.innerHTML = '已恢复上次对话（只存在本页，不会上传）';
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.className = 'ask-clear';
-  b.textContent = '清空重来';
-  b.onclick = () => {
-    hist = [];
-    saveHist();
-    log.innerHTML = '';
-    emptyState();
-    samplesEl.style.display = '';
-  };
-  d.appendChild(b);
-  log.appendChild(d);
-}
-
-function add(cls, text, quiet) {
-  const d = document.createElement('div');
-  d.className = 'msg ' + cls;
-  d.textContent = text;
-  log.appendChild(d);
-  if (!quiet) d.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  return d;
-}
-
-// 错误气泡 + 「重问一次」入口（历史恢复时只渲染不记账，用 errBubble）
-function errBubble(m, retryQ) {
-  const d = document.createElement('div');
-  d.className = 'msg bot err';
-  d.textContent = m;
-  if (retryQ) {
-    const row = document.createElement('div');
-    row.className = 'retry-row';
-    const b = document.createElement('span');
-    b.className = 'tag tag-new';
-    b.style.cursor = 'pointer';
-    b.textContent = '↻ 重问一次';
-    b.dataset.retry = retryQ;
-    row.appendChild(b);
-    d.appendChild(row);
-  }
-  return d;
-}
-function addErr(m, retryQ) {
-  const d = errBubble(m, retryQ);
-  log.appendChild(d);
-  d.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  hist.push({ t: 'e', m, q: retryQ || '' });
-  saveHist();
-  qEl.focus({ preventScroll: true });
-}
-
-const TOOL_LABEL = {
-  stock_query: '库存查询', low_stock: '库存预警',
-  today_stats: '今日经营', month_stats: '本月经营',
-  debts: '应收应付', recent_bills: '最近单据', stock_value: '库存货值',
-  draft_order: '起草单据',
-  agent: 'agent 多步取证',
-};
-// 进行时文案（SSE action 事件到达瞬间即显示，不等执行完）
-const TOOL_VERB = {
-  stock_query: '正在查询库存', low_stock: '正在扫描库存预警',
-  today_stats: '正在调取今日经营', month_stats: '正在调取本月经营',
-  debts: '正在核算应收应付', recent_bills: '正在翻最近单据',
-  stock_value: '正在估算库存货值', draft_order: '正在起草单据草稿',
-};
-
-const fmtTok = t => t >= 10000 ? (t / 1000).toFixed(1) + 'k' : String(t);
-
-// ---- ZCode 式紧凑步骤行：一行「图标 工具(参数) 耗时 ▾」，点击展开思考+观察 JSON ----
-function stepRow(s) {
-  const row = document.createElement('div');
-  row.className = 'al-step' + (s.ok === false ? ' al-err' : '');
-  const args = s.args && Object.values(s.args).filter(v => v !== '' && v != null).join(' · ');
-  const obs = JSON.stringify(s.observation, null, 1) || '';
-  // 模板单行拼接（同 botShell 注释：.msg pre-wrap 下块间换行会变空行）
-  row.innerHTML = `<div class="al-hd"><span class="al-ico">${s.ok === false ? '⚠' : '✓'}</span><span class="al-name">${esc(TOOL_LABEL[s.tool] || s.tool)}${args ? `<span class="al-args">${esc(String(args))}</span>` : ''}</span>${s.latency_ms ? `<span class="al-ms">${s.latency_ms}ms</span>` : ''}<span class="al-caret" aria-hidden="true">▾</span></div><div class="al-body">${s.thought ? `<div class="al-think">💭 ${esc(s.thought)}</div>` : ''}<pre class="al-json">${esc(obs.length > 1200 ? obs.slice(0, 1200) + '\n…（截断）' : obs)}</pre></div>`;
-  row.querySelector('.al-hd').onclick = () => {
-    row.classList.toggle('open');
-    row.querySelector('.al-caret').textContent = row.classList.contains('open') ? '▴' : '▾';
-  };
-  return row;
-}
-
-// ---- 完成后的顶部徽章行（路由结果 + token + 接地状态，一眼可审计）----
-function badgeLine(r) {
-  if (r.route === 'stopped') return '<span class="at-tok">已停止</span>';
-  const tok = (r.tokens && (r.tokens.prompt + r.tokens.completion)) || 0;
-  if (r.route === 'rule') {
-    return `<span class="at-badge at-fast">⚡ 规则直答</span><span class="at-tok">0 token</span>
-      <span class="at-ground" title="回答由只读工具模板句生成，数字全部来自 ERP（数字接地）">✓ 数字已核对</span>`;
-  }
-  const n = (r.steps || []).filter(s => s.tool).length;
-  return `<span class="at-badge">🤖 agent · ${n} 步</span>
-    <span class="at-tok">${fmtTok(tok)} token</span>
-    ${r.grounded === false
-      ? '<span class="at-unground" title="模型原答案含观察数据之外的数字，已退回模板句">⚠ 已退回模板</span>'
-      : '<span class="at-ground" title="答案中每个数字都来自工具观察 JSON（数字接地）">✓ 数字已核对</span>'}`;
-}
-
-// 历史存档里的 answer 结果做瘦身：thought 截断（observation 保留，恢复后仍可展开审计）
-const slimResult = r => ({
-  answer: r.answer, route: r.route, tokens: r.tokens,
-  grounded: r.grounded, tool: r.tool,
-  steps: (r.steps || []).map(s => Object.assign({}, s, {
-    thought: s.thought ? String(s.thought).slice(0, 300) : '',
-  })),
-});
-
-// 流式气泡骨架：live 动效行 + 步骤容器 + 答案骨架
-// 注意：innerHTML 必须单行（块间不留空白）——.msg 的 pre-wrap 会把模板换行渲染成空行
-function botShell() {
-  const msg = document.createElement('div');
-  msg.className = 'msg bot';
-  msg.innerHTML = `<div class="agent-live"><div class="al-live"><span class="al-live-dot"></span><span class="al-live-txt">正在思考…</span></div><div class="al-steps"></div></div><div class="msg-body"><div class="skel skel-text w-80"></div></div>`;
-  return {
-    msg,
-    liveRow: msg.querySelector('.al-live'),
-    liveTxt: msg.querySelector('.al-live-txt'),
-    stepsEl: msg.querySelector('.al-steps'),
-    bodyEl: msg.querySelector('.msg-body'),
-  };
-}
-
-// ---- 草稿确认卡（draft_order 产出）：对话流里的轻量摘要 + 「确认写入」入口 ----
-// 真正的确认/改数/逐单提交在 showMultiPreview（与对话录单同一套 UI、同一个闸门），
-// 这里只展示摘要；写入回执就地落一条。注意：.msg 有 pre-wrap，模板必须单行拼接。
-function draftCard(payload, quiet) {
-  const wrap = document.createElement('div');
-  wrap.className = 'ask-draft';
-  const bills = payload.bills || [];
-  const rows = bills.map((b, i) => {
-    const d = b.draft || {};
-    const biz = (BIZ[d.biz] || {}).label || d.biz || '?';
-    const items = d.items || [];
-    const total = items.reduce((t, it) => t + num(it.qty) * num(it.price), 0);
-    const bad = (b.preview && (b.preview.errors || []).length) ? ' <span class="tag tag-new">有缺项</span>' : '';
-    return `<div class="ad-row"><b>#${i + 1} ${esc(biz)}</b><span>${esc(d.party || '？')} · ${items.length} 行</span><span class="ad-amt">￥${money(total)}</span>${bad}</div>`;
-  }).join('');
-  wrap.innerHTML = `<div class="ad-hd">🗒 已起草 ${bills.length} 张单据草稿<span class="ad-sub">（仅预览未写入，确认后才入库）</span></div>${rows}<div class="ad-btns"><button class="btn btn-primary" data-draft-open>确认并写入</button><span class="hint">卡片上可改数；写入前逐单校验令牌</span></div><div class="ad-res"></div>`;
-  wrap.querySelector('[data-draft-open]').onclick = () => {
-    showMultiPreview(bills, {
-      source: 'ai',
-      rawText: payload.raw_text || '',
-      onClose: bills2 => {
-        const okN = (bills2 || []).filter(b => b.state === 'committed').length;
-        const resEl = wrap.querySelector('.ad-res');
-        if (okN) {
-          resEl.innerHTML = `<span class="tag tag-ok">✓ ${okN} 张已写入 ERP</span>`;
-          if (!quiet) { hist.push({ t: 'r', m: `✓ ${okN} 张单据经助手草稿确认写入` }); saveHist(); }
-        }
-      },
+    const lean = turns.slice(-30).map(t => {
+      if (t.kind !== 'answer') return t;
+      return Object.assign({}, t, {images:[],drafts:(t.drafts || []).map(p => Object.assign({}, p, {
+        bills:(p.bills || []).map(b => Object.assign({}, b, {confirm_token:'',
+          preview:Object.assign({}, b.preview || {}, {confirm_token:''})})),
+      }))});
     });
-  };
-  return wrap;
+    sessionStorage.setItem(KEY, JSON.stringify(lean));
+  } catch (_) { /* 本地会话超限时，不阻断本轮工作 */ }
 }
-
-// 收尾渲染：live 行移除、答案落位、徽章 + 数据来源；quiet=true 用于历史恢复（不滚动不记账）
-function finalizeOn(shell, r, quiet, drafts) {
-  shell.liveRow.remove();
-  shell.bodyEl.innerHTML = '';
-  shell.bodyEl.textContent = r.answer || '（无回答）';
-  (drafts || []).forEach(p => shell.bodyEl.appendChild(draftCard(p, quiet)));
-  const head = document.createElement('div');
-  head.className = 'al-head';
-  head.innerHTML = badgeLine(r);
-  shell.msg.querySelector('.agent-live').prepend(head);
-  if (r.tool && r.tool !== 'none') {
-    const s = document.createElement('span');
-    s.className = 'src';
-    s.textContent = '数据来源：' + (TOOL_LABEL[r.tool] || r.tool);
-    shell.msg.appendChild(s);
+function restore() {
+  turns = readJSON(sessionStorage, KEY, []); if (!Array.isArray(turns)) turns = [];
+  if (!turns.length) {
+    const old = readJSON(sessionStorage, 't2s_ask_v1', []);
+    if (Array.isArray(old)) turns = old.map(m => m.t === 'u' ? {kind:'user',text:m.q} : m.t === 'b' && m.r ? {kind:'answer',answer:m.r.answer,steps:m.r.steps || [],route:m.r.route,grounded:m.r.grounded} : null).filter(Boolean);
   }
-  if (!quiet) {
-    shell.msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    hist.push({ t: 'b', r: slimResult(r), d: drafts || [] });
-    saveHist();
-    qEl.focus({ preventScroll: true });
+  if (turns.length) renderHistory(); else welcome();
+}
+function node(cls, text) { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; return d; }
+function scrollEnd(smooth = true) { $id('main').scrollTo({top:$id('main').scrollHeight,behavior:smooth && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth':'auto'}); }
+function welcome() {
+  log.innerHTML = '<section class="agent-welcome"><div class="agent-orbit">T</div><p class="agent-eyebrow">YOUR BUSINESS, IN CONVERSATION</p><h1>今天，想处理什么？</h1><p>查一笔账，或录一张单。</p><div class="agent-welcome-actions"><button data-q="帮我看看今天经营得怎么样">看看今天的经营 <span>↗</span></button><button data-q="从美宜佳买30瓶可乐，单价3块5，入原料仓">说一句话，开始录单 <span>↗</span></button></div></section>';
+}
+function userView(t) {
+  const d = node('agent-turn agent-user', t.text); log.appendChild(d);
+  if (t.files && t.files.length) {
+    const files = node('agent-user-files');
+    t.files.forEach(f => files.appendChild(node('agent-user-file', '▧ ' + (f.name || '附件'))));
+    d.appendChild(files);
   }
+  if (t.images && t.images.length) { const images = node('agent-message-images'); t.images.forEach(src => { const img = document.createElement('img'); img.src = src; img.alt = '随消息发送的单据图片'; images.appendChild(img); }); d.appendChild(images); }
 }
-
-// ---- 在飞状态机：进行中「提问」按钮变「停止」，词条禁点，Enter 忽略 ----
-let busy = false;
-let ctrl = null;          // 当前流的 AbortController
-let watchdog = null;      // 90 秒无数据自动断开
-
-function setBusy(b) {
-  busy = b;
-  sendBtn.classList.toggle('stop', b);
-  sendBtn.textContent = b ? '停止' : '发送';
-  samplesEl.classList.toggle('off', b);
+function stepView(s) {
+  const detail = document.createElement('details'); detail.className = 'agent-step' + (s.ok === false ? ' is-error':'');
+  const summary = document.createElement('summary'); summary.innerHTML = '<span class="agent-step-dot"></span><span>' + esc(TOOL_LABEL[s.tool] || s.tool || '重新思考') + '</span>' + (s.latency_ms ? '<time>' + s.latency_ms + 'ms</time>':'') + '<span class="agent-step-caret">⌄</span>';
+  const body = node('agent-step-body'); if (s.thought) body.appendChild(node('agent-thought', s.thought));
+  if (s.observation != null) { const pre = document.createElement('pre'); pre.textContent = JSON.stringify(s.observation, null, 2).slice(0,3000); body.appendChild(pre); }
+  detail.append(summary,body); return detail;
 }
-function stopStream() {
-  if (ctrl) { ctrl._stopped = true; ctrl.abort(); }
+function answerView(t) {
+  const article = node('agent-turn agent-answer'); if (t.error) article.classList.add('agent-error');
+  article.appendChild(node('agent-answer-text',t.answer || t.message || '这次没有完成，请换个说法再试。'));
+  const steps = (t.steps || []).filter(s => s.tool || s.correction);
+  if (steps.length) {
+    const trace = document.createElement('details'); trace.className = 'agent-trace'; const summary = document.createElement('summary'); const n = steps.filter(s => s.tool && s.ok).length;
+    summary.innerHTML = '<span class="agent-trace-icon">✓</span><span>已完成 · ' + n + ' 次工具调用</span><span class="agent-trace-more">过程</span>';
+    trace.appendChild(summary); const box = node('agent-trace-list'); steps.forEach(s => box.appendChild(stepView(s))); trace.appendChild(box); article.appendChild(trace);
+  }
+  (t.drafts || []).forEach(p => article.appendChild(draftView(p,t))); log.appendChild(article); return article;
 }
-
-// ---- 流式问答主体：SSE 逐事件渲染；仅当零事件收到时才降级普通接口 ----
-async function doAsk(q, fromInput) {
-  q = (q || '').trim();
-  if (!q || busy) return;
-  setBusy(true);
-  add('user', q);
-  if (fromInput) { qEl.value = ''; qEl.style.height = ''; }   // 词条提问不动输入框草稿
-  samplesEl.style.display = 'none';
-  const hello = log.querySelector('.ask-hello');
-  if (hello) hello.remove();
-  const rb = log.querySelector('.ask-restore');
-  if (rb) rb.remove();
-  hist.push({ t: 'u', q });
-  saveHist();
-
-  const shell = botShell();
-  log.appendChild(shell.msg);
-  shell.msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
-
-  ctrl = new AbortController();
-  let gotAny = false;       // 是否收到过任何 SSE 事件（决定能否安全降级）
-  let done = false;
-  let drafts = [];          // 流式收到的草稿载荷（done 事件里也会带，两处取其一）
-  const touch = () => {
-    clearTimeout(watchdog);
-    watchdog = setTimeout(() => { if (ctrl) ctrl.abort(); }, 90000);
-  };
-  touch();
-
-  const paintStep = s => {
-    shell.stepsEl.appendChild(stepRow(s));
-    shell.liveRow.classList.remove('hidden');
-    shell.liveTxt.textContent = '结合数据思考下一步…';
-    shell.msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  };
-
+function draftSummary(payload) {
+  return (payload.bills || []).map(b => { const d = b.draft || {}, p = b.preview || {}; return {biz:(BIZ[d.biz] || {}).label || d.biz || '业务草稿',party:d.party || '待补往来单位',depot:d.depot || '',total:p.total || 0,items:d.items || [],attachments:(b.attach || payload.attachments || []).map(a => a.name || a).filter(Boolean),warnings:p.warnings || [],errors:p.errors || []}; });
+}
+function draftView(payload,parent) {
+  const wrap = node('agent-draft-card'), bills = payload.bills || [];
+  const head = node('agent-draft-head'); head.innerHTML = '<span class="agent-draft-icon">▤</span><strong>单据草稿</strong><span>' + bills.length + ' 张</span>'; wrap.appendChild(head);
+  bills.forEach(b => { const d = b.draft || {}, p = b.preview || {}, row = node('agent-draft-row'); const items = (d.items || []).map(i => esc(i.name || '待补商品') + ' × ' + esc(i.qty) + esc(i.unit || '')).join(' · '); const files = (b.attach || payload.attachments || []).map(a => esc(a.name || a)).join('、'); row.innerHTML = '<div><b>' + esc((BIZ[d.biz] || {}).label || '业务单据') + '</b><span>' + esc(d.party || '待补往来单位') + '</span><small>' + items + '</small>' + (files ? '<small class="agent-draft-file">▧ ' + files + '</small>' : '') + '</div><strong>￥' + money(p.total || 0) + '</strong>'; wrap.appendChild(row); });
+  const problems = bills.reduce((n,b) => n + ((b.preview || {}).errors || []).length,0); if (problems) wrap.appendChild(node('agent-notice','有 ' + problems + ' 项待补，打开草稿即可修改。'));
+  const foot = node('agent-draft-foot'), btn = document.createElement('button'); btn.className = 'btn btn-primary';
+  const stored = parent && parent.draftCommitted && parent.draftCommitted.batch_id === payload.batch_id;
+  btn.textContent = stored ? '已写入 ERP':'核对草稿'; btn.disabled = !!stored;
+  btn.onclick = () => openDrafts(payload,parent,btn); foot.appendChild(btn); foot.appendChild(node('agent-draft-status',stored ? '✓ 已确认写入':'确认后写入')); wrap.appendChild(foot); return wrap;
+}
+function openDrafts(payload,parent,btn) {
+  activeDraft = payload; $id('draftState').textContent = '可继续用自然语言修改这张草稿';
+  const bills = (payload.bills || []).map(b => Object.assign({},b,{state:'open'})); if (!bills.length) { toast('草稿内容为空，请补充商品与数量','warn'); return; }
+  if (bills.some(b => !b.confirm_token)) {
+    // 刷新后的旧令牌不会进入会话存储；重新只读预览才能生成新的确认依据。
+    api('/api/sheet/resolve',{method:'POST',body:{drafts:bills.map((b,i) => ({row_no:i + 1,draft:b.draft}))}})
+      .then(r => { if (!r.ok) throw new Error(r.message || '重新预览失败'); payload.bills = r.bills || []; openDrafts(payload,parent,btn); })
+      .catch(e => { btn.disabled = false; toast(e.message,'bad'); });
+    return;
+  }
+  btn.disabled = true; loadMaster().then(() => {
+    showMultiPreview(bills,{source:'ai',rawText:payload.raw_text || '',onClose:updated => {
+      btn.disabled = false; const committed = (updated || []).filter(b => b.state === 'committed');
+      if (committed.length) {
+        if (parent) { parent.draftCommitted = {batch_id:payload.batch_id,count:committed.length}; }
+        btn.textContent = '已写入 ERP'; btn.disabled = true; const status = btn.parentElement.querySelector('.agent-draft-status'); if (status) status.textContent = '✓ ' + committed.length + ' 张已写入';
+        activeDraft = null; $id('draftState').textContent = '已写入 · 可以继续问经营';
+        turns.push({kind:'answer',answer:'已写入 ' + committed.length + ' 张单据，单据编号：' + committed.map(b => (b.res || {}).number || '已生成').join('、'),steps:[]}); save(); renderHistory();
+      }
+    }});
+  }).catch(e => { btn.disabled = false; toast(e.message,'bad'); });
+}
+function workingView() {
+  const article = node('agent-turn agent-answer agent-working'), live = node('agent-working-line'); live.innerHTML = '<span class="agent-thinking"></span><span>正在理解你的需求</span>'; article.appendChild(live);
+  const trace = node('agent-live-steps'); article.appendChild(trace); log.appendChild(article); scrollEnd(); return {article,live,trace,steps:[]};
+}
+function eventStep(s) { if (!s.tool && !s.correction) return; currentBubble.steps.push(s); const v = stepView(s); v.open = s.ok === false; currentBubble.trace.appendChild(v); scrollEnd(); }
+function compactPayload(p) { return {batch_id:p.batch_id || '',raw_text:p.raw_text || '',meta:p.meta || {},bills:(p.bills || []).map(b => ({draft:b.draft,preview:b.preview,confirm_token:b.confirm_token,attach:b.attach || []})),attachments:p.attachments || [],clarify:p.clarify || null}; }
+function finishWorking(r,drafts) {
+  if (!r || r.ok === false) throw new Error((r && r.message) || '这次请求没有完成');
+  const t = {kind:'answer',answer:r.answer,route:r.route,grounded:r.grounded,steps:r.steps && r.steps.length ? r.steps : currentBubble.steps,tokens:r.tokens,drafts:drafts.map(compactPayload)};
+  turns.push(t); save(); const next = answerView(t); currentBubble.article.replaceWith(next); currentBubble = null;
+  const last = drafts[drafts.length - 1];
+  if (last) { activeDraft = last; const missing = last.clarify && last.clarify.question; $id('draftState').textContent = missing || '可继续用自然语言修改这张草稿'; if (missing) toast(missing,'warn'); else toast('草稿已生成，点卡片核对','ok'); }
+  scrollEnd();
+}
+function currentDraftPayload() {
+  // 单张草稿时带上结构化草稿（模型可精准修改）；多单不猜，交给模型用自然语言重写
+  return (activeDraft && activeDraft.bills && activeDraft.bills.length === 1) ? activeDraft.bills[0].draft : null;
+}
+function historyPayload() {
+  const recent = turns.slice(-10).map(t => {
+    if (t.kind === 'user') return {role:'user',content:t.text};
+    if (t.kind === 'answer') { let content = t.answer || ''; (t.drafts || []).forEach(p => { content += '\n草稿：' + JSON.stringify(draftSummary(p)); }); return {role:'assistant',content}; }
+    return null;
+  }).filter(Boolean);
+  if (activeDraft && activeDraft.bills && activeDraft.bills.length) recent.push({role:'assistant',content:'当前待修改草稿（尚未写入）：' + JSON.stringify(draftSummary(activeDraft)) + '。用户说「改成」「换仓库」等默认指这张草稿，不要把它当成修改 ERP 已有单据。'});
+  return recent;
+}
+async function doAskWithFiles(text) {
+  text = (text || '').trim();
+  if (busy || !pendingImages.length) return;
+  if (pendingImages.some(p => p.busy)) { toast('附件正在准备，请稍候','warn'); return; }
+  const files = pendingImages.slice();
+  const user = {kind:'user',text:text || '请识别这些附件并生成草稿',files:files.map(p => ({name:p.name,type:p.file.type || p.file.name.split('.').pop()})),images:files.filter(p => p.isImage && p.dataUrl).map(p => p.dataUrl)};
+  turns.push(user); save();
+  if (log.querySelector('.agent-welcome')) log.innerHTML = '';
+  userView(user); suggestions.hidden = true;
+  pendingImages = []; renderThumbs(); q.value = ''; resizeInput(); setBusy(true);
+  currentBubble = workingView();
+  currentBubble.live.lastElementChild.textContent = '正在读取附件并规划…';
+  const fd = new FormData();
+  fd.append('text', text);
+  fd.append('history', JSON.stringify(historyPayload()));
+  fd.append('draft', JSON.stringify(currentDraftPayload()));
+  files.forEach((p, i) => fd.append('file' + i, p.file, p.name));
   try {
     const pass = localStorage.getItem('t2s_pass');
-    const resp = await fetch('/api/ask/stream', {
-      method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, pass ? { 'X-T2S-Pass': pass } : {}),
-      body: JSON.stringify({ text: q }),
-      signal: ctrl.signal,
-    });
-    if (!resp.ok || !resp.body) throw new Error('流式接口不可用（HTTP ' + resp.status + '）');
-    const reader = resp.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done: rd, value } = await reader.read();
-      touch();
-      if (rd) break;
-      buf += dec.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const line = chunk.split('\n').find(l => l.startsWith('data:'));
-        if (!line) continue;
-        let ev;
-        try { ev = JSON.parse(line.slice(5)); } catch (e) { continue; }
-        gotAny = true;
-        if (ev.type === 'action') {
-          shell.liveRow.classList.remove('hidden');
-          shell.liveTxt.textContent = (TOOL_VERB[ev.tool] || '正在调用 ' + (TOOL_LABEL[ev.tool] || ev.tool)) + '…';
-        } else if (ev.type === 'draft') {
-          drafts.push(ev.payload || {});
-          shell.liveRow.classList.remove('hidden');
-          shell.liveTxt.textContent = '草稿已出，等模型收尾…';
-        } else if (ev.type === 'step') {
-          paintStep(ev.step);
-        } else if (ev.type === 'done') {
-          const r = ev.result || {};
-          finalizeOn(shell, r, false, (r.drafts && r.drafts.length) ? r.drafts : drafts);
-          done = true;
-        } else if (ev.type === 'error') {
-          throw new Error(ev.message || '查询失败');
-        }
-      }
-    }
-    if (!done) throw new Error('连接中断');
+    const headers = pass ? {'X-T2S-Pass':pass} : {};
+    const resp = await fetch('/api/ask/files', {method:'POST',headers,body:fd});
+    const txt = await resp.text();
+    let r;
+    try { r = JSON.parse(txt); } catch (_) { throw new Error('服务返回异常：' + txt.slice(0,120)); }
+    if (resp.status === 401) throw new Error('登录已过期，请刷新后重新登录');
+    if (!r.ok) throw new Error(r.message || '附件处理失败');
+    finishWorking(r, r.drafts || []);
   } catch (e) {
-    clearTimeout(watchdog);
-    const wasStopped = !!(ctrl && ctrl._stopped);
-    if (wasStopped) {
-      // 用户主动停止：保留已执行步骤，答案区落一条停止说明
-      finalizeOn(shell, { answer: '（已停止本次回答）', route: 'stopped' });
-    } else if (gotAny || e.name === 'AbortError') {
-      // 流已产出过内容 / 看门狗超时：原地报错 + 可重问。
-      // 不降级重跑：agent 已消耗 token、步骤已画出，重跑会双份计费 + 步骤重复。
-      shell.msg.remove();
-      addErr(e.name === 'AbortError' ? '回答超时：长时间没有收到数据，已中断' : (e.message || '查询失败'), q);
-    } else {
-      // 一个事件都没收到：降级一次性接口（老 WebView / 代理不支持流）
-      try {
-        const r = await api('/api/ask', { method: 'POST', body: { text: q } });
-        if (!r.ok) {
-          shell.msg.remove();
-          addErr(r.message || '查询失败', q);
-        } else {
-          (r.steps || []).filter(s => s.tool).forEach(s => shell.stepsEl.appendChild(stepRow(s)));
-          finalizeOn(shell, r, false, r.drafts || []);
-        }
-      } catch (e2) {
-        shell.msg.remove();
-        addErr(e2.message || '查询失败', q);
-      }
-    }
+    if (currentBubble) currentBubble.article.remove();
+    currentBubble = null;
+    turns.push({kind:'answer',answer:e.message || '附件处理失败',error:true,steps:[]});
+    save(); renderHistory();
   } finally {
-    clearTimeout(watchdog);
-    ctrl = null;
-    setBusy(false);
+    setBusy(false); q.focus({preventScroll:true});
   }
 }
-
-// 输入框自适应长高（最多约 4 行，超出内部滚动）
-qEl.addEventListener('input', () => {
-  qEl.style.height = 'auto';
-  qEl.style.height = Math.min(qEl.scrollHeight, 132) + 'px';
-});
-
-sendBtn.onclick = () => { busy ? stopStream() : doAsk(qEl.value, true); };
-qEl.addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    if (!busy) doAsk(qEl.value, true);
+async function doAsk(text) {
+  text = (text || '').trim(); if (busy) return;
+  if (pendingImages.length) return doAskWithFiles(text);
+  if (!text) return;
+  const user = {kind:'user',text:text || '识别这张单据'};
+  if (pendingImages.length) { user.images = pendingImages.map(p => p.dataUrl).filter(Boolean); user.imageCount = pendingImages.length; }
+  turns.push(user); save(); if (log.querySelector('.agent-welcome')) log.innerHTML = ''; userView(user); suggestions.hidden = true;
+  const images = pendingImages.map(p => p.dataUrl).filter(Boolean); pendingImages = []; renderThumbs(); q.value = ''; resizeInput(); setBusy(true); currentBubble = workingView();
+  controller = new AbortController(); let gotAny = false, completed = false; const drafts = [];
+  const timer = () => { clearTimeout(watchdog); watchdog = setTimeout(() => controller && controller.abort(),120000); }; timer();
+  try {
+    const headers = {'Content-Type':'application/json'}, pass = localStorage.getItem('t2s_pass'); if (pass) headers['X-T2S-Pass'] = pass;
+    const resp = await fetch('/api/ask/stream',{method:'POST',headers,body:JSON.stringify({text:text || '识别图片并生成单据草稿',images,history:historyPayload(),draft:currentDraftPayload()}),signal:controller.signal});
+    if (!resp.ok || !resp.body) throw new Error('连接未完成（HTTP ' + resp.status + '）');
+    const reader = resp.body.getReader(), decoder = new TextDecoder(); let buffer = '';
+    while (true) {
+      const read = await reader.read(); timer(); if (read.done) break; buffer += decoder.decode(read.value,{stream:true}); let idx;
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0,idx); buffer = buffer.slice(idx + 2); const line = chunk.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
+        let ev; try { ev = JSON.parse(line.slice(5)); } catch (_) { continue; } gotAny = true;
+        if (ev.type === 'action') currentBubble.live.lastElementChild.textContent = (TOOL_VERB[ev.tool] || '正在处理') + '…';
+        else if (ev.type === 'step') eventStep(ev.step);
+        else if (ev.type === 'draft') { if (!drafts.some(p => p.batch_id && p.batch_id === (ev.payload || {}).batch_id)) drafts.push(ev.payload || {}); currentBubble.live.lastElementChild.textContent = '草稿已整理好'; }
+        else if (ev.type === 'done') { const r = ev.result || {}; finishWorking(r,r.drafts && r.drafts.length ? r.drafts : drafts); completed = true; }
+        else if (ev.type === 'error') throw new Error(ev.message || '请求未完成');
+      }
+    }
+    if (!completed) throw new Error('连接中断，这次没有写入数据');
+  } catch (e) {
+    if (currentBubble) currentBubble.article.remove(); currentBubble = null;
+    const stopped = controller && controller._stopped;
+    const msg = stopped ? '已停止。已生成的内容不会自动写入。' : e.name === 'AbortError' ? '等待超时。可重试，或缩小这次任务。' : e.message;
+    turns.push({kind:'answer',answer:msg,error:true,steps:[]}); save();
+    if (!gotAny && !stopped && e.name !== 'AbortError' && !images.length) {
+      try { const r = await api('/api/ask',{method:'POST',body:{text,images,history:historyPayload(),draft:currentDraftPayload()}}); turns.pop(); currentBubble = workingView(); finishWorking(r,r.drafts || []); }
+      catch (fallback) { turns.push({kind:'answer',answer:fallback.message,error:true,steps:[]}); renderHistory(); }
+    } else renderHistory();
+  } finally { clearTimeout(watchdog); controller = null; setBusy(false); q.focus({preventScroll:true}); }
+}
+function setBusy(v) { busy = v; send.classList.toggle('is-stop',v); send.innerHTML = '<span>' + (v ? '■':'↑') + '</span>'; send.title = v ? '停止生成':'发送'; }
+function resizeInput() { q.style.height = 'auto'; q.style.height = Math.min(q.scrollHeight,144) + 'px'; }
+function renderThumbs() {
+  const el = $id('thumbs'); el.hidden = !pendingImages.length;
+  el.innerHTML = pendingImages.map((p,i) => '<span class="agent-thumb" title="' + esc(p.name || '') + '">' + (p.isImage && p.dataUrl ? '<img src="' + p.dataUrl + '" alt="待识别图片">' : '<span class="agent-thumb-doc">' + esc((p.name || '文件').split('.').pop().toUpperCase().slice(0,5)) + '</span>') + '<button data-remove="' + i + '" aria-label="移除附件">×</button></span>').join('');
+}
+async function addImages(files) {
+  const docExt = /\.(pdf|docx|xlsx|xlsm|csv|tsv|txt|md)$/i;
+  for (const f of Array.from(files || [])) {
+    const isImage = !!(f.type && f.type.startsWith('image/'));
+    if (!isImage && !docExt.test(f.name || '')) { toast('支持图片、PDF、Word、Excel/CSV、文本文件','warn'); continue; }
+    if (f.size > 8 * 1024 * 1024) { toast('「' + f.name + '」超过 8MB，请压缩或拆分','warn'); continue; }
+    if (pendingImages.length >= 6) { toast('一次最多 6 个附件','warn'); break; }
+    const p = {file:f,name:f.name || '附件',isImage,busy:true,dataUrl:null}; pendingImages.push(p); renderThumbs();
+    if (isImage) {
+      try { const c = await compressImage(f); p.dataUrl = c.dataUrl; } catch (_) { toast('这张图片读取失败，请换一张','bad'); }
+    }
+    p.busy = false; renderThumbs();
   }
-});
-// 示例词条：容器统一委托（旧版这里 + 元素 onclick 双重绑定，点一次发两次请求）
-samplesEl.addEventListener('click', e => {
-  const el = e.target.closest('[data-q]');
-  if (el && !busy) doAsk(el.dataset.q, false);
-});
-// 错误气泡里的「重问一次」（气泡是动态建的，挂在 log 上委托）
-log.addEventListener('click', e => {
-  const el = e.target.closest('[data-retry]');
-  if (el && !busy) doAsk(el.dataset.retry, false);
-});
-
-// ---- 语音输入（Web Speech API）----
-// 可用性三级降级（为什么：语音 API 与 getUserMedia 一样只在安全上下文开放，
-// 公网 HTTP 部署下必须先探明再亮按钮，不能让用户点了才知道不可用）：
-//   1) 浏览器没有 SpeechRecognition → 按钮隐藏；
-//   2) 有 API 但页面非安全上下文（HTTP 部署）→ 置灰，点击弹 toast 指路部署文档；
-//   3) 安全上下文（HTTPS / localhost）→ 正常可用。
-// 详见 docs/语音输入HTTPS部署.md。
-// 已知约束：Chrome 的识别在部分环境走 Google 服务（断网/被墙时报 network 错）；
-// iframe 内嵌 WebView 可能整体不暴露该 API——第 1/2 级探测已覆盖这两种情况。
-const micBtn = $('#mic');
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recBusy = false;   // 防双开：授权弹窗期间再点不会重复 start
-let rec = null;        // 当前识别实例（每次新建不复用：Chrome 复用旧实例有状态残留）
-let micBase = '';      // 录音开始时的输入框内容：识别结果拼在已打字草稿后面，不覆盖
-
-// 录音态复用发送键在飞时的红色停止样式（.chat-input-row .btn.stop，不动 style.css）
-const paintMic = on => {
-  micBtn.textContent = on ? '■' : '🎙';
-  micBtn.classList.toggle('stop', on);
-  micBtn.title = on ? '停止录音' : '语音输入';
-};
-
-if (!SR) {
-  micBtn.style.display = 'none';
-} else if (!window.isSecureContext) {
-  // 置灰但不用 disabled 属性——disabled 元素不派发 click，点上去的提示就弹不出来了；
-  // 用 aria-disabled + 内联灰样式表达同一语义（title 照常显示）。
-  micBtn.setAttribute('aria-disabled', 'true');
-  micBtn.style.opacity = '.45';
-  micBtn.style.cursor = 'not-allowed';
-  micBtn.title = '语音需要 HTTPS 或本地访问（当前页面非安全上下文）';
-  micBtn.onclick = () =>
-    toast('语音输入需要 HTTPS 或本地访问（当前页面非安全上下文）；部署方法见 docs/语音输入HTTPS部署.md', 'warn');
-} else {
-  micBtn.onclick = () => {
-    if (recBusy) { if (rec) try { rec.stop(); } catch (e) { /* 已在收尾 */ } return; }   // 再点 = 停止
-    const r = new SR();
-    rec = r;
-    r.lang = 'zh-CN';
-    r.interimResults = true;   // 边说边出字，所见即所说
-    r.continuous = false;      // 单句模式：停顿即收尾，不一直占着麦
-    micBase = qEl.value;
-    recBusy = true;
-    paintMic(true);
-    r.onresult = ev => {
-      // 发送会把输入框清空：当前值不再以基线开头 → 基线作废，旧草稿不能被拼回来
-      if (micBase && !qEl.value.startsWith(micBase)) micBase = '';
-      let interim = '', finalTxt = '';
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const t = ev.results[i][0].transcript;
-        if (ev.results[i].isFinal) finalTxt += t; else interim += t;
-      }
-      if (finalTxt) micBase += finalTxt;   // 已落定的句子成为后续内容的基线
-      qEl.value = micBase + interim;
-      qEl.dispatchEvent(new Event('input'));   // 走一遍输入框自适应高度
-    };
-    r.onerror = ev => {
-      // no-speech（没出声）/ aborted（正常打断）静默；权限与网络错误要给用户一句话
-      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-        toast('麦克风权限被拒，请在浏览器允许麦克风后重试', 'bad');
-      } else if (ev.error === 'network') {
-        toast('语音识别服务网络错误，请稍后重试', 'bad');
-      }
-    };
-    r.onend = () => {
-      recBusy = false;
-      rec = null;
-      paintMic(false);
-      qEl.focus({ preventScroll: true });   // 说完直接可改字 / 发送
-    };
-    try {
-      r.start();
-    } catch (e) {
-      // start() 同步抛错时 onend 不会来，这里手动收状态
-      recBusy = false;
-      rec = null;
-      paintMic(false);
-      toast('语音启动失败：' + (e.message || e), 'bad');
-    }
-  };
+  q.placeholder = pendingImages.length ? '说说这些附件分别是什么业务，或直接发送' : '问经营，或说一句要办的事';
 }
-
-// ---- 启动：有历史恢复，否则空状态 ----
-if (hist.length) {
-  restoreBar();
-  hist.forEach(m => {
-    if (m.t === 'u') add('user', m.q, true);
-    else if (m.t === 'e') log.appendChild(errBubble(m.m, m.q));
-    else if (m.t === 'r') add('bot', m.m, true);
-    else if (m.t === 'b') {
-      const shell = botShell();
-      log.appendChild(shell.msg);
-      (m.r.steps || []).filter(s => s.tool).forEach(s => shell.stepsEl.appendChild(stepRow(s)));
-      finalizeOn(shell, m.r, true, m.d || []);
-    }
-  });
-  const last = log.lastElementChild;
-  if (last) last.scrollIntoView({ block: 'end' });
-  samplesEl.style.display = 'none';
-} else {
-  emptyState();
+function attachmentMenu() {
+  const old = $id('attachMenu'); if (old) { old.remove(); $id('plus').setAttribute('aria-expanded','false'); return; }
+  const menu = node('agent-attach-menu'); menu.id = 'attachMenu'; menu.innerHTML = '<button id="chooseImage"><span>▧</span><div><b>附件与单据照片</b><small>多选图片、PDF、Word、Excel</small></div></button><button id="chooseSheet"><span>▦</span><div><b>表格导入与修复</b><small>先核对字段，再生成草稿</small></div></button><a href="/new?mode=form"><span>▤</span><div><b>手动填写</b><small>逐字段录入</small></div></a>';
+  $id('composer').appendChild(menu); $id('plus').setAttribute('aria-expanded','true');
+  $id('chooseImage').onclick = () => { menu.remove(); $id('imageFile').click(); };
+  $id('chooseSheet').onclick = () => { menu.remove(); if (!window.ImportDialog) { location.href = '/new?mode=import'; return; } ImportDialog.open({onDrafts:p => { const t = {kind:'answer',answer:'表格已整理成 ' + (p.bills || []).length + ' 张草稿。',steps:[],drafts:[p]}; turns.push(t); save(); renderHistory(); activeDraft = p; $id('draftState').textContent = '可继续用自然语言修改这张草稿'; }}); };
 }
-
-// 移动端不在加载时就聚焦：programmatic focus 不弹键盘但 iOS 会滚动页面，键盘留给用户点
-if (!matchMedia('(pointer: coarse)').matches) qEl.focus({ preventScroll: true });
+function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); suggestions.hidden = false; return; } turns.forEach(t => t.kind === 'user' ? userView(t) : t.kind === 'answer' ? answerView(t):null); suggestions.hidden = true; scrollEnd(false); }
+function newChat() { if (busy && controller) { controller._stopped = true; controller.abort(); } turns = []; activeDraft = null; pendingImages = []; renderThumbs(); try { sessionStorage.removeItem(KEY); } catch (_) {} $id('draftState').textContent = '草稿确认后才会写入'; renderHistory(); q.value = ''; resizeInput(); q.focus({preventScroll:true}); }
+send.onclick = () => { if (busy && controller) { controller._stopped = true; controller.abort(); } else doAsk(q.value); };
+q.addEventListener('input',resizeInput); q.addEventListener('keydown',e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) doAsk(q.value); } });
+q.addEventListener('paste',e => { const files = Array.from((e.clipboardData || {}).items || []).filter(x => x.kind === 'file' && x.type.startsWith('image/')).map(x => x.getAsFile()).filter(Boolean); if (files.length) { e.preventDefault(); addImages(files); } });
+['dragover','dragleave','drop'].forEach(type => $id('composer').addEventListener(type,e => { e.preventDefault(); $id('composer').classList.toggle('is-drag',type === 'dragover'); if (type === 'drop') addImages(e.dataTransfer.files); }));
+$id('plus').onclick = attachmentMenu; $id('imageFile').onchange = e => { addImages(e.target.files); e.target.value = ''; };
+$id('thumbs').onclick = e => { const b = e.target.closest('[data-remove]'); if (b) { pendingImages.splice(+b.dataset.remove,1); renderThumbs(); } };
+document.addEventListener('click',e => { const m = $id('attachMenu'); if (m && !e.target.closest('#composer')) { m.remove(); $id('plus').setAttribute('aria-expanded','false'); } });
+document.addEventListener('click',e => { const b = e.target.closest('[data-q]'); if (b && !busy) doAsk(b.dataset.q); });
+const mic = $id('mic'), SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+mic.innerHTML = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+if (!SR) mic.hidden = true;
+else { let recording = null, base = ''; mic.onclick = () => { if (recording) { recording.stop(); return; } if (!window.isSecureContext) { toast('语音输入需要 HTTPS 或本地访问','warn'); return; } const r = new SR(); recording = r; base = q.value; r.lang = 'zh-CN'; r.interimResults = true; mic.classList.add('is-recording'); r.onresult = e => { let s = ''; for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript; q.value = base + s; resizeInput(); }; r.onerror = e => { if (!['no-speech','aborted'].includes(e.error)) toast('语音识别暂不可用，请直接输入','warn'); }; r.onend = () => { recording = null; mic.classList.remove('is-recording'); q.focus({preventScroll:true}); }; try { r.start(); } catch (_) { recording = null; mic.classList.remove('is-recording'); } }; }
+const newBtn = document.createElement('button'); newBtn.className = 'agent-new'; newBtn.title = '新建对话'; newBtn.setAttribute('aria-label','新建对话'); newBtn.textContent = '＋'; newBtn.onclick = newChat; document.querySelector('.agent-header-actions').prepend(newBtn);
+api('/api/master').then(() => { const p = document.querySelector('.agent-presence'); if (p) { p.textContent = 'ERP 在线'; p.classList.add('is-online'); } }).catch(() => { const p = document.querySelector('.agent-presence'); if (p) { p.textContent = 'ERP 待连接'; p.classList.add('is-offline'); } });
+restore(); resizeInput(); if (!matchMedia('(pointer:coarse)').matches) q.focus({preventScroll:true});
+})();
 </script>
 </body>
 </html>

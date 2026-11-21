@@ -79,15 +79,24 @@ class TestFlow(TestLoop):
         self.assertEqual(out["steps"][0]["tool"], "echo")
         self.assertEqual(out["steps"][0]["observation"]["value"], 102)
 
-    def test_invented_number_falls_back_to_template(self):
+    def test_invented_number_is_returned_for_correction(self):
         replies = [
             _resp({"thought": "查", "tool": "echo", "args": {}}),
-            _resp({"thought": "作答", "final": "还有 55 瓶"}),   # 55 是编的
+            _resp({"thought": "作答", "final": "还有 55 瓶"}),
+            _resp({"thought": "按观察修正", "final": "还有 102 瓶"}),
         ]
         out = self._run(replies)
-        self.assertFalse(out["grounded"])
-        self.assertEqual(out["answer"], "库存 102 瓶")            # 退回模板句
-        self.assertEqual(out["final_raw"], "还有 55 瓶")          # 原文留审计
+        self.assertTrue(out["grounded"])
+        self.assertEqual(out["answer"], "还有 102 瓶")
+        self.assertEqual(out["steps"][1]["correction"], "grounding")
+
+    def test_unrepairable_answer_falls_back_to_template(self):
+        replies = [_resp({"thought": "查", "tool": "echo", "args": {}})]
+        replies += [_resp({"thought": "作答", "final": "还有 55 瓶"})] * 3
+        out = self._run(replies)
+        self.assertTrue(out["grounded"])
+        self.assertEqual(out["answer"], "库存 102 瓶")
+        self.assertTrue(out["meta"]["forced"])
 
     def test_unknown_tool_becomes_observation(self):
         replies = [

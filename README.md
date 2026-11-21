@@ -16,9 +16,9 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 ## 目录
 
 - [核心特性](#核心特性)
-- [五个入口](#五个入口)
+- [当前入口](#当前入口)
 - [系统架构](#系统架构)
-- [Agent 架构决策](#agent-架构决策为什么-tool-use-而不是-rag)
+- [Agent 架构决策](#agent-架构决策模型负责判断程序负责正确性)
 - [目录结构](#目录结构)
 - [快速开始](#快速开始)
 - [配置你的 AI 解析模型](#配置你的-ai-解析模型)
@@ -42,7 +42,9 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 | **服务端写入闸门** | `/api/parse·resolve` 签发一次性确认令牌（HMAC 无状态签名 + 草稿内容哈希绑定 + nonce 黑名单防重放，30 分钟过期），`/api/commit` 无有效令牌一律拒绝——「无确认不写入」是服务端不变量，不是 UI 约定 |
 | **审计与回归沉淀** | 每次写入落 `app/data/audit.jsonl`（原话 / 模型 / 提示词版本 / 改动 diff / 结果），被拒的写入尝试同样留痕；用户改过的字段自动沉淀为 `regression.jsonl` 回归测试集 |
 | 只做加法，可回退 | **不改 jshERP 源码**，全部通过官方 REST API 写入，原系统随时可当后备 |
-| **三层问答 agent** | 第 1 层规则直答（高频统计问句 0 token 秒回，含「多少个供应商」这类主数据计数）→ 第 2 层手写 function-calling loop（多工具链式取证，复合问题如「上月谁买最多？他欠我多少？」）→ 第 3 层数字接地兜底（答案每个数字必须来自工具观察，否则退模板句） |
+| **统一业务 Agent** | 一个主入口理解查账、录单、澄清与修正；模型逐步规划并调用只读工具，错误结果会回喂修正。回答数字必须来自工具观察，不合规回答先被要求自我修正，仍失败才确定性兜底 |
+| **会话内草稿修正** | 当前未写入草稿保留在会话里；说「改成60瓶」会沿用供应商、商品、价格与仓库，只改指定字段。会话不会保存确认令牌，刷新后只能继续修改，不能重放写入 |
+| **图片与表格入口** | 同一输入框支持拍照/粘贴图片与 Excel/CSV 弹窗导入；导入保留列映射与修复 Agent，最后统一回到草稿确认卡 |
 | **ERP 全库只读视野** | `sql_query` 直连 jshERP 数据库（只读事务 + 单条 SELECT 校验 + 行数/超时护栏），表结构从 `information_schema` 动态读取并注入上下文，不硬编码表清单：供应商/客户/商品/账户/用户/单据明细/任意聚合与排名都能问，不受预置工具清单限制；写入仍只走官方 REST API |
 | **流式过程可视化** | SSE 逐步推送：正在查询库存…（金色脉冲动效）→ ✓ 工具调用行（耗时/参数/思考/观察 JSON 可逐行展开）→ 徽章行（路由/token/数字已核对）——agent 每步可审计可回放 |
 | **轻检索（RAG-lite）** | 纯标准库 BM25 双索引：操作文档检索（怎么录单/术语）+ 历史单据取证（「上次可乐跟谁买的」），零外部依赖、命中可解释 |
@@ -64,20 +66,19 @@ Talk2Stock 让录单员**用一句人话把业务说清楚**，系统先给出�
 
 ---
 
-## 五个入口
+## 当前入口
 
-五个入口共用同一套后端（`app/core/draft.py` 的 `resolve / commit`），预览确认层行为完全一致。
+`/ask` 是唯一主入口；桌面与手机都使用同一对话。经营看板保持原页面，
+设置保留模型与账号配置，`/new` 仅作为手动表单和旧链接兼容页。
 
-| 页面 | 地址 | 适合谁 | 依赖 |
-|---|---|---|---|
-| 工作台（首页） | `http://localhost:8090/` | 一页看 KPI、发指令、录单、提问 | 无（AI 指令需配置模型） |
-| 录入（/new） | `http://localhost:8090/new` | 日常录单员 / 想省事的人 / 手机端 | 对话模式需 LLM，表单模式纯预设匹配 |
-| 智能助手（查账 + 起草） | `http://localhost:8090/ask` | 随口查库存/采销/欠款；录单直接说，草稿确认后写入 | 需配置一个 LLM 模型 |
-| 经营看板 | `http://localhost:8090/dashboard` | 老板（只读） | 无 |
-| 设置 | `http://localhost:8090/settings` | 改 ERP 连接、配/切/测模型档案 | 无 |
+| 页面 | 地址 | 用途 |
+|---|---|---|
+| 智能助手 | `http://localhost:8090/ask` | 查经营、起草单据、修正草稿、图片/表格导入 |
+| 经营看板 | `http://localhost:8090/dashboard` | 老板只读看板；本次不改动 |
+| 设置 | `http://localhost:8090/settings` | ERP 连接、模型档案、账号权限 |
+| 手动录入（兼容） | `http://localhost:8090/new` | 逐字段表单；旧 `/ai`、`/form` 链接仍可访问 |
 
-录单页把原来的「AI 录入 `/ai`」和「表单录入 `/form`」合并成了一页双模式，旧地址自动跳转 `/new`。
-外加原版 ERP 本身：`http://localhost:8080`（报表、权限、盘点、财务等高级功能仍回原系统）。
+真实写入仍然只发生在确认卡之后；图片、文字、表格三种输入最终都是同一份草稿契约。
 
 ---
 
@@ -95,14 +96,12 @@ OpenAI function-calling 协议，任意兼容端点行为一致）：
                 │ /api/ask/stream ► SSE: action/step/done        │
 ┌───────────────▼──────────────────────────────────────────────┐
 │  智能体层                                                     │
-│  llm.py    解析：口语→严格 JSON 草稿 + 规则式澄清检测            │
-│  agent.py  手写 function-calling loop：{thought,tool,args}     │
-│            →执行→observation 回喂；步数+token 双预算；          │
-│            数字接地校验(final 每个数字须来自观察)                │
-│  ask.py    三层路由：规则直答(0 token) / agent loop / 模板兜底   │
-│  insight.py 规则事实 → LLM 组织 → 逐条接地（洞察/预警/日报）      │
-│  retrieve.py BM25 轻检索：操作文档 + 历史单据（RAG-lite）        │
-│  dbread.py  只读 SQL：全库表结构动态发现 + SQL 白名单/只读事务     │
+│  llm.py    模型调用：OpenAI 兼容接口、JSON 抽取、图片识别          │
+│  agent.py  Agent 运行时：规划→工具→观察→检查→修正/收尾            │
+│  ask.py    统一入口：意图理解、工具箱、会话草稿、draft_order       │
+│  billcheck.py 录单校验：库存/历史价/习惯，确定性补丁              │
+│  dbread.py 只读 SQL：全库动态结构 + SELECT 白名单/只读事务        │
+│  repair.py / daily.py 表格修复与老板日报的专项循环                 │
 └───────────────┬──────────────────────────────────────────────┘
                 │  draft：{biz, party, items[], depot, ...}
 ┌───────────────▼──────────────────────────────────────────────┐
@@ -117,20 +116,18 @@ OpenAI function-calling 协议，任意兼容端点行为一致）：
 └──────────────────────────────────────────────────────────────┘
 ```
 
-### Agent 架构决策：为什么 tool-use 而不是 RAG
+### Agent 架构决策：模型负责判断，程序负责正确性
 
-库存、欠款、采销这类**结构化**经营数据，答案必须是精确数字且可追溯到 ERP——
-检索文本块（RAG）会丢数字精度且不可审计。因此本项目的选择是：
+库存、欠款、采销这类结构化数据不能用一段模型回答代替业务逻辑。当前版本的边界是：
 
-- **结构化数据 → tool-use + 数字接地**：agent 只能通过只读工具取数，最终答案里
-  每个数字都必须出现在某步工具观察 JSON 里，否则退回确定性模板句；
-- **非结构化文本 → BM25 轻检索**：操作文档问答与历史单据取证（「上次可乐跟谁
-  买的」）用纯标准库 BM25（中文字符 bigram），零外部依赖、命中相关度可解释；
-- 混合架构的代价权衡：不引入 embedding API / 向量库，保持「纯标准库自建、
-  可审计、可离线」的项目承诺。
+- **模型负责**：识别意图、规划步骤、选择工具、根据错误与候选修正计划、组织自然语言；
+- **工具负责**：库存/采销/欠款/单据/SQL 的结构化读取，草稿校验与主数据匹配；
+- **程序负责**：数字接地、补丁白名单、确认令牌、审计与真实写入；
+- **修正机制**：工具异常、无候选、答案未通过接地校验都会作为观察回到循环；仍失败才用确定性模板兜底；
+- **权限边界**：Agent 自主到草稿为止，真实写入必须经过人工确认和一次性令牌。
 
-详细决策记录与失败案例见 `docs/architecture.md` 与
-`docs/失败案例与迭代证据-agent升级.md`。
+旧规则直答函数仍作为高确定性工具保留，但不再抢占主入口；这避免“看起来像 Agent，
+实际是正则分派”，也保留数字可靠性。
 
 ---
 
@@ -350,9 +347,8 @@ cd jshERP-latest/deploy && docker compose logs --tail=80 erp-backend
 ## 评测（可复现跑分）
 
 ```bash
-python3 eval/run.py                    # 全量 60 条冻结语料（只调解析，绝不写库）
-python3 eval/run.py --type adversarial # 只跑 12 条对抗样本
-python3 eval/run.py --limit 8 --tag smoke  # 冒烟
+python3 eval/run.py                    # 历史录单解析语料（v1 60 条；v2 追加 8 条规格）
+python3 eval/run_unified.py            # 当前统一 Agent 冒烟：查询/起草/澄清/边界（不写库）
 ```
 
 - 语料 `eval/cases.jsonl`（**v1-20261010 冻结**：48 条常规 + 12 条对抗，gold 人工标注）；
@@ -375,8 +371,12 @@ python3 eval/run.py --limit 8 --tag smoke  # 冒烟
   （"客户1那里拿点衣服"，业务类型+数量双模糊）进 failure analysis。
   token 效率的另一个维度：高频统计问句（"今天卖了多少"等）被规则直答层拦截，**0 token** 秒回；
   详见 `docs/失败案例与迭代证据-agent升级.md`（含"网关固定注入 8.5K/请求触发预算熔断"的 C3 案例）。
-- 基线对比实验（原生界面人工录单 vs Talk2Stock，两场景设计）见
-  [`docs/基线对比实验手册.md`](docs/基线对比实验手册.md)，记录表模板 `eval/baseline_timing.csv`。
+- 人工基线实验（2 名无 ERP 经验组员 × 4 任务 × 2 工具，共 16 条正式记录）
+  已入库：`eval/baseline_timing_slim.csv`。统计口径：空白错误/中断按 0 计；
+  S1 的语音失败 71.58s 保留，不剔除。结果：
+  - 场景 A（档案齐全）：ERP 均值 88.00s / Talk2Stock 48.45s，快 45.0%；
+  - 场景 B（缺档案）：ERP 均值 86.48s / Talk2Stock 50.29s，快 41.8%；
+  - ERP 侧共 5 次中断（建档/来回），Talk2Stock 0 次；原始备注与操作错误均在 CSV。
 - 历次结果在 `eval/results/`（JSON + Markdown）。
 
 ---
@@ -395,16 +395,27 @@ python3 eval/run.py --limit 8 --tag smoke  # 冒烟
 - ~~token 用量台账~~：usage.jsonl 精确计量 + 设置页成本条 + /api/usage。
 - ~~主数据候选匹配~~：匹配失败时给 top3 相似候选，确认卡上点选后自动重新预览。
 - ~~单位换算与含税口径~~：商品建档带 `unitId`，`unit` 传用户单位，后端 `DepotItemService` 按单位组 ratio 自动折算 `basicNumber`；行级 `tax_rate` 落 `taxRate / taxMoney / taxLastMoney`，含税/未税口径跟随 ERP 的 `materialPriceTaxFlag`。
-- ~~CI~~：GitHub Actions（py_compile + unittest 31 项 + 前端内联 JS node --check）。
+- ~~CI / 离线回归~~：Python 编译检查、`unittest` 当前 183 项、前端内联 JS `node --check`；统一 Agent 冒烟 `eval/run_unified.py` 5/5。
 
 - ~~Supervisor 统一智能助手~~：问一问起草单据（写意图路由到草稿，闸门不变）+ 录单自主校验 agent + 操作员习惯记忆 + 导入修复 agent + 老板日报 agent（ADR-10/11/12）；评测资产 ask_cases_v2 / billcheck_cases / repair_cases / daily_cases + 各自跑分器。
 - ~~P4 欠款规模漏报闭合~~：欠款聚合 SQL 直查（ADR-13，stress_scale P4 探针漏报 0；三路尝试完整证据链）。
 - ~~语音输入~~：Web Speech API + 安全上下文三级降级 + HTTPS 部署文档。
 
 下一步（按对答辩的价值排序）：
-1. **基线实验落地**：按 `docs/基线对比实验手册.md` 跑两场景计时（半天）。
+1. **最终材料预演**：按 `docs/final/Presentation_Outline_*.md` 的 10 分钟时间轴走两遍，确认 live demo 与回退截图都可用。
 2. **公网部署 + 备份录屏**：IP+端口或海外节点，暴露前开 `T2S_REQUIRE_AUTH=1`。
-3. HTTPS 前置反代上线后语音输入公网可用（文档已备：`docs/语音输入HTTPS部署.md`）。
+3. 将统一 Agent 的冻结评测扩到完整语料，并补扫描件 OCR 与旧版 Office 格式。
+
+---
+
+## 最终交付物
+
+完整索引见 [`docs/final/README.md`](docs/final/README.md)。
+
+- 最终报告：[English DOCX](docs/final/Talk2Stock_Final_Report_EN.docx) / [PDF](docs/final/Talk2Stock_Final_Report_EN.pdf) · [中文 DOCX](docs/final/Talk2Stock_Final_Report_ZH.docx) / [PDF](docs/final/Talk2Stock_Final_Report_ZH.pdf)
+- 10 分钟演示：[English PPTX](docs/final/Talk2Stock_Presentation_EN.pptx) / [PDF](docs/final/Talk2Stock_Presentation_EN.pdf) · [中文 PPTX](docs/final/Talk2Stock_Presentation_ZH.pptx) / [PDF](docs/final/Talk2Stock_Presentation_ZH.pdf)
+- 逐页大纲：[EN](docs/final/Presentation_Outline_EN.md) · [ZH](docs/final/Presentation_Outline_ZH.md)
+- 共用图表与界面素材：`docs/final/assets/`
 
 ---
 

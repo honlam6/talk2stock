@@ -6,9 +6,22 @@
     "pass": ""
   },
   "llm": {
-    "active": "workbuddy",
+    "active": "openrouter",
     "agent_model": "",
     "profiles": {
+      "openrouter": {
+        "name": "OpenRouter · DeepSeek V4.1 Flash",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": "",
+        "model": "deepseek/deepseek-v4.1-flash-1017",
+        "temperature": 0,
+        "reasoning_effort": "low",
+        "vision": true,
+        "extra_headers": {
+          "HTTP-Referer": "https://github.com/honlam6/talk2stock",
+          "X-Title": "Talk2Stock"
+        }
+      },
       "workbuddy": {
         "name": "本地 DeepSeek V4.1 Flash",
         "base_url": "https://your-llm-gateway.example/v1",

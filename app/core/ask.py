@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
-"""只读问答智能体（/api/ask）—— 三层递进架构。
+"""Talk2Stock 统一业务 Agent：查账、录单与系统操作共用一次推理循环。
 
-第 1 层 规则直答（0 token）：高频统计问句（今天买了多少 / 谁欠我钱 / 什么货快没了 /
-        多少个供应商）由确定性路由直连只读工具，模板句作答——零成本零幻觉零延迟。
-第 2 层 agent loop（多步取证）：自然语言 / 复合问题交给手写 function-calling
-        循环（core/agent.py：决策 {thought,tool,args} → 执行 → observation 回喂），
-        支持跨工具链式取证（「上月谁买得最多？他欠我多少？」）。
-        工具箱含 sql_query / db_schema（core/dbread.py）：对 ERP 全库 32 张表有只读
-        权限，表结构从 information_schema 动态读取并注入上下文，任何清单/计数/明细/
-        排名/配置类问题都能查，不再局限于预置的几个统计工具。
-第 3 层 确定性兜底：LLM 作答必须通过数字接地校验——答案里每个数字都要来自
-        某步观察 JSON，不通过退回模板句拼接，回答永远可追溯到 ERP 真实值。
-
-所有工具只读、绝不写库。手写 JSON 动作循环是主动的架构选择：每步可审计
-（trace）、可预算（步数 + token 双约束）、可回放，且对任意 OpenAI 兼容端点
-行为一致。规则直答保守设计：只匹配无参数的整句统计意图，宁缺勿滥，长句
-一律交给 agent loop（参数抽取交给模型更可靠）。
+模型理解意图并决定工具；工具负责结构化数据与业务约束；错误和未通过接地的
+回答会回喂给模型修正。draft_order 只创建可编辑草稿，写入仍须人工确认。
+历史规则路由已移除，确定性统计函数继续作为可审计工具服务。
 """
 import re
 import time
@@ -27,7 +15,7 @@ from . import draft as draftmod
 from .report import official_stats, recent_bills as _rb, stock_overview, summary
 from .erp import get_client, parallel
 
-PROMPT_VERSION = "ask-v8b-20261116"   # v8b: 接地护栏补强——final 禁止观察外数字（建议量/合计/换算），cn 模型实测 a7/a10/a14 三例系统性触线
+PROMPT_VERSION = "unified-v1-20261119"
 
 # --------------------------------------------------------------------------
 # 第 1 层：规则直答（0 token）。只收录无参数的统计意图，带参数的查询
@@ -359,11 +347,36 @@ _RULE_TOOLS = {
 DRAFT_TEXT_MAX = 1000   # 与多单解析口径一致（「；」分段一段话多单）
 # 草稿工具只管「新建」：改/删/调整类请求即使模型误路由也在这里拦下（防把
 # 「把可乐库存改成999」解析成一张出货 999 的单——工具层护栏，不信任 prompt 单层约束）
-_DRAFT_DENY = re.compile(r"改|删|修改|更新|作废|冲销|调整|撤销|红冲")
+# 草稿工具只管「新建」：改/删/调整已有数据在这里拦下；修订尚未写入的草稿例外。
+_DRAFT_DENY = re.compile(r"(已有|现存|库存|单据|记录|档案).{0,6}(改|删|修改|更新|作废|冲销|调整|撤销|红冲)|(改|删|修改|更新|作废|冲销|调整|撤销|红冲).{0,6}(已有|现存|库存|单据|记录|档案)")
 
 
-def _draft_order(args, erp):
+def _draft_order(args, erp, on_event=None, images=None, previous_draft=None, attachments=None):
     text = str(args.get("text") or "").strip()
+    images = [str(x) for x in (args.get("images") or images or [])[:4]]
+    attachments = [x for x in (attachments or []) if isinstance(x, dict)]
+    selected = None
+    if attachments:
+        from . import attachments as attachmod
+        selector = args.get("attachment") or args.get("attachment_id") or ""
+        selected = attachmod.pick(attachments, selector)
+        if selected is None and len(attachments) == 1:
+            selected = attachments[0]
+        if selected is None:
+            names = "、".join("%d.%s" % (i + 1, a.get("name")) for i, a in enumerate(attachments))
+            return ({"error": "有多个附件但未指定 attachment",
+                     "attachments": [a.get("name") for a in attachments]},
+                    "请先说明要处理哪个附件（%s），在 args.attachment 传编号或文件名。" % names)
+        if selected.get("error") and selected.get("kind") == "unsupported":
+            return ({"error": "附件无法读取：%s" % selected.get("error"), "attachment": selected.get("name")},
+                    "附件「%s」无法读取：%s。" % (selected.get("name"), selected.get("error")))
+        if selected.get("kind") == "image" and selected.get("data_url"):
+            images = [selected["data_url"]]
+        if selected.get("kind") == "text" and selected.get("text"):
+            text = (text + "\n\n【附件「%s」的内容】\n%s" % (
+                selected.get("name"), selected.get("text")))[:DRAFT_TEXT_MAX]
+    if not text and images:
+        text = "请把图片中的业务内容整理成单据草稿。"
     if not text:
         return ({"error": "缺少 text 参数（用户的录单原话）"},
                 "draft_order 需要 text 参数：把用户的录单需求原话传进来。")
@@ -373,16 +386,50 @@ def _draft_order(args, erp):
     if len(text) > DRAFT_TEXT_MAX:
         return ({"error": "内容过长（%d 字，上限 %d）" % (len(text), DRAFT_TEXT_MAX)},
                 "录单内容太长（上限 %d 字），请让用户分次录入。" % DRAFT_TEXT_MAX)
+    from . import billcheck as bcmod
     from . import llm as llmmod
     try:
-        drafts, meta = llmmod.parse(text, erp)
+        check = {"ok": True, "skipped": True}
+        if selected and selected.get("kind") == "table" and selected.get("table_rows"):
+            from . import sheet as sheetmod
+            rows = selected["table_rows"]
+            mapping = llmmod.map_sheet(selected.get("table_name") or selected.get("name"), sheetmod.grid_desc(rows))
+            tr = sheetmod.transform(rows, mapping)
+            drafts = [d["draft"] for d in tr.get("drafts") or []]
+            meta = {"model": "", "profile": "", "confidence": "medium",
+                    "note": "从附件表格识别，请核对行级提示", "problems": [],
+                    "bills": [{"confidence": "medium", "note": "", "problems": d.get("problems") or []}
+                              for d in tr.get("drafts") or []],
+                    "clarify": None, "count": len(drafts)}
+            check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username())
+        elif images:
+            drafts, meta = llmmod.parse_images(images, text, erp)
+            check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username())
+        else:
+            parsed = bcmod.parse_and_check(
+                text, erp, operator=cfgmod.current_username(), prev_draft=previous_draft,
+                on_event=on_event)
+            drafts, meta, check = parsed["drafts"], parsed["meta"], parsed["check"]
+            if parsed.get("clarify"):
+                meta["clarify"] = parsed["clarify"]
+            elif parsed.get("clarify_all"):
+                meta["clarify"] = {"question": parsed["clarify_all"]}
     except Exception as e:
         return ({"error": "解析失败：%s" % str(e)[:120]}, "单据解析失败：%s" % str(e)[:120])
     if not drafts:
         return ({"parsed": False, "text": text},
                 "这段话里没有识别出可起草的单据——请向用户确认要录什么。")
+    # 附件随草稿进入同一份哈希与确认卡：入库路径来自 ERP 上传代理
+    attach_meta = []
+    if selected and selected.get("path"):
+        attach_meta = [{"path": selected["path"], "name": selected.get("name") or "附件"}]
+        for d in drafts:
+            d["file_name"] = selected["path"]
     batch_id = uuid.uuid4().hex[:12]
     bills = draftmod.prepare_bills(drafts, meta, erp, "ai", text, batch_id)
+    for b in bills:
+        if attach_meta:
+            b["attach"] = [dict(a) for a in attach_meta]
     rows = []
     for b in bills:
         d, pv = b["draft"], b["preview"]
@@ -395,6 +442,7 @@ def _draft_order(args, erp):
             "biz": draftmod.BIZ_LABEL.get(d.get("biz"), d.get("biz") or ""),
             "party": d.get("party") or "", "depot": d.get("depot") or "",
             "items": items,
+            "attachments": [a.get("name") for a in attach_meta],
             "total": pv.get("total"),
             "missing_price_lines": sum(1 for x in (pv.get("items") or []) if x.get("price_missing")),
             "warnings": pv.get("warnings") or [],
@@ -412,12 +460,13 @@ def _draft_order(args, erp):
     if cl:
         note = note + "待补信息：" + str(cl.get("question") or "")
     extra = {"batch_id": batch_id, "bills": bills,
-             "meta": draftmod.meta_public(meta), "raw_text": text}
+             "meta": draftmod.meta_public(meta), "raw_text": text,
+             "check": check, "clarify": cl, "attachments": attach_meta}
     return data, note, extra
 
 
-def _tools(erp):
-    """构造 agent 工具注册表（全部只读）。"""
+def _tools(erp, on_event=None, images=None, previous_draft=None, attachments=None):
+    """构造 Agent 工具箱；draft_order 是起草能力，不是写入能力。"""
     def bind(fn):
         return lambda args: fn(args, erp)
     from . import retrieve as rmod
@@ -452,25 +501,42 @@ def _tools(erp):
         "db_schema": {"desc": "看某张表的全部字段与取值样本（写 SQL 前不确定字段/枚举值先查它）",
                       "args_hint": '{"table":"表名，如 jsh_supplier"}',
                       "run": lambda a: dbmod.db_schema(a)},
-        "draft_order": {"desc": "用户要录单/下单/进货/退货时，把需求起草成单据草稿（只出预览绝不写库，写入由用户在确认卡上确认）",
-                        "args_hint": '{"text":"用户的录单原话（把口语代词补全成完整描述，如「给永辉卖50瓶可乐单价3块5」）"}',
-                        "run": lambda a: _draft_order(a, erp)},
+        "draft_order": {"desc": "用户要录单/新建单据时起草草稿；有附件时按编号/文件名选择对应文件（只出预览绝不写库）",
+                        "args_hint": '{"text":"用户的业务原话（结合会话补全代词）","attachment":"有附件时传编号或文件名；无附件留空"}',
+                        "run": lambda a: _draft_order(a, erp, on_event, images,
+                                                       previous_draft, attachments)},
     }
 
 
 # --------------------------------------------------------------------------
 # 入口：三层递进
 # --------------------------------------------------------------------------
-def ask(text, erp=None, on_event=None):
-    """问答 + 起草。返回 {ok, answer, tool, route, steps, tokens, meta, drafts}。
-    on_event：SSE 流式回调——规则直答发一条 step，agent loop 发 action/step 序列；
-    draft 事件（草稿确认卡载荷）同时收集进返回值 drafts，一次性接口也能拿到。"""
+def _conversation_context(history):
+    """有界会话记忆：保留意图与草稿状态，不回放确认令牌或大载荷。"""
+    rows = []
+    for m in (history or [])[-10:]:
+        if not isinstance(m, dict):
+            continue
+        role = "用户" if m.get("role") == "user" else "助手"
+        content = str(m.get("content") or "").strip()[:1200]
+        if content:
+            rows.append("%s：%s" % (role, content))
+    return "# 当前会话（供代词、追问和草稿修正使用）\n" + "\n".join(rows) if rows else ""
+
+
+def ask(text, erp=None, on_event=None, history=None, images=None, previous_draft=None,
+        attachments=None):
+    """统一 Agent 入口：模型识别意图、选工具、根据观察继续或修正。
+
+    所有业务请求都经过同一个循环，不再由正则表达式抢占主入口。
+    确定性统计仍作为工具复用；草稿与真实写入之间保留人工确认闸门。
+    """
     erp = erp or get_client()
     prof = cfgmod.agent_profile()
     if not prof:
         return {"ok": False, "message": "尚未配置 AI 模型，请先在「设置」里添加。"}
     meta = {"model": prof.get("model", ""), "prompt_version": PROMPT_VERSION}
-    draft_events = []   # draft_order 产出的确认卡载荷（前端渲染确认卡用）
+    draft_events = []
 
     def _emit(evt):
         if evt.get("type") == "draft":
@@ -481,29 +547,20 @@ def ask(text, erp=None, on_event=None):
             except Exception:
                 pass
 
-    # ---- 第 1 层：规则直答（0 token）----
-    hit = _rule_route(text, erp)
-    if hit:
-        tool, args = hit
-        try:
-            data, tpl = _RULE_TOOLS[tool](args, erp)
-        except Exception as e:
-            return {"ok": False, "message": "数据查询失败：%s" % str(e)[:120], "meta": meta}
-        rec = {"step": 1, "thought": "规则直答（零 LLM 调用）", "tool": tool,
-               "args": args, "ok": True, "observation": data}
-        _emit({"type": "step", "step": rec})
-        return {"ok": True, "tool": tool, "answer": tpl, "data": data,
-                "route": "rule", "grounded": True, "meta": meta, "drafts": [],
-                "steps": [rec],
-                "tokens": {"prompt": 0, "completion": 0, "estimated": False}}
-
-    # ---- 第 2 层：agent loop（多步取证 + 第 3 层接地兜底在 loop 内）----
-    # 事件统一走 _emit：draft 载荷既转发给流式前端，也收集进返回值 drafts
-    # （一次性接口 /api/ask 没有 SSE，靠返回值把确认卡带给前端）。
     from . import agent as agentmod
-    out = agentmod.run_agent(text + _compound_hints(text), _tools(erp),
-                             max_steps=6, context_block=_context(erp),
-                             on_event=_emit)
+    images = [x for x in (images or []) if isinstance(x, str) and re.match(r"^data:image/(?:png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=]+$", x)][:4]
+    previous_draft = previous_draft if isinstance(previous_draft, dict) and previous_draft else None
+    attachments = [x for x in (attachments or []) if isinstance(x, dict)][:6]
+    attach_note = ""
+    if attachments:
+        from . import attachments as attachmod
+        attach_note = attachmod.context_digest(attachments)
+    image_note = "# 本次输入附有单据图片\ndraft_order 工具已能读取本次图片；若用户要录入图片中的业务，直接调用该工具。" if images and not attachments else ""
+    context = "\n\n".join(x for x in (_context(erp), _conversation_context(history), attach_note, image_note) if x)
+    out = agentmod.run_agent(text, _tools(erp, on_event=_emit, images=images,
+                                         previous_draft=previous_draft,
+                                         attachments=attachments), max_steps=8,
+                             context_block=context, on_event=_emit)
     if not out.get("ok"):
         out["meta"] = meta
         return out

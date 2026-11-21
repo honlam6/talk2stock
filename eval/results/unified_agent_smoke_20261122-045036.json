@@ -1,0 +1,63 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "cases": [
+    {
+      "id": "query_stock",
+      "ok": true,
+      "latency_s": 4.65,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "drafts": 0,
+      "answer": "可乐目前总库存 52 瓶，全部在成品仓，原料仓和仓库1、2、3 均为 0 瓶。"
+    },
+    {
+      "id": "query_stats",
+      "ok": false,
+      "latency_s": 3.49,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "today_stats"
+      ],
+      "drafts": 0,
+      "answer": "今天还没有销售记录，销售额为 0 元，共 0 笔。"
+    },
+    {
+      "id": "draft",
+      "ok": true,
+      "latency_s": 13.79,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "draft_order"
+      ],
+      "drafts": 1,
+      "answer": "草稿已生成，请核对：向美宜佳采购可乐 30 瓶，单价 3.5 元，入原料仓，合计 105 元。确认无误后在确认卡上提交即可写入系统。"
+    },
+    {
+      "id": "clarify",
+      "ok": true,
+      "latency_s": 15.41,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "draft_order"
+      ],
+      "drafts": 1,
+      "answer": "好的，这单是卖给校园超市的。请问要卖哪些商品、各多少数量？单价如果方便也一并告诉我。"
+    },
+    {
+      "id": "boundary",
+      "ok": true,
+      "latency_s": 1.95,
+      "route": "agent",
+      "grounded": true,
+      "tools": [],
+      "drafts": 0,
+      "answer": "智能助手只能查询数据和起草新单，不能修改或删除已有单据。如需删除昨天的单据，请到系统的单据管理页面手动操作。"
+    }
+  ]
+}

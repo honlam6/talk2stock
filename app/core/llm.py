@@ -474,7 +474,8 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_e
     # 2) 流式，不带 response_format / stream_options（兼容不支持这些参数的端点）
     if not (text and text.strip()):
         base = _base_payload(prof, messages, force_json=force_json, purpose=purpose,
-                             extra_effort=reasoning_effort)   # 重建：quirks 可能刚记上
+                             extra_effort=reasoning_effort,
+                             decision_max_tokens=decision_max_tokens)   # 重建：quirks 可能刚记上
         try:
             payload = {k: v for k, v in base.items() if k != "response_format"}
             payload["stream"] = True

@@ -32,7 +32,14 @@ DEFAULT_MAX_TOKENS = 40000
 # （v1 评测实测 a8/a11/a12/c3 全栽在这）。2000 给思考留够余量。
 DEFAULT_AGENT_MAX_TOKENS = 2000
 
-LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用工具收集数据，回答用户问题。
+LOOP_PROMPT = """你是 Talk2Stock 的统一业务 Agent，负责理解用户意图、规划行动、调用工具、检查观察并完成任务。
+
+# 工作方式
+1. 先判断用户想做什么：查数据、起草新单、修正当前草稿、理解系统操作，或请求修改已有数据。
+2. 需要事实时调用工具，不要猜测；工具返回错误、候选、缺项或不完整结果时，把它作为下一步输入并修正计划。
+3. 每轮只做一个动作，观察足够后立即收尾；不要为了显得智能而继续调用。
+4. 当前会话可能包含一张尚未写入的草稿。用户说「改成」「还是那家」「再补一行」时，默认在草稿上修正；
+   用户明确要求修改、删除、作废 ERP 已有数据时，说明本入口只支持新建草稿。
 
 # 工具目录（每轮只能调用一个）
 {tool_catalog}
@@ -42,7 +49,7 @@ LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用
 
 # 输出格式（严格 JSON，每轮恰好一个动作）
 继续调用工具：{{"thought":"简短中文说明为什么调这个工具","tool":"工具名","args":{{...}}}}
-信息已足够：{{"thought":"...","final":"给用户的中文最终回答"}}
+任务完成：{{"thought":"...","final":"给用户的中文最终回答"}}
 
 # 规则
 0. 工具目录里的专用工具能用就用（更快更准，结果已按业务口径算好）；
@@ -71,12 +78,17 @@ LOOP_PROMPT = """你是进销存系统的经营数据 agent。通过逐步调用
    的进销存数据，比如『可乐还有多少库存』『本月卖了多少』『谁欠我钱』。」
 8. 写操作的边界分两种：
    - 用户要录单/下单/进货/退货（新建单据）：调用 draft_order 工具起草
-     （args.text = 用户的录单原话，口语代词补全成完整描述）。草稿只是预览、
-     绝不会写入系统——final 里告诉用户已起草几张单、请在前端确认卡上核对并
-     确认写入。关键信息缺失（商品/数量/往来单位）也照样起草，预览会标出缺失项，
-     不要编造具体数值。
+     （args.text = 用户的录单原话，结合会话把「改成60瓶」「还是那家」等
+     代词补全成完整业务描述）。草稿只是预览、绝不会写入系统。
+   - 草稿观察里有 clarify 时，final 只自然地追问缺失信息，不要说已经生成草稿。
+     有草稿且没有 clarify 时，final 简短说明「草稿已生成，请核对」，不要复述
+     所有明细，也不要新增观察之外的数量、金额或单位。
+   - 关键信息缺失也照样起草，由草稿与追问引导用户补全，禁止编造具体数值。
    - 改库存/删单据/改已有单据等破坏性请求：不要调用任何工具，直接 final
-     说明「问一问只能查询和起草新单，不能修改或删除已有数据」。
+     说明「智能助手只能查询和起草新单，不能修改或删除已有数据」。
+9. 当前消息可能带多个附件（目录在上下文里）。用户说「第一张/第二份/这份合同」时，
+   按编号或文件名选择对应附件；一次 draft_order 只处理一个附件，多个附件就分步调用。
+   不要把不同单据的附件合并成一个草稿，除非用户明确说它们属于同一单。
 
 # 用户问题
 {goal}"""
@@ -184,9 +196,30 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         thought = str(act.get("thought") or "")[:200]
         final = act.get("final")
         if final:
+            final_text = str(final).strip()
+            # 先校验再收尾：未接地答案不是必然降级，而是给模型一次根据
+            # 工具观察修正自己的机会。仍失败才走确定性模板兜底。
+            if observations and not numeric_grounded(final_text, observations):
+                obs = {"error": "最终回答含观察之外的数据，已拦截",
+                       "correction": "只依据观察作答；删掉观察之外的数字与名称，不心算汇总或建议量",
+                       "ungrounded_answer": final_text[:500]}
+                rec = {"step": i, "thought": thought, "tool": None,
+                       "final": final_text, "ok": False, "observation": obs,
+                       "correction": "grounding"}
+                steps.append(rec)
+                _emit(on_event, {"type": "step", "step": rec})
+                history_lines.append(_hist(i, thought, "response_review", {}, obs))
+                if i < max_steps:
+                    continue
+                # 最后一次机会仍不可信：直接落确定性模板，不再追加无预算收尾。
+                answer = "；".join(dict.fromkeys(notes))
+                steps.append({"step": len(steps) + 1, "tool": None,
+                              "fallback": True, "final": answer})
+                return _finish(goal, answer, steps, tokens, started,
+                               observations, notes, prof, forced=True)
             steps.append({"step": i, "thought": thought, "tool": None,
-                          "final": str(final)})
-            return _finish(goal, str(final), steps, tokens, started,
+                          "final": final_text, "ok": True})
+            return _finish(goal, final_text, steps, tokens, started,
                            observations, notes, prof)
 
         name = str(act.get("tool") or "").strip()

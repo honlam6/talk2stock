@@ -104,13 +104,18 @@ class TestRunAgentDraftEvent(unittest.TestCase):
 
 class TestDraftOrder(unittest.TestCase):
     def _ask(self, text, replies):
-        """跑一次完整 ask（agent 路由），draft 依赖全 mock，commit 被调用即测试失败。"""
+        """统一起草：mock 模型决策与校验，任何直接写库都立即失败。"""
         def fake_resolve(d, erp):
             return dict(PREVIEW, items=[dict(x) for x in PREVIEW["items"]])
+
+        def fake_parse(*args, **kwargs):
+            return {"drafts": [dict(DRAFT, items=[dict(DRAFT["items"][0])])],
+                    "meta": dict(META), "check": {"ok": True, "skipped": False},
+                    "clarify": None, "clarify_all": None}
+
         with _patch_profile(), \
              mock.patch.object(llmmod, "_chat", side_effect=replies), \
-             mock.patch.object(llmmod, "parse",
-                               side_effect=[([dict(DRAFT, items=[dict(DRAFT["items"][0])])], dict(META))]) as mp, \
+             mock.patch("core.billcheck.parse_and_check", side_effect=fake_parse) as mp, \
              mock.patch.object(draftmod, "resolve", side_effect=fake_resolve), \
              mock.patch.object(gatemod, "issue", return_value="TOK") as mi, \
              mock.patch.object(gatemod, "prompt_fingerprint", return_value={}), \
@@ -119,6 +124,22 @@ class TestDraftOrder(unittest.TestCase):
                                side_effect=AssertionError("闸门被绕过：draft.commit 被调用")):
             out = askmod.ask(text, erp=_StubErp())
         return out, mp, mi
+
+    def test_unified_entry_always_uses_agent_for_business_stats(self):
+        replies = [
+            _resp({"thought": "需要今日经营数据", "tool": "today_stats", "args": {}}),
+            _resp({"thought": "按观察回答", "final": "今天销售 200 元，共 2 笔"}),
+        ]
+        stats = {"today": {"buy": 100.0, "buy_n": 1, "sell": 200.0, "sell_n": 2, "profit": 100.0}}
+        with _patch_profile(), \
+             mock.patch.object(llmmod, "_chat", side_effect=replies) as chat, \
+             mock.patch.object(askmod, "official_stats", return_value=stats), \
+             mock.patch.object(askmod.dbmod, "schema_brief", return_value=""):
+            out = askmod.ask("今天卖了多少？", erp=_StubErp())
+        self.assertEqual(out["route"], "agent")
+        self.assertEqual(out["drafts"], [])
+        self.assertEqual(chat.call_count, 2)
+        self.assertIn("200", out["answer"])
 
     def test_draft_flow_issues_tokens_never_commits(self):
         replies = [
@@ -164,14 +185,6 @@ class TestDraftOrder(unittest.TestCase):
         self.assertIn("error", data)
         data, note = askmod._draft_order({"text": "x" * 1001}, _StubErp())
         self.assertIn("过长", data["error"])
-
-    def test_rule_route_result_has_empty_drafts(self):
-        stats = {"today": {"buy": 100.0, "buy_n": 1, "sell": 200.0, "sell_n": 2, "profit": 100.0}}
-        with _patch_profile(), \
-             mock.patch.object(askmod, "official_stats", return_value=stats):
-            out = askmod.ask("今天卖了多少？", erp=_StubErp())
-        self.assertEqual(out["route"], "rule")
-        self.assertEqual(out["drafts"], [])
 
 
 if __name__ == "__main__":

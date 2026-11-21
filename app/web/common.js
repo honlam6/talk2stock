@@ -1703,7 +1703,7 @@ function shell(active) {
   const tab = document.createElement('div');
   tab.className = 'tabbar';
   // 移动端四个 Tab：助手（主入口）· 录入（工具页直达）· 看板 · 账号
-  tab.innerHTML = [NAV_ITEMS[0], ['/new', '录入', '✎'], NAV_ITEMS[1]].map(([h, t, i]) =>
+  tab.innerHTML = [NAV_ITEMS[0], NAV_ITEMS[1]].map(([h, t, i]) =>
     `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="ico">${i}</span>${t}</a>`).join('')
     + '<a href="javascript:void 0" id="__tabAcct"><span class="ico">◉</span>账号</a>';
   document.body.appendChild(tab);
