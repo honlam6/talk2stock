@@ -173,13 +173,35 @@ def validate_sql(sql):
     return s
 
 
+def _table_candidates(err):
+    """从 MySQL 1146（表不存在）错误里提取表名，返回相近的真实表名。
+
+    没有这个提示时，模型会在表名上反复猜（线上诊断实测连挂两次、烧掉 3 步）；
+    一次给出候选表名，下一步就能改对。"""
+    m = re.search(r"Table '([^']+)' doesn't exist", err or "")
+    if not m:
+        return []
+    raw = m.group(1)
+    name = raw.split(".")[-1].strip("` ")
+    if not name:
+        return []
+    import difflib
+    return difflib.get_close_matches(name, table_names(), n=3, cutoff=0.35)
+
+
 def sql_query(args):
     """agent 工具：只读 SQL 查全库。返回 (data, 模板句)。"""
     try:
         clean = validate_sql(str(args.get("sql") or ""))
         res = _run(clean)
     except DbError as e:
-        return {"error": str(e), "hint": "只查业务表；计数用 COUNT(*)；软删除字段 delete_flag='0'"}, None
+        msg = str(e)
+        hint = "只查业务表；计数用 COUNT(*)；软删除字段 delete_flag='0'"
+        cands = _table_candidates(msg)
+        if cands:
+            hint = ("表名不存在。相近的业务表：%s——直接用其中的表名重写 SQL，"
+                    "不要再猜或查 information_schema" % "、".join(cands))
+        return {"error": msg, "hint": hint}, None
     data = {"sql": clean, "columns": res["columns"], "rows": res["rows"],
             "row_count": res["row_count"], "truncated": res["truncated"]}
     head = "只读查询返回 %d 行" % res["row_count"]

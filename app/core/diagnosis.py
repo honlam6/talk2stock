@@ -19,8 +19,11 @@ from . import agent as agentmod
 from . import ask as askmod
 from .erp import get_client
 
-DIAG_PROMPT_VERSION = "diag-v1-20261123"
-MAX_STEPS = 8   # 概览四件（今日/本月/库存/欠款）+ 下钻两步 + 收口，实测 6~7 步落定
+DIAG_PROMPT_VERSION = "diag-v2-20261123"
+MAX_STEPS = 10   # 概览四件 + 下钻 1~2 次 + 收口，留足余量：线上实测 8 步时
+                 # 模型在 SQL 表名上连挂两次就把预算烧满、收口没轮到（v1 教训）
+DECISION_MAX_TOKENS = 2600   # 收口 JSON（overview + 3 issues）比普通工具调用长，
+                             # 默认 2000 在推理模型上可能被截断
 
 DIAG_PROMPT = """你是进销存系统的经营诊断师。目标不是「把看板数据复述一遍」，而是通过工具取证，
 找出最值得老板关注的经营问题，并追到可解释的来源，最后给出可执行的改进建议。
@@ -40,11 +43,13 @@ issue 元素：{{"title":"12字以内","evidence":"引用观察里的数字，�
 "severity":"warn|info|good"}}
 
 # 规则
-1. 最多 {max_steps} 轮。先取概览（today_stats / month_stats / debts / low_stock 一般各一次），
-   再从概览里挑 1~3 个最值得追的问题下钻：销售额异常就查是哪个商品/哪天掉的
-   （query_bills 或 sql_query 按商品/日期聚合），欠款集中就查是哪家客户、欠了哪些单。
-   **只写概览没有下钻的诊断视为不合格**——每个 issue 的 evidence_steps 至少包含一步
-   专门为它做的调查，不能全部指向同一轮概览。
+1. 节奏（重要，按此推进）：
+   - 第 1~4 轮：概览四件（today_stats / month_stats / debts / low_stock），每件最多一次；
+   - 第 5~7 轮：下钻 1~2 次（query_bills 或 sql_query），只追最值得说的问题——
+     销售额异常就查是哪个商品/哪天掉的，欠款集中就查是哪家客户、欠了哪些单；
+   - 第 8 轮前必须调用 submit_diagnosis 收口。步数用完时只剩「直接 final」一条路，
+     结论会全部作废（线上实测教训：SQL 表名连挂两次就把预算烧满了）。
+   sql_query 表名写错时会带回候选表名，按提示改一次即可，不要连续猜表名。
 2. evidence 里的每个数字必须原样来自 evidence_steps 对应的观察，禁止编造、禁止心算新数字。
    cause 与 action 是分析语言，可以不含数字；含数字时必须同样能在观察里找到。
 3. severity 只能取 warn / info / good；没有异常就给经营现状类判断（采销规模、库存结构、
@@ -250,7 +255,8 @@ def diagnose(erp, operator="", on_event=None):
         out = agentmod.run_agent(
             goal, tools, max_steps=MAX_STEPS,
             context_block="操作员：%s" % (operator or "（未登录）"),
-            on_event=on_event, prompt_template=DIAG_PROMPT)
+            on_event=on_event, prompt_template=DIAG_PROMPT,
+            decision_max_tokens=DECISION_MAX_TOKENS)
     except Exception as e:
         out = {"ok": False, "error": str(e)[:120], "steps": [], "tokens": {},
                "observations": []}
