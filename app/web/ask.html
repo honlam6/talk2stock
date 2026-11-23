@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#f4f1e8">
-<title>智能助手 · Talk2Stock</title>
+<title>Talk2Stock · ERP Agent</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body class="agent-page">
@@ -26,7 +26,7 @@
   <div class="chat-side-mask" id="sideMask" hidden></div>
   <div class="agent-shell">
   <header class="agent-header">
-    <div class="agent-brand"><button class="agent-menu" id="menuBtn" title="展开对话历史" aria-label="展开对话历史" aria-expanded="false">☰</button><span class="agent-mark">T</span><strong>智能助手</strong><span class="agent-presence">正在连接 ERP</span></div>
+    <div class="agent-brand"><button class="agent-menu" id="menuBtn" title="展开对话历史" aria-label="展开对话历史" aria-expanded="false">☰</button><span class="agent-mark" id="brandMark" title="Talk2Stock · ERP Agent"></span><strong>ERP Agent</strong><span class="agent-presence">正在连接 ERP</span></div>
     <div class="agent-header-actions"><a href="/dashboard" title="经营看板" aria-label="经营看板"><span class="ha-ico">◫</span><span class="ha-txt">看板</span></a><a href="/settings" title="模型与账号设置" aria-label="模型与账号设置"><span class="ha-ico">⚙</span><span class="ha-txt">设置</span></a></div>
   </header>
   <main class="agent-main" id="main"><div class="agent-log" id="log" role="log" aria-live="polite"></div></main>
@@ -34,7 +34,7 @@
     <div class="agent-suggestions" id="suggestions"><button data-q="今天采销怎么样？">今日经营</button><button data-q="可乐还有多少库存？">查库存</button><button data-q="谁欠我钱？">看欠款</button><button data-q="从美宜佳买30瓶可乐，单价3块5，入原料仓">录一单</button></div>
     <div class="agent-composer" id="composer">
       <button class="agent-icon" id="plus" title="添加图片或表格" aria-label="添加图片或表格" aria-expanded="false">＋</button>
-      <textarea id="q" rows="1" maxlength="1000" placeholder="问经营，或说一句要办的事" aria-label="给智能助手发消息"></textarea>
+      <textarea id="q" rows="1" maxlength="1000" placeholder="问经营，或说一句要办的事" aria-label="给 ERP Agent 发消息"></textarea>
       <button class="agent-icon agent-mic" id="mic" title="语音输入" aria-label="语音输入"></button>
       <button class="agent-send" id="send" aria-label="发送" title="发送"><span>↑</span></button>
     </div>
@@ -53,6 +53,20 @@ const log = $id('log'), q = $id('q'), send = $id('send'), suggestions = $id('sug
 const KEY = 't2s_agent_v2';
 const TOOL_LABEL = {stock_query:'查询库存',low_stock:'检查库存预警',today_stats:'汇总今日经营',month_stats:'汇总本月经营',debts:'核算应收应付',recent_bills:'查看近期单据',stock_value:'计算库存货值',master_count:'统计档案',search_docs:'查阅操作指引',search_history:'检索历史',query_bills:'查询单据明细',procurement_suggest:'计算补货建议',sql_query:'核对业务数据',db_schema:'核对数据结构',draft_order:'生成与校验草稿',stock_check:'校验可用库存',last_price:'参考最近成交价',habit_defaults:'参考录入习惯',party_history:'核对往来记录',submit_verdict:'整理校验结论',response_review:'检查回答',decide:'重新思考'};
 const TOOL_VERB = {stock_query:'正在查库存',low_stock:'正在看库存预警',today_stats:'正在汇总今日经营',month_stats:'正在汇总本月经营',debts:'正在核算欠款',recent_bills:'正在查近期单据',stock_value:'正在计算库存货值',master_count:'正在统计档案',search_docs:'正在查操作指引',search_history:'正在找历史记录',query_bills:'正在查单据',procurement_suggest:'正在核对库存与销量',sql_query:'正在核对业务数据',draft_order:'正在整理并校验草稿',stock_check:'正在校验库存',last_price:'正在核对历史价格',habit_defaults:'正在参考录入习惯',party_history:'正在核对往来记录',submit_verdict:'正在整理校验结论'};
+
+/* ---- 像素头像：40×40 手绘 rect，整数倍缩放（聊天 40px / 欢迎页 160px） ---- */
+const AV_IMG = { agent: '/avatars/agent-cat-v3.jpg', user: '/avatars/user-bear-v2.jpg' };
+function avatarHTML(kind) { return '<img src="' + AV_IMG[kind] + '" alt="" decoding="async">'; }
+function avatarEl(kind) {
+  const el = document.createElement('span');
+  el.className = 'agent-avatar agent-avatar-' + kind;
+  el.setAttribute('aria-hidden', 'true');
+  el.innerHTML = avatarHTML(kind);
+  return el;
+}
+$id('brandMark').innerHTML = avatarHTML('agent');
+const motionOK = () => !matchMedia('(prefers-reduced-motion: reduce)').matches;
+let heroRect = null;
 let turns = [], busy = false, controller = null, watchdog = null, pendingImages = [], activeDraft = null, currentBubble = null;
 let convs = {active:'', items:[]}, currentId = '', saveTimer = null;
 
@@ -192,13 +206,22 @@ const CAPS = [
   {ico:'◫', t:'库存货值', d:'按仓库核算金额', q:'库存现在值多少钱？'},
 ];
 function welcome() {
-  log.innerHTML = '<section class="agent-welcome"><div class="agent-orbit">T</div><p class="agent-eyebrow">AGENTIC BUSINESS COPILOT</p><h1>今天，想处理什么？</h1>'
-    + '<p>不用选菜单——说一句话，Agent 自己选工具、多步取证、核对数字后再回答。</p>'
+  log.innerHTML = '<section class="agent-welcome">'
+    + '<div class="am-stage">'
+    + '<span class="am-orbit" aria-hidden="true"></span><span class="am-orbit-dot" aria-hidden="true"></span>'
+    + '<span class="am-portrait" id="heroAgent" role="img" aria-label="Talk2Stock ERP Agent">' + avatarHTML('agent') + '</span>'
+    + '<span class="am-nameplate"><i class="am-dot"></i>Talk2Stock · ERP Agent</span>'
+    + '<span class="am-spark am-s1" aria-hidden="true">✦</span><span class="am-spark am-s2" aria-hidden="true">✦</span><span class="am-spark am-s3" aria-hidden="true">✦</span>'
+    + '</div>'
+    + '<p class="agent-eyebrow">TALK2STOCK · ERP AGENT</p><h1>今天，先处理哪件事？</h1>'
+    + '<p class="am-lede">我是 ERP Agent。说一句话，我会查 ERP 数据、核库存、找凭证；多步取证后再给结论，写库前先给你过目。</p>'
     + '<div class="agent-cap-grid">' + CAPS.map(c => '<button data-q="' + esc(c.q) + '"><span class="cap-ico">' + c.ico + '</span><b>' + c.t + '</b><small>' + c.d + '</small></button>').join('') + '</div>'
     + '<p class="agent-cap-note">支持多轮改稿 · 附件识别 · 表格导入 · 写库前人工确认</p></section>';
 }
 function userView(t, idx) {
-  const d = node('agent-turn agent-user', t.text); log.appendChild(d);
+  const row = node('agent-turn agent-turn-user');
+  const main = node('agent-turn-main');
+  const d = node('agent-user', t.text);
   if (t.files && t.files.length) {
     const files = node('agent-user-files');
     t.files.forEach(f => files.appendChild(node('agent-user-file', '▧ ' + (f.name || '附件'))));
@@ -212,6 +235,9 @@ function userView(t, idx) {
     ed.onclick = () => editTurn(idx);
     tools.appendChild(ed); d.appendChild(tools);
   }
+  main.appendChild(d);
+  row.append(main, avatarEl('user'));
+  log.appendChild(row);
 }
 function editTurn(i) {
   if (busy) { toast('等这一轮完成再修改', 'warn'); return; }
@@ -277,8 +303,9 @@ function stepView(s, idx) {
   detail.append(summary,body); return detail;
 }
 function answerView(t) {
-  const article = node('agent-turn agent-answer'); if (t.error) article.classList.add('agent-error');
-  article.appendChild(node('agent-answer-text',t.answer || t.message || '这次没有完成，请换个说法再试。'));
+  const row = node('agent-turn agent-turn-ai');
+  const body = node('agent-answer'); if (t.error) body.classList.add('agent-error');
+  body.appendChild(node('agent-answer-text',t.answer || t.message || '这次没有完成，请换个说法再试。'));
   const allSteps = t.steps || [];
   if (allSteps.length) {
     const trace = document.createElement('details');
@@ -292,17 +319,18 @@ function answerView(t) {
       + (t.elapsed ? ' · ' + t.elapsed + 's' : '') + '</span><span class="agent-trace-more">收起</span>';
     trace.appendChild(summary);
     const box = node('agent-trace-list'); allSteps.forEach((s, i) => box.appendChild(stepView(s, i + 1))); trace.appendChild(box);
-    article.appendChild(trace);
+    body.appendChild(trace);
   }
-  (t.drafts || []).forEach(p => article.appendChild(draftView(p,t)));
+  (t.drafts || []).forEach(p => body.appendChild(draftView(p,t)));
   const tools = node('agent-msg-tools');
   const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'agent-msg-act'; cp.textContent = '复制';
   cp.onclick = () => copyText(t.answer || '', cp);
   tools.appendChild(cp);
   const meta = runMeta(t);
   if (meta) tools.appendChild(node('agent-run-meta', meta));
-  article.appendChild(tools);
-  log.appendChild(article); return article;
+  body.appendChild(tools);
+  row.append(avatarEl('agent'), body);
+  log.appendChild(row); return row;
 }
 function draftSummary(payload) {
   return (payload.bills || []).map(b => { const d = b.draft || {}, p = b.preview || {}; return {biz:(BIZ[d.biz] || {}).label || d.biz || '业务草稿',party:d.party || '待补往来单位',depot:d.depot || '',total:p.total || 0,items:d.items || [],attachments:(b.attach || payload.attachments || []).map(a => a.name || a).filter(Boolean),warnings:p.warnings || [],errors:p.errors || []}; });
@@ -339,18 +367,62 @@ function openDrafts(payload,parent,btn) {
     }});
   }).catch(e => { btn.disabled = false; toast(e.message,'bad'); });
 }
+function flyAvatar(from, el) {
+  if (!from || !el || !motionOK()) return;
+  const to = el.getBoundingClientRect();
+  if (!from.width || !to.width) return;
+  const ghost = el.cloneNode(true);
+  ghost.className = 'agent-avatar agent-avatar-agent agent-avatar-ghost';
+  ghost.style.cssText = 'position:fixed;left:' + from.left + 'px;top:' + from.top + 'px;width:' + from.width + 'px;height:' + from.height + 'px;margin:0;z-index:120;pointer-events:none;';
+  document.body.appendChild(ghost);
+  el.style.opacity = '0';
+  const dx = (to.left + to.width / 2) - (from.left + from.width / 2);
+  const dy = (to.top + to.height / 2) - (from.top + from.height / 2);
+  const sc = to.width / from.width;
+  const anim = ghost.animate([
+    { transform: 'translate(0,0) scale(1)', opacity: 1 },
+    { transform: 'translate(' + dx * 0.68 + 'px,' + dy * 0.42 + 'px) scale(' + (sc + (1 - sc) * 0.36) + ')', opacity: 1, offset: 0.42 },
+    { transform: 'translate(' + dx + 'px,' + dy + 'px) scale(' + sc + ')', opacity: 1 }
+  ], {duration: 680, easing: 'cubic-bezier(.32,.86,.22,1)'});
+  const land = () => { ghost.remove(); el.style.opacity = ''; el.classList.add('is-landed'); };
+  anim.onfinish = land; anim.oncancel = land;
+}
+function popAvatar(el) {
+  if (!el || !motionOK()) return;
+  const r = el.getBoundingClientRect(), s = send.getBoundingClientRect();
+  if (!r.width) return;
+  el.animate([
+    { transform: 'translate(' + ((s.left + s.width / 2) - (r.left + r.width / 2)) + 'px,' + ((s.top + s.height / 2) - (r.top + r.height / 2)) + 'px) scale(.35)', opacity: 0 },
+    { transform: 'translate(0,0) scale(1)', opacity: 1 }
+  ], {duration: 430, easing: 'cubic-bezier(.2,.8,.2,1)'});
+}
+function enterChat(user) {
+  const portrait = document.querySelector('.agent-welcome .am-portrait');
+  heroRect = portrait ? portrait.getBoundingClientRect() : null;
+  if (log.querySelector('.agent-welcome')) log.innerHTML = '';
+  suggestions.hidden = true;
+  userView(user, turns.length - 1);
+  const av = log.querySelector('.agent-turn-user:last-child .agent-avatar');
+  popAvatar(av);
+}
 function workingView() {
-  const article = node('agent-turn agent-answer agent-working');
+  const row = node('agent-turn agent-turn-ai agent-turn-thinking');
+  const body = node('agent-answer agent-working');
   const live = node('agent-working-line');
   live.innerHTML = '<span class="agent-thinking"></span><span class="agent-live-text">正在理解你的需求</span><span class="agent-live-step"></span><time class="agent-live-time">0s</time>';
-  article.appendChild(live);
-  const trace = node('agent-live-steps'); article.appendChild(trace); log.appendChild(article); scrollEnd();
+  body.appendChild(live);
+  const trace = node('agent-live-steps'); body.appendChild(trace);
+  row.append(avatarEl('agent'), body);
+  log.appendChild(row);
+  const from = heroRect; heroRect = null;
+  if (from) { $id('main').scrollTop = $id('main').scrollHeight; flyAvatar(from, row.querySelector('.agent-avatar')); }
+  else scrollEnd();
   const started = Date.now();
   const tick = setInterval(() => {
-    const el = article.querySelector('.agent-live-time');
+    const el = row.querySelector('.agent-live-time');
     if (el) el.textContent = Math.round((Date.now() - started) / 1000) + 's';
   }, 450);
-  return {article,live,trace,steps:[],started,tick,stepNo:0};
+  return {article:row,live,trace,steps:[],started,tick,stepNo:0};
 }
 function setLive(text, step) {
   if (!currentBubble) return;
@@ -391,8 +463,7 @@ async function doAskWithFiles(text) {
   const files = pendingImages.slice();
   const user = {kind:'user',text:text || '请识别这些附件并生成草稿',files:files.map(p => ({name:p.name,type:p.file.type || p.file.name.split('.').pop()})),images:files.filter(p => p.isImage && p.dataUrl).map(p => p.dataUrl)};
   turns.push(user); save(); persist();
-  if (log.querySelector('.agent-welcome')) log.innerHTML = '';
-  userView(user, turns.length - 1); suggestions.hidden = true;
+  enterChat(user);
   pendingImages = []; renderThumbs(); q.value = ''; resizeInput(); setBusy(true);
   currentBubble = workingView();
   setLive('正在读取附件并规划…');
@@ -427,7 +498,7 @@ async function doAsk(text) {
   if (!text) return;
   const user = {kind:'user',text:text || '识别这张单据'};
   if (pendingImages.length) { user.images = pendingImages.map(p => p.dataUrl).filter(Boolean); user.imageCount = pendingImages.length; }
-  turns.push(user); save(); persist(); if (log.querySelector('.agent-welcome')) log.innerHTML = ''; userView(user, turns.length - 1); suggestions.hidden = true;
+  turns.push(user); save(); persist(); enterChat(user);
   const images = pendingImages.map(p => p.dataUrl).filter(Boolean); pendingImages = []; renderThumbs(); q.value = ''; resizeInput(); setBusy(true); currentBubble = workingView();
   controller = new AbortController(); let gotAny = false, completed = false; const drafts = [];
   const timer = () => { clearTimeout(watchdog); watchdog = setTimeout(() => controller && controller.abort(),120000); }; timer();
@@ -493,7 +564,7 @@ function attachmentMenu() {
 function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); suggestions.hidden = true; return; } turns.forEach((t, i) => t.kind === 'user' ? userView(t, i) : t.kind === 'answer' ? answerView(t, i) : null); suggestions.hidden = true; scrollEnd(false); }
 function newChat() {
   if (busy && controller) { controller._stopped = true; controller.abort(); }
-  turns = []; currentId = ''; activeDraft = null; pendingImages = [];
+  turns = []; currentId = ''; activeDraft = null; pendingImages = []; heroRect = null;
   renderThumbs(); try { sessionStorage.removeItem(KEY); } catch (_) {}
   $id('draftState').textContent = '草稿确认后写入';
   renderHistory(); ctxNote(); q.value = ''; resizeInput(); q.focus({preventScroll:true}); closeSide();

@@ -1526,7 +1526,7 @@ function trapFocus(container, onEscape) {
 // ---------- 命令面板（⌘K / Ctrl+K） ----------
 /** 只做导航与填入输入框，绝不触发解析/提交（沿用用户「少一步」偏好）。 */
 const CMD_ITEMS = [
-  { sec: '主入口', ico: '❝', t: '智能助手', d: '查账随口问；录单直接说，草稿确认后写入', go: () => '/ask' },
+  { sec: '主入口', ico: '❝', t: 'ERP Agent', d: '查账随口问；录单直接说，草稿确认后写入', go: () => '/ask' },
   { sec: '主入口', ico: '▦', t: '表格导入', d: 'Excel / CSV 批量导入（助手内工具页）', go: () => '/new?mode=import' },
   { sec: '主入口', ico: '✎', t: '对话录单', d: '说一句话，AI 拆成草稿', go: () => '/new?mode=ai' },
   { sec: '主入口', ico: '▤', t: '表单录单', d: '逐字段精确控制，不依赖 AI', go: () => '/new?mode=form' },
@@ -1577,7 +1577,7 @@ function commandPalette() {
     if (resetSel !== false) sel = 0;
     if (sel >= shown.length) sel = Math.max(0, shown.length - 1);
     if (!shown.length) {
-      list.innerHTML = '<div class="cmdk-empty">没有匹配的命令<br><span style="font-size:12.5px">试试「看板」「录单」「智能助手」</span></div>';
+      list.innerHTML = '<div class="cmdk-empty">没有匹配的命令<br><span style="font-size:12.5px">试试「看板」「录单」「ERP Agent」</span></div>';
       return;
     }
     let html = '', lastSec = '';
@@ -1664,9 +1664,9 @@ document.addEventListener('keydown', e => {
 })();
 
 // ---------- 侧边导航骨架 ----------
-// 入口收敛：智能助手是唯一主入口；录单页降级为助手内的工具（/new?mode=…）
+// 入口收敛：ERP Agent 是唯一主入口；录单页降级为助手内的工具（/new?mode=…）
 const NAV_ITEMS = [
-  ['/ask', '智能助手', '❝'],
+  ['/ask', 'ERP Agent', '❝'],
   ['/dashboard', '经营看板', '◫'],
   ['/settings', '设置', '⚙'],
 ];
