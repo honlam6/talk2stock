@@ -15,8 +15,13 @@
       <button class="chat-side-fold" id="sideFold" title="收起侧栏" aria-label="收起侧栏">«</button>
     </div>
     <div class="chat-side-actions"><button class="chat-side-new" id="sideNew" title="新对话" aria-label="新对话">＋ 新对话</button></div>
+    <nav class="chat-side-nav" aria-label="主要入口">
+      <a href="/dashboard"><span class="csn-ico">◫</span>经营看板</a>
+      <a href="/new"><span class="csn-ico">▤</span>录单</a>
+      <a href="/settings"><span class="csn-ico">⚙</span>设置</a>
+    </nav>
     <div class="chat-side-list" id="sideList" role="list"></div>
-    <div class="chat-side-foot"><span class="chat-side-user" id="sideUser"></span><a href="/settings" title="模型与账号设置">⚙ 设置</a></div>
+    <div class="chat-side-foot"><span class="chat-side-user" id="sideUser"></span></div>
   </aside>
   <div class="chat-side-mask" id="sideMask" hidden></div>
   <div class="agent-shell">
@@ -33,7 +38,7 @@
       <button class="agent-icon agent-mic" id="mic" title="语音输入" aria-label="语音输入"></button>
       <button class="agent-send" id="send" aria-label="发送" title="发送"><span>↑</span></button>
     </div>
-    <div class="agent-dock-foot"><span id="draftState">草稿确认后才会写入</span><span id="ctxState"></span><span id="composerHint">Enter 发送 · Shift+Enter 换行</span></div>
+    <div class="agent-dock-foot"><span id="draftState">草稿确认后写入</span><span id="ctxState"></span><span id="composerHint">Enter 发送 · Shift+Enter 换行</span></div>
     <div class="agent-thumbs" id="thumbs" hidden></div><input id="imageFile" type="file" accept="image/*,.pdf,.docx,.xlsx,.xlsm,.csv,.tsv,.txt,.md" multiple hidden>
   </footer>
   </div>
@@ -123,7 +128,7 @@ async function openConv(id) {
     const r = await api('/api/conversations?id=' + encodeURIComponent(id));
     if (!r.ok || !r.item) throw new Error(r.message || '会话读取失败');
     currentId = id; turns = r.item.turns || []; activeDraft = null;
-    $id('draftState').textContent = '草稿确认后才会写入';
+    $id('draftState').textContent = '草稿确认后写入';
     renderHistory(); renderSide(); ctxNote(); closeSide();
     try { sessionStorage.removeItem(KEY); } catch (_) {}
   } catch (e) { toast(e.message, 'bad'); }
@@ -201,7 +206,7 @@ function editTurn(i) {
   q.value = t.text || '';
   turns = turns.slice(0, i);
   activeDraft = null;
-  $id('draftState').textContent = '草稿确认后才会写入';
+  $id('draftState').textContent = '草稿确认后写入';
   renderHistory(); ctxNote(); resizeInput(); q.focus({preventScroll:true});
   persist();
   toast('已放回输入框，修改后发送', 'ok');
@@ -435,7 +440,7 @@ function newChat() {
   if (busy && controller) { controller._stopped = true; controller.abort(); }
   turns = []; currentId = ''; activeDraft = null; pendingImages = [];
   renderThumbs(); try { sessionStorage.removeItem(KEY); } catch (_) {}
-  $id('draftState').textContent = '草稿确认后才会写入';
+  $id('draftState').textContent = '草稿确认后写入';
   renderHistory(); ctxNote(); q.value = ''; resizeInput(); q.focus({preventScroll:true}); closeSide();
 }
 send.onclick = () => { if (busy && controller) { controller._stopped = true; controller.abort(); } else doAsk(q.value); };
