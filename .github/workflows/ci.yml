@@ -62,9 +62,11 @@ jobs:
           script_stop: true
           command_timeout: 5m
           script: /opt/t2s-deploy-lite.sh
-      - name: 部署后健康检查
+      - name: 部署后公网探测（参考项）
+        continue-on-error: true
         run: |
-          # 入口收敛后 / 是 302 → /ask（主入口 200），健康检查以主入口为准
+          # 服务是否健康以 SSH 步骤的 DEPLOY_HEALTHY 为准（服务器本机 /ask 200）。
+          # runner 在海外，公网 8090 可能被防火墙限速/临时阻断（实测 HTTP 000、
+          # 有时 302），公网探测只作连通性参考，不作为 CI 失败条件。
           code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 http://${{ secrets.SSH_HOST }}:8090/ask || true)
-          echo "Talk2Stock /ask HTTP $code"
-          [ "$code" = "200" ] || { echo "::error::部署后健康检查失败"; exit 1; }
+          echo "公网 /ask HTTP $code（参考值；以 DEPLOY_HEALTHY 为准）"
