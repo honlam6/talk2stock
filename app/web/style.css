@@ -1790,7 +1790,7 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 .agent-live-time { margin-left:auto; color:var(--text-3); font-size:11px; font-variant-numeric:tabular-nums; }
 .agent-live-step { color:var(--gold-strong); font-size:11px; font-variant-numeric:tabular-nums; }
 /* Agent 能力网格（欢迎页） */
-.agent-cap-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; width:min(640px,100%); margin:0 auto 16px; }
+.agent-cap-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; width:min(720px,100%); margin:0 auto 16px; }
 .agent-cap-grid button { display:flex; flex-direction:column; align-items:flex-start; gap:3px; padding:13px 14px; border:1px solid var(--line); border-radius:12px; background:rgba(255,253,247,.7); text-align:left; cursor:pointer; transition:transform .12s ease,border-color .12s ease; }
 .agent-cap-grid button:hover { border-color:var(--gold); background:var(--card); transform:translateY(-1px); }
 .agent-cap-grid .cap-ico { color:var(--gold-strong); font-size:17px; line-height:1; }
