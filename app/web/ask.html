@@ -302,10 +302,50 @@ function stepView(s, idx) {
   else if (s.error) body.appendChild(node('agent-thought', String(s.error)));
   detail.append(summary,body); return detail;
 }
+async function retryAsk(user) {
+  setBusy(true);
+  controller = new AbortController();
+  currentBubble = workingView();
+  setLive('正在重试…');
+  try {
+    const r = await api('/api/ask', {method:'POST', signal:controller.signal, body:{text:user.text, images:user.images || [], history:historyPayload(), draft:currentDraftPayload()}});
+    finishWorking(r, r.drafts || []);
+  } catch (e) {
+    if (currentBubble && currentBubble.tick) clearInterval(currentBubble.tick);
+    if (currentBubble) currentBubble.article.remove();
+    currentBubble = null;
+    turns.push({kind:'answer', answer:e.name === 'AbortError' ? '已停止重试。' : (e.message || '重试失败'), error:true, steps:[]});
+    save(); persist(); renderHistory();
+  } finally { controller = null; setBusy(false); }
+}
+function retryTurn(t) {
+  if (busy) { toast('等这一轮完成再重试','warn'); return; }
+  const idx = turns.indexOf(t);
+  if (idx < 0) return;
+  let u = idx - 1;
+  while (u >= 0 && turns[u].kind !== 'user') u--;
+  if (u < 0) { toast('找不到对应的提问','warn'); return; }
+  const user = turns[u];
+  if ((user.files || []).some(f => !/^image\//.test(f.type || ''))) {
+    q.value = user.text || ''; resizeInput(); q.focus({preventScroll:true});
+    toast('附件消息请重新选择附件后发送','warn');
+    return;
+  }
+  turns = turns.slice(0, u + 1);
+  save(); persist(); renderHistory(); suggestions.hidden = true;
+  retryAsk(user);
+}
 function answerView(t) {
   const row = node('agent-turn agent-turn-ai');
   const body = node('agent-answer'); if (t.error) body.classList.add('agent-error');
   body.appendChild(node('agent-answer-text',t.answer || t.message || '这次没有完成，请换个说法再试。'));
+  if (t.error) {
+    const retry = document.createElement('button');
+    retry.type = 'button'; retry.className = 'agent-retry'; retry.textContent = '↻ 重试';
+    retry.setAttribute('aria-label', '重试这次提问');
+    retry.onclick = () => retryTurn(t);
+    body.appendChild(retry);
+  }
   const allSteps = t.steps || [];
   if (allSteps.length) {
     const trace = document.createElement('details');

@@ -1906,6 +1906,9 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 .agent-answer { align-self:stretch; color:var(--text); }
 .agent-answer-text { font-size:16px; line-height:1.9; white-space:pre-wrap; word-break:break-word; }
 .agent-error .agent-answer-text { color:var(--rust); }
+.agent-retry { display:inline-flex; align-items:center; gap:5px; margin-top:10px; padding:6px 13px; border:1px solid rgba(194,154,59,.55); border-radius:8px; background:var(--gold-bg); color:var(--gold-strong); font-size:12.5px; cursor:pointer; }
+.agent-retry:hover { background:var(--gold-soft); border-color:var(--gold-strong); }
+.agent-retry:disabled { opacity:.5; cursor:default; }
 .agent-working-line { display:flex; align-items:center; gap:10px; color:var(--text-2); font-size:13px; }
 .agent-thinking { width:7px; height:7px; background:var(--gold-strong); border-radius:50%; animation:agent-pulse 1.4s ease-in-out infinite; }
 @keyframes agent-pulse { 50% { opacity:.35; box-shadow:0 0 0 5px rgba(194,154,59,.1); } }
