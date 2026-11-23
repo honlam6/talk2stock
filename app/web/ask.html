@@ -249,7 +249,7 @@ function argBrief(s) {
 function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
 function runMeta(t) {
   const parts = [];
-  const model = (t.meta && t.meta.model) || '';
+  const model = ((t.meta && t.meta.model) || '').split('/').pop();
   if (model) parts.push(model);
   if (t.steps && t.steps.length) parts.push(t.steps.length + ' 步');
   if (t.elapsed) parts.push(t.elapsed + 's');
@@ -500,6 +500,7 @@ function newChat() {
 }
 send.onclick = () => { if (busy && controller) { controller._stopped = true; controller.abort(); } else doAsk(q.value); };
 q.addEventListener('input',resizeInput); q.addEventListener('keydown',e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) doAsk(q.value); } });
+window.addEventListener('resize',resizeInput);
 q.addEventListener('paste',e => { const files = Array.from((e.clipboardData || {}).items || []).filter(x => x.kind === 'file' && x.type.startsWith('image/')).map(x => x.getAsFile()).filter(Boolean); if (files.length) { e.preventDefault(); addImages(files); } });
 ['dragover','dragleave','drop'].forEach(type => $id('composer').addEventListener(type,e => { e.preventDefault(); $id('composer').classList.toggle('is-drag',type === 'dragover'); if (type === 'drop') addImages(e.dataTransfer.files); }));
 $id('plus').onclick = attachmentMenu; $id('imageFile').onchange = e => { addImages(e.target.files); e.target.value = ''; };
