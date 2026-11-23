@@ -31,7 +31,7 @@
   </header>
   <main class="agent-main" id="main"><div class="agent-log" id="log" role="log" aria-live="polite"></div></main>
   <footer class="agent-dock">
-    <div class="agent-suggestions" id="suggestions"><button data-q="今天采销怎么样？">今日经营</button><button data-q="可乐还有多少库存？">查库存</button><button data-q="谁欠我钱？">看欠款</button><button data-q="从美宜佳买30瓶可乐，单价3块5，入原料仓">录一单</button></div>
+    <div class="agent-suggestions" id="suggestions"><button data-q="今天采销怎么样？">今日经营</button><button data-q="可乐还有多少库存？">查库存</button><button data-q="谁欠我钱？">看欠款</button><button data-q="哪些商品该补货？">补货建议</button><button data-q="从美宜佳买30瓶可乐，单价3块5，入原料仓">录一单</button></div>
     <div class="agent-composer" id="composer">
       <button class="agent-icon" id="plus" title="添加图片或表格" aria-label="添加图片或表格" aria-expanded="false">＋</button>
       <textarea id="q" rows="1" maxlength="1000" placeholder="问经营，或说一句要办的事" aria-label="给智能助手发消息"></textarea>
@@ -51,8 +51,8 @@
 const $id = id => document.getElementById(id);
 const log = $id('log'), q = $id('q'), send = $id('send'), suggestions = $id('suggestions');
 const KEY = 't2s_agent_v2';
-const TOOL_LABEL = {stock_query:'查询库存',low_stock:'检查库存预警',today_stats:'汇总今日经营',month_stats:'汇总本月经营',debts:'核算应收应付',recent_bills:'查看近期单据',stock_value:'计算库存货值',master_count:'统计档案',search_docs:'查阅操作指引',search_history:'检索历史',query_bills:'查询单据明细',sql_query:'核对业务数据',db_schema:'核对数据结构',draft_order:'生成与校验草稿',stock_check:'校验可用库存',last_price:'参考最近成交价',habit_defaults:'参考录入习惯',party_history:'核对往来记录',submit_verdict:'整理校验结论',response_review:'检查回答',decide:'重新思考'};
-const TOOL_VERB = {stock_query:'正在查库存',low_stock:'正在看库存预警',today_stats:'正在汇总今日经营',month_stats:'正在汇总本月经营',debts:'正在核算欠款',recent_bills:'正在查近期单据',stock_value:'正在计算库存货值',master_count:'正在统计档案',search_docs:'正在查操作指引',search_history:'正在找历史记录',query_bills:'正在查单据',sql_query:'正在核对业务数据',draft_order:'正在整理并校验草稿',stock_check:'正在校验库存',last_price:'正在核对历史价格',habit_defaults:'正在参考录入习惯',party_history:'正在核对往来记录',submit_verdict:'正在整理校验结论'};
+const TOOL_LABEL = {stock_query:'查询库存',low_stock:'检查库存预警',today_stats:'汇总今日经营',month_stats:'汇总本月经营',debts:'核算应收应付',recent_bills:'查看近期单据',stock_value:'计算库存货值',master_count:'统计档案',search_docs:'查阅操作指引',search_history:'检索历史',query_bills:'查询单据明细',procurement_suggest:'计算补货建议',sql_query:'核对业务数据',db_schema:'核对数据结构',draft_order:'生成与校验草稿',stock_check:'校验可用库存',last_price:'参考最近成交价',habit_defaults:'参考录入习惯',party_history:'核对往来记录',submit_verdict:'整理校验结论',response_review:'检查回答',decide:'重新思考'};
+const TOOL_VERB = {stock_query:'正在查库存',low_stock:'正在看库存预警',today_stats:'正在汇总今日经营',month_stats:'正在汇总本月经营',debts:'正在核算欠款',recent_bills:'正在查近期单据',stock_value:'正在计算库存货值',master_count:'正在统计档案',search_docs:'正在查操作指引',search_history:'正在找历史记录',query_bills:'正在查单据',procurement_suggest:'正在核对库存与销量',sql_query:'正在核对业务数据',draft_order:'正在整理并校验草稿',stock_check:'正在校验库存',last_price:'正在核对历史价格',habit_defaults:'正在参考录入习惯',party_history:'正在核对往来记录',submit_verdict:'正在整理校验结论'};
 let turns = [], busy = false, controller = null, watchdog = null, pendingImages = [], activeDraft = null, currentBubble = null;
 let convs = {active:'', items:[]}, currentId = '', saveTimer = null;
 

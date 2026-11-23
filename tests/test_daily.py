@@ -95,10 +95,18 @@ _GOOD_POINTS = [
 _GOOD_DRAFTS = [{"biz": "purchase_in", "party": "美宜佳",
                  "items": [{"name": "可乐", "qty": 50, "unit": "瓶"}]}]
 
+# 算法侧补货建议（daily 现在只采信 procurement 的确定性数量，模型给的 qty 不作数）
+_ALGO = {"可乐": {"name": "可乐", "suggest_qty": 50, "unit": "瓶",
+                  "supplier": "美宜佳", "level": "reorder"}}
+
 
 class TestMorningReport(unittest.TestCase):
     def setUp(self):
         dmod.invalidate()   # 模块级缓存按天共享，逐用例清场
+        # _valid_drafts 会调 _suggest_map（SQL 通道）；离线单测钉死为算法替身
+        p = mock.patch.object(dmod, "_suggest_map", lambda erp=None: dict(_ALGO))
+        p.start()
+        self.addCleanup(p.stop)
 
     def test_submit_verdict_channel(self):
         """结论走 submit_verdict 的 args：points/suggest_drafts 从工具通道落地，
@@ -106,7 +114,7 @@ class TestMorningReport(unittest.TestCase):
         replies = _replies(_GOOD_POINTS, _GOOD_DRAFTS)
         with _patch_profile(), _patch_ask_stats(), \
              mock.patch.object(llmmod, "_chat", side_effect=replies) as chat:
-            out = dmod.morning_report(erp=None, operator="测试员")
+            out = dmod.morning_report(erp=object(), operator="测试员")
         self.assertTrue(out["ok"])
         self.assertFalse(out["cached"])
         self.assertEqual(out["prompt_version"], DAILY_PROMPT_VERSION)
@@ -124,15 +132,15 @@ class TestMorningReport(unittest.TestCase):
         replies = _replies(_GOOD_POINTS, _GOOD_DRAFTS) * 2   # 够两次完整运行
         with _patch_profile(), _patch_ask_stats(), \
              mock.patch.object(llmmod, "_chat", side_effect=replies) as chat:
-            first = dmod.morning_report(erp=None)
+            first = dmod.morning_report(erp=object())
             self.assertFalse(first["cached"])
             self.assertEqual(chat.call_count, 4)
-            second = dmod.morning_report(erp=None)
+            second = dmod.morning_report(erp=object())
             self.assertTrue(second["cached"])
             self.assertEqual(chat.call_count, 4)             # 缓存命中：LLM 零调用
             self.assertEqual(second["points"], first["points"])
             dmod.invalidate()
-            third = dmod.morning_report(erp=None)
+            third = dmod.morning_report(erp=object())
             self.assertFalse(third["cached"])
             self.assertEqual(chat.call_count, 8)             # 失效后重新取证
 
@@ -140,7 +148,7 @@ class TestMorningReport(unittest.TestCase):
         """未配置模型 → ok False + 提示语，绝不碰 LLM。"""
         with mock.patch.object(cfgmod, "agent_profile", lambda: None), \
              mock.patch.object(llmmod, "_chat") as chat:
-            out = dmod.morning_report(erp=None)
+            out = dmod.morning_report(erp=object())
         self.assertFalse(out["ok"])
         self.assertIn("模型", out["message"])
         chat.assert_not_called()
@@ -150,7 +158,7 @@ class TestMorningReport(unittest.TestCase):
         official_stats/summary/stock_overview 的替身（零编造），无补货建议。"""
         with _patch_profile(), _patch_ask_stats(), \
              mock.patch.object(llmmod, "_chat", side_effect=Exception("boom")):
-            out = dmod.morning_report(erp=None)
+            out = dmod.morning_report(erp=object())
         self.assertTrue(out["ok"])
         self.assertTrue(out["degraded"])
         self.assertFalse(out["cached"])
@@ -165,25 +173,25 @@ class TestMorningReport(unittest.TestCase):
         self.assertIn("1,200.00", out["report_md"])          # 今日销售 1,200.00
 
     def test_draft_and_point_sanitizing(self):
-        """结论合法化：编造数字的点被接地校验丢弃；补货建议只留结构合法的
-        purchase_in（price 剥掉、party 必须在观察里、qty 非法整条剔除）。"""
+        """结论合法化：编造数字的点被接地校验丢弃；补货建议只留算法覆盖的
+        purchase_in（数量来自算法、price 剥掉、算法无此商品则整条丢弃）。"""
         messy_drafts = [
             {"biz": "purchase_in", "party": "美宜佳",
              "items": [{"name": "可乐", "qty": 50, "unit": "瓶", "price": 999}]},   # 合法，price 被剥
             {"biz": "sale_out", "party": "美宜佳",
              "items": [{"name": "可乐", "qty": 5, "unit": "瓶"}]},                  # biz 不合法
             {"biz": "purchase_in", "party": "美宜佳", "items": []},                 # 空明细
-            {"biz": "purchase_in", "party": "不存在供应商",
-             "items": [{"name": "可乐", "qty": 5, "unit": "瓶"}]},                  # party 无观察支撑
             {"biz": "purchase_in", "party": "美宜佳",
-             "items": [{"name": "可乐", "qty": "很多", "unit": "瓶"}]},              # qty 非法 → 明细空
+             "items": [{"name": "雪碧", "qty": 5, "unit": "瓶"}]},                  # 算法无此商品
+            {"biz": "purchase_in", "party": "美宜佳",
+             "items": [{"name": "可乐", "qty": "很多", "unit": "瓶"}]},              # 模型数量不作数
         ]
         points = [dict(_GOOD_POINTS[0]),
                   {"title": "编的", "detail": "今天卖了 99999.00 元", "severity": "warn"}]
         with _patch_profile(), _patch_ask_stats(), \
              mock.patch.object(llmmod, "_chat",
                                side_effect=_replies(points, messy_drafts)):
-            out = dmod.morning_report(erp=None)
+            out = dmod.morning_report(erp=object())
         self.assertTrue(out["ok"])
         self.assertFalse(out.get("degraded"))
         # 编造数字的点被丢，接地点保留

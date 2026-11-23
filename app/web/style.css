@@ -1109,6 +1109,56 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 .ins-card.ins-warn { border-left-color: #a33c1f; background: #fbf4ee; }
 .ins-card .ins-t { font-weight: 700; font-size: 14px; margin-bottom: 3px; }
 .ins-card .ins-d { font-size: 12.5px; color: var(--text-2); line-height: 1.65; }
+
+/* ---- 深度诊断卡（dashboard）：与日报卡同款外壳（金描边产出卡） ---- */
+.diag-card { margin-top: 12px; border: 1.5px solid var(--gold); border-radius: 12px; background: #fffdf6; padding: 18px 20px; }
+.diag-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; border-bottom: 1px dashed var(--gold); padding-bottom: 10px; margin-bottom: 12px; }
+.diag-title { font-family: var(--f-display); font-size: 20px; font-weight: 700; letter-spacing: .06em; }
+.diag-overview { font-size: 13.5px; color: var(--text-2); line-height: 1.8; margin: 0 0 10px; }
+.diag-issue { border: 1px solid var(--line-soft); border-left: 3px solid var(--jade); border-radius: var(--radius-s); background: #faf8f1; padding: 10px 12px; margin-bottom: 8px; }
+.diag-issue.is-warn { border-left-color: var(--rust); background: var(--rust-bg); }
+.diag-issue-head { font-weight: 700; font-size: 14px; margin-bottom: 5px; }
+.diag-line { font-size: 12.8px; color: var(--text-2); line-height: 1.75; margin-top: 3px; }
+.diag-line b { color: var(--gold-strong); font-weight: 600; margin-right: 6px; }
+.diag-ref { font-size: 11.5px; color: var(--text-3); margin-top: 6px; }
+.diag-stats { font-size: 11.5px; color: var(--gold-strong); background: var(--gold-bg); border-radius: 99px; padding: 2px 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.diag-step-chip { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 99px; background: var(--gold-bg); color: var(--gold-strong); font-size: 11.5px; font-weight: 600; }
+.diag-live { font-size: 13px; color: var(--text-2); margin-top: 10px; }
+.diag-live::before { content: "◌ "; animation: diag-pulse 1.2s ease-in-out infinite; }
+@keyframes diag-pulse { 50% { opacity: .25; } }
+.diag-steps { margin-top: 6px; }
+.diag-step { display: flex; gap: 8px; align-items: center; font-size: 12.5px; color: var(--text-2); padding: 3px 0; border-bottom: 1px dotted var(--line-soft); }
+.diag-step span:first-child { color: var(--jade); font-weight: 700; }
+.diag-step.is-error span:first-child { color: var(--rust); }
+.diag-step time { margin-left: auto; color: var(--text-3); font-size: 11px; }
+.diag-trace { margin-top: 10px; font-size: 12.5px; color: var(--text-3); }
+.diag-trace summary { cursor: pointer; color: var(--text-2); font-weight: 500; user-select: none; }
+
+/* ---- 智能采购建议卡（dashboard）：桌面表格 / 窄屏卡片列表（同最近单据模式） ---- */
+.proc-evi { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 10px; font-size: 11.5px; color: var(--text-3); }
+.proc-evi .pe-item { background: var(--paper-2); border-radius: 99px; padding: 2px 9px; color: var(--text-2); }
+.proc-evi .pe-item b { color: var(--gold-strong); font-weight: 700; }
+.proc-evi .pe-ms { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-3); white-space: nowrap; }
+.proc-table td, .proc-table th { padding: 8px 10px; }
+.proc-reason { max-width: 340px; color: var(--text-2); font-size: 12.5px; line-height: 1.6; }
+.pill.proc-bad { background: var(--rust-bg); color: var(--rust); }
+.pill.proc-warn { background: var(--gold-bg); color: var(--gold-strong); }
+.pill.proc-ok { background: var(--jade-bg); color: var(--jade); }
+.proc-asm { margin-top: 8px; font-size: 12px; color: var(--text-3); line-height: 1.8; }
+.proc-asm summary { cursor: pointer; color: var(--text-2); font-weight: 500; user-select: none; }
+.proc-cards { display: none; flex-direction: column; gap: 9px; }
+.proc-card { border: 1px solid var(--line-soft); border-left: 3px solid var(--gold); border-radius: 10px; background: #faf8f1; padding: 10px 12px; font-size: 14px; }
+.proc-card.pc-bad { border-left-color: var(--rust); }
+.proc-card.pc-warn { border-left-color: var(--gold); }
+.proc-card .pc-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.proc-card .pc-name { font-weight: 600; color: var(--text); min-width: 0; }
+.proc-card .pc-qty { margin-left: auto; font-weight: 800; font-variant-numeric: tabular-nums; font-size: 16px; color: var(--ink-900); white-space: nowrap; }
+.proc-card .pc-mid { margin-top: 5px; font-size: 12.5px; color: var(--text-2); line-height: 1.7; }
+.proc-card .pc-reason { margin-top: 4px; font-size: 12.5px; color: var(--text-3); line-height: 1.65; word-break: break-word; }
+@media (max-width: 640px) {
+  .proc-table-wrap { display: none; }
+  .proc-cards { display: flex; }
+}
 .report-card {
   margin-top: 12px; border: 1.5px solid var(--gold); border-radius: 12px;
   background: #fffdf6; padding: 18px 20px;

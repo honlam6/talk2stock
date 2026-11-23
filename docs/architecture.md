@@ -257,3 +257,35 @@ top 归因正确；`summary`/看板/问一问 debts 工具同一数据源全部�
 - `eval/run_unified.py` 5/5（查询、统计、起草、澄清、危险请求）；
 - 浏览器端到端：桌面与 390px 无横向溢出，草稿卡 → 确认层 → 写入状态闭环；
 - 接口级写入 `00000000749` 后库存 0→1，随后通过 seed 恢复演示基线。
+
+---
+
+## ADR-15 · 补货数量交给确定性算法，诊断结论绑定调查链（2026-11-23）
+
+**背景**：新增两项能力——智能采购建议（看板卡片 + 对话工具）与 AI 经营诊断
+（多步调查）。两者都有同一个退化风险：把数字交给 LLM 猜、把看板数据复述一遍
+当结论。
+
+**决策**：
+1. **补货量是纯函数**：日均净销量 ×（采购间隔中位数 + 覆盖天数）+ 安全库存 −
+   当前库存，向上取整。LLM 只决定「建议哪些商品」，日报与采购草稿的数量一律取
+   算法值；接口 `/api/procurement/draft` 只收商品 id 列表、**不收数量**，防草稿
+   脱离可复算口径。
+2. **安全库存口径修正**：预警阈值从 `material/list` 的 `lowDecimal`（schema 语义
+   是「最低售价」，价格字段）改为 `jsh_material_initial_stock.low_safe_stock`
+   （数量，material_id × 仓库，跨仓求和）；SQL 不可达降级为全局阈值。
+3. **诊断结论绑定调查链**：每条 issue 必须声明 `evidence_steps`（工具步骤序号），
+   证据数字只能来自这些步骤的观察（比全观察池更窄）；索引无效退全池并标 `lax`；
+   全部被丢降级 `insight.insights()` 规则模板。
+4. 零销量商品不催货（负库存提示盘点）；无历史供应商的商品不进草稿（不猜）。
+
+**后果**：采购建议可在任何环境用同一公式复算；诊断与日报的差异有了结构证据
+（模型必须真的下钻）；SQL/LLM 任一不可用时显式降级，不空转、不猜数。
+
+**证据**：
+- `tests/test_procurement.py` 8 项 + `tests/test_diagnosis.py` 5 项；全量
+  `python3 -m unittest discover -s tests` 198 项全绿；
+- 本地冒烟：`GET /api/procurement/suggest`、`POST /api/procurement/draft`、
+  `POST /api/diagnose`、`POST /api/diagnose/stream` 路由均通，无 ERP/模型时返回
+  中文降级提示；
+- 设计口径全文见 `docs/智能采购与深度诊断设计.md`。

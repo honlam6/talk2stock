@@ -46,5 +46,10 @@
     "default_depot_in": "原料仓",
     "default_depot_out": "成品仓",
     "default_account_id": 25
+  },
+  "procurement": {
+    "days": 30,
+    "cover_days": 30,
+    "lead_time_days": 7
   }
 }

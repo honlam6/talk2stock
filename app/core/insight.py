@@ -13,7 +13,7 @@ import time
 
 from . import config as cfgmod
 from . import llm as llmmod
-from .report import summary, official_stats, stock_overview, recent_bills
+from .report import summary, official_stats, stock_overview, recent_bills, _safe_stock_map
 from .erp import get_client
 
 PROMPT_VERSION = "insight-v1-20261024"
@@ -27,7 +27,7 @@ def collect_facts(erp=None):
     erp = erp or get_client()
     facts = {"generated_at": time.strftime("%Y-%m-%d %H:%M")}
 
-    ov = stock_overview(erp)
+    ov = stock_overview(erp, safe_map=_safe_stock_map(erp))
     facts["stock"] = {"kinds": ov.get("kinds"), "negative_kinds": ov.get("negative"),
                       "low_kinds": ov.get("low"), "threshold": ov.get("threshold"),
                       "tightest": [{"name": w["name"], "stock": w["stock"], "unit": w["unit"]}

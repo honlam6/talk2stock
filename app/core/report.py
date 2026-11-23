@@ -219,11 +219,14 @@ def recent_bills(erp=None, limit=12, bills=None):
     return out
 
 
-def stock_overview(erp=None, low_threshold=10, limit=40, goods=None):
+def stock_overview(erp=None, low_threshold=10, limit=40, goods=None, safe_map=None):
     """库存总览 + 低库存预警。material/list 行自带 stock 字段。
 
-    goods 为 in_out_stats 的结果（可选）：传入时给预警行补库存货值；
-    每商品预警阈值优先取商品自己的 lowDecimal（未设则用 low_threshold）。
+    goods 为 in_out_stats 的结果（可选）：传入时给预警行补库存货值。
+    预警阈值口径：优先商品自己的最低库存数量（safe_map: material_id → 数量，
+    来自 jsh_material_initial_stock.low_safe_stock，由 procurement 层提供），
+    未设则用全局 low_threshold。⚠️ 旧实现误用了 material 行的 lowDecimal——
+    那是「最低售价」（价格），把价格当数量阈值会让预警口径失真。
     """
     erp = erp or get_client()
     mats = erp.materials()
@@ -236,10 +239,12 @@ def stock_overview(erp=None, low_threshold=10, limit=40, goods=None):
         if st is None:
             continue
         st = _f(st)
+        key = m.get("id")
         try:
-            thr = _f(m.get("lowDecimal")) or low_threshold
-        except Exception:
-            thr = low_threshold
+            key = int(key)
+        except (TypeError, ValueError):
+            pass
+        thr = _f((safe_map or {}).get(key)) or low_threshold
         total_kinds += 1
         if st < 0:
             neg += 1
@@ -500,6 +505,17 @@ def account_breakdown(erp=None):
     return out
 
 
+def _safe_stock_map(erp):
+    """最低库存数量映射（material_id → low_safe_stock 跨仓合计）。
+
+    SQL/数据库不可达时返回 {}——预警退回全局阈值，绝不因口径增强让看板变慢/报错。"""
+    try:
+        from . import procurement as pmod
+        return pmod.safe_stock_map(erp)
+    except Exception:
+        return {}
+
+
 def _dashboard_full(erp):
     """完整看板数据（原 dashboard 逻辑）。"""
     try:
@@ -524,7 +540,7 @@ def _dashboard_full(erp):
     except Exception:
         s["goods"] = {"rows": [], "all_rows": []}
     try:
-        s["stock"] = stock_overview(erp, goods=s["goods"])
+        s["stock"] = stock_overview(erp, goods=s["goods"], safe_map=_safe_stock_map(erp))
     except Exception:
         s["stock"] = {"kinds": 0, "negative": 0, "low": 0, "warn_list": []}
     try:
@@ -575,7 +591,7 @@ def _dashboard_lite(erp):
     except Exception:
         out["recent"] = []
     try:
-        ov = stock_overview(erp)
+        ov = stock_overview(erp, safe_map=_safe_stock_map(erp))
         out["stock"] = {k: ov.get(k) for k in ("kinds", "negative", "low")}
         out["stock"]["warn_list"] = (ov.get("warn_list") or [])[:5]
     except Exception:
