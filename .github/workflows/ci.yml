@@ -64,6 +64,7 @@ jobs:
           script: /opt/t2s-deploy-lite.sh
       - name: 部署后健康检查
         run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 http://${{ secrets.SSH_HOST }}:8090/ || true)
-          echo "Talk2Stock HTTP $code"
+          # 入口收敛后 / 是 302 → /ask（主入口 200），健康检查以主入口为准
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 http://${{ secrets.SSH_HOST }}:8090/ask || true)
+          echo "Talk2Stock /ask HTTP $code"
           [ "$code" = "200" ] || { echo "::error::部署后健康检查失败"; exit 1; }
