@@ -106,6 +106,7 @@ function leanTurns() {
     if (t.kind === 'user') { const o = {kind: 'user', text: t.text}; if (t.files) o.files = t.files.map(f => ({name: f.name})); return o; }
     const o = {kind: 'answer', answer: t.answer, steps: t.steps || []};
     ['error', 'tokens', 'elapsed', 'route', 'grounded'].forEach(k => { if (t[k] != null) o[k] = t[k]; });
+    if (t.meta && t.meta.model) o.meta = {model: t.meta.model};
     o.drafts = (t.drafts || []).map(p => ({batch_id: p.batch_id, raw_text: p.raw_text, meta: p.meta,
       bills: (p.bills || []).map(b => ({draft: b.draft, preview: b.preview, attach: b.attach || []})),
       attachments: p.attachments || [], clarify: p.clarify || null}));
@@ -180,8 +181,19 @@ function restore() {
 }
 function node(cls, text) { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; return d; }
 function scrollEnd(smooth = true) { $id('main').scrollTo({top:$id('main').scrollHeight,behavior:smooth && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth':'auto'}); }
+const CAPS = [
+  {ico:'◔', t:'今日经营', d:'采销与现金流一屏汇总', q:'今天采销怎么样？'},
+  {ico:'▤', t:'库存预警', d:'负库存/低库存扫描', q:'库存有哪些不足？'},
+  {ico:'¥', t:'应收应付', d:'谁欠我、我欠谁', q:'谁欠我钱？'},
+  {ico:'▦', t:'单据检索', d:'按条件查历史单据', q:'最近有哪些采购单？'},
+  {ico:'✦', t:'一句话录单', d:'自然语言起草并校验', q:'从美宜佳买30瓶可乐，单价3块5，入原料仓'},
+  {ico:'◫', t:'库存货值', d:'按仓库核算金额', q:'库存现在值多少钱？'},
+];
 function welcome() {
-  log.innerHTML = '<section class="agent-welcome"><div class="agent-orbit">T</div><p class="agent-eyebrow">YOUR BUSINESS, IN CONVERSATION</p><h1>今天，想处理什么？</h1><p>查一笔账，或录一张单。</p><div class="agent-welcome-actions"><button data-q="帮我看看今天经营得怎么样">看看今天的经营 <span>↗</span></button><button data-q="从美宜佳买30瓶可乐，单价3块5，入原料仓">说一句话，开始录单 <span>↗</span></button></div></section>';
+  log.innerHTML = '<section class="agent-welcome"><div class="agent-orbit">T</div><p class="agent-eyebrow">AGENTIC BUSINESS COPILOT</p><h1>今天，想处理什么？</h1>'
+    + '<p>不用选菜单——说一句话，Agent 自己选工具、多步取证、核对数字后再回答。</p>'
+    + '<div class="agent-cap-grid">' + CAPS.map(c => '<button data-q="' + esc(c.q) + '"><span class="cap-ico">' + c.ico + '</span><b>' + c.t + '</b><small>' + c.d + '</small></button>').join('') + '</div>'
+    + '<p class="agent-cap-note">支持多轮改稿 · 附件识别 · 表格导入 · 写库前人工确认</p></section>';
 }
 function userView(t, idx) {
   const d = node('agent-turn agent-user', t.text); log.appendChild(d);
@@ -222,11 +234,41 @@ async function copyText(text, btn) {
     document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done();
   } catch (_) { toast('复制失败，请手动选择文本', 'warn'); }
 }
-function stepView(s) {
-  const detail = document.createElement('details'); detail.className = 'agent-step' + (s.ok === false ? ' is-error':'');
-  const label = TOOL_LABEL[s.tool] || s.tool || (s.correction ? '重新思考' : (s.ok === false ? '未完成的步骤' : '思考'));
-  const summary = document.createElement('summary'); summary.innerHTML = '<span class="agent-step-dot"></span><span>' + esc(label) + '</span>' + (s.latency_ms ? '<time>' + s.latency_ms + 'ms</time>':'') + '<span class="agent-step-caret">⌄</span>';
-  const body = node('agent-step-body'); if (s.thought) body.appendChild(node('agent-thought', s.thought));
+function argBrief(s) {
+  const a = (s && s.args) || {};
+  const out = [];
+  ['biz','party','name','qty','unit','depot','keyword','text','days','limit'].forEach(k => {
+    const v = a[k];
+    if (v == null || v === '') return;
+    out.push(String(v));
+  });
+  return out.slice(0, 3).join(' · ').slice(0, 44);
+}
+function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
+function runMeta(t) {
+  const parts = [];
+  const model = (t.meta && t.meta.model) || '';
+  if (model) parts.push(model);
+  if (t.steps && t.steps.length) parts.push(t.steps.length + ' 步');
+  if (t.elapsed) parts.push(t.elapsed + 's');
+  const tk = t.tokens ? (Number(t.tokens.prompt || 0) + Number(t.tokens.completion || 0)) : 0;
+  if (tk) parts.push(fmtTok(tk) + ' tok');
+  return parts.join(' · ');
+}
+function stepView(s, idx) {
+  const detail = document.createElement('details');
+  detail.className = 'agent-step' + (s.correction ? ' is-correct' : (s.ok === false ? ' is-error' : ''));
+  const label = TOOL_LABEL[s.tool] || s.tool || (s.correction ? '自我校验' : (s.ok === false ? '未完成' : '思考'));
+  const brief = argBrief(s);
+  const summary = document.createElement('summary');
+  summary.innerHTML = '<span class="agent-step-idx">' + (idx != null ? idx : '') + '</span>'
+    + '<span class="agent-step-dot"></span><span class="agent-step-name">' + esc(label) + '</span>'
+    + (brief ? '<em class="agent-step-args">' + esc(brief) + '</em>' : '')
+    + (s.latency_ms ? '<time>' + s.latency_ms + 'ms</time>' : '')
+    + '<span class="agent-step-caret">⌄</span>';
+  const body = node('agent-step-body');
+  if (s.correction) body.appendChild(node('agent-thought', '自我校验：回答里出现观察之外的数字，已拦截并让模型按证据重答。'));
+  if (s.thought) body.appendChild(node('agent-thought', '判断：' + s.thought));
   const obs = s.observation && typeof s.observation === 'object' ? (s.observation.error || s.observation) : s.observation;
   if (obs != null) { const pre = document.createElement('pre'); pre.textContent = (typeof obs === 'string' ? obs : JSON.stringify(obs, null, 2)).slice(0,3000); body.appendChild(pre); }
   else if (s.error) body.appendChild(node('agent-thought', String(s.error)));
@@ -237,17 +279,26 @@ function answerView(t) {
   article.appendChild(node('agent-answer-text',t.answer || t.message || '这次没有完成，请换个说法再试。'));
   const allSteps = t.steps || [];
   if (allSteps.length) {
-    const trace = document.createElement('details'); trace.className = 'agent-trace'; const summary = document.createElement('summary');
-    const okCount = allSteps.filter(s => s.ok !== false).length;
-    summary.innerHTML = '<span class="agent-trace-icon">' + (t.error ? '!' : '✓') + '</span><span>' + (t.error ? '过程' : '已完成') + ' · ' + allSteps.length + ' 步' + (okCount !== allSteps.length ? '（' + (allSteps.length - okCount) + ' 步未成功）' : '') + (t.elapsed ? ' · ' + t.elapsed + 's' : '') + '</span><span class="agent-trace-more">过程</span>';
-    trace.appendChild(summary); const box = node('agent-trace-list'); allSteps.forEach(s => box.appendChild(stepView(s))); trace.appendChild(box); article.appendChild(trace);
+    const trace = document.createElement('details');
+    trace.className = 'agent-trace';
+    trace.open = true;   // 过程就是产品：默认展开，可收起
+    const summary = document.createElement('summary');
+    const bad = allSteps.filter(s => s.ok === false).length;
+    const fixed = allSteps.filter(s => s.correction).length;
+    summary.innerHTML = '<span class="agent-trace-icon">⚙</span><span>执行过程 · ' + allSteps.length + ' 步'
+      + (bad ? '（' + bad + ' 步被纠正）' : '') + (fixed ? '（自检拦截 ' + fixed + ' 次）' : '')
+      + (t.elapsed ? ' · ' + t.elapsed + 's' : '') + '</span><span class="agent-trace-more">收起</span>';
+    trace.appendChild(summary);
+    const box = node('agent-trace-list'); allSteps.forEach((s, i) => box.appendChild(stepView(s, i + 1))); trace.appendChild(box);
+    article.appendChild(trace);
   }
   (t.drafts || []).forEach(p => article.appendChild(draftView(p,t)));
   const tools = node('agent-msg-tools');
   const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'agent-msg-act'; cp.textContent = '复制';
   cp.onclick = () => copyText(t.answer || '', cp);
   tools.appendChild(cp);
-  if (!allSteps.length && t.elapsed) tools.appendChild(node('agent-msg-meta', t.elapsed + ' 秒'));
+  const meta = runMeta(t);
+  if (meta) tools.appendChild(node('agent-run-meta', meta));
   article.appendChild(tools);
   log.appendChild(article); return article;
 }
@@ -289,7 +340,7 @@ function openDrafts(payload,parent,btn) {
 function workingView() {
   const article = node('agent-turn agent-answer agent-working');
   const live = node('agent-working-line');
-  live.innerHTML = '<span class="agent-thinking"></span><span class="agent-live-text">正在理解你的需求</span><time class="agent-live-time">0s</time>';
+  live.innerHTML = '<span class="agent-thinking"></span><span class="agent-live-text">正在理解你的需求</span><span class="agent-live-step"></span><time class="agent-live-time">0s</time>';
   article.appendChild(live);
   const trace = node('agent-live-steps'); article.appendChild(trace); log.appendChild(article); scrollEnd();
   const started = Date.now();
@@ -297,12 +348,14 @@ function workingView() {
     const el = article.querySelector('.agent-live-time');
     if (el) el.textContent = Math.round((Date.now() - started) / 1000) + 's';
   }, 450);
-  return {article,live,trace,steps:[],started,tick};
+  return {article,live,trace,steps:[],started,tick,stepNo:0};
 }
-function setLive(text) {
+function setLive(text, step) {
   if (!currentBubble) return;
   const el = currentBubble.live.querySelector('.agent-live-text');
   if (el) el.textContent = text;
+  const st = currentBubble.live.querySelector('.agent-live-step');
+  if (st) st.textContent = step ? '第 ' + step + ' 步' : '';
 }
 function eventStep(s) { if (!s.tool && !s.correction) return; currentBubble.steps.push(s); const v = stepView(s); v.open = s.ok === false; currentBubble.trace.appendChild(v); scrollEnd(); }
 function compactPayload(p) { return {batch_id:p.batch_id || '',raw_text:p.raw_text || '',meta:p.meta || {},bills:(p.bills || []).map(b => ({draft:b.draft,preview:b.preview,confirm_token:b.confirm_token,attach:b.attach || []})),attachments:p.attachments || [],clarify:p.clarify || null}; }
@@ -310,7 +363,7 @@ function finishWorking(r,drafts) {
   if (!r || r.ok === false) throw new Error((r && r.message) || '这次请求没有完成');
   const elapsed = currentBubble ? Math.max(0.1, Math.round((Date.now() - currentBubble.started) / 100) / 10) : null;
   if (currentBubble && currentBubble.tick) clearInterval(currentBubble.tick);
-  const t = {kind:'answer',answer:r.answer,route:r.route,grounded:r.grounded,steps:r.steps && r.steps.length ? r.steps : currentBubble.steps,tokens:r.tokens,elapsed,drafts:drafts.map(compactPayload)};
+  const t = {kind:'answer',answer:r.answer,route:r.route,grounded:r.grounded,steps:r.steps && r.steps.length ? r.steps : currentBubble.steps,tokens:r.tokens,elapsed,meta:r.meta && r.meta.model ? {model:r.meta.model} : undefined,drafts:drafts.map(compactPayload)};
   turns.push(t); save(); persist(); const next = answerView(t); currentBubble.article.replaceWith(next); currentBubble = null;
   const last = drafts[drafts.length - 1];
   if (last) { activeDraft = last; const missing = last.clarify && last.clarify.question; $id('draftState').textContent = missing || '可继续用自然语言修改这张草稿'; if (missing) toast(missing,'warn'); else toast('草稿已生成，点卡片核对','ok'); }
@@ -387,7 +440,7 @@ async function doAsk(text) {
         const chunk = buffer.slice(0,idx); buffer = buffer.slice(idx + 2); const line = chunk.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
         let ev; try { ev = JSON.parse(line.slice(5)); } catch (_) { continue; } gotAny = true;
         if (ev.type === 'start') setLive('正在理解你的需求…');
-        else if (ev.type === 'action') setLive((TOOL_VERB[ev.tool] || '正在处理') + '…');
+        else if (ev.type === 'action') setLive((TOOL_VERB[ev.tool] || '正在处理') + '…', ++currentBubble.stepNo);
         else if (ev.type === 'step') eventStep(ev.step);
         else if (ev.type === 'draft') { if (!drafts.some(p => p.batch_id && p.batch_id === (ev.payload || {}).batch_id)) drafts.push(ev.payload || {}); setLive('草稿已整理好…'); }
         else if (ev.type === 'done') { const r = ev.result || {}; finishWorking(r,r.drafts && r.drafts.length ? r.drafts : drafts); completed = true; }
@@ -435,7 +488,7 @@ function attachmentMenu() {
   $id('chooseImage').onclick = () => { menu.remove(); $id('imageFile').click(); };
   $id('chooseSheet').onclick = () => { menu.remove(); if (!window.ImportDialog) { location.href = '/new?mode=import'; return; } ImportDialog.open({onDrafts:p => { const t = {kind:'answer',answer:'表格已整理成 ' + (p.bills || []).length + ' 张草稿。',steps:[],drafts:[p]}; turns.push(t); save(); persist(); renderHistory(); activeDraft = p; $id('draftState').textContent = '可继续用自然语言修改这张草稿'; }}); };
 }
-function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); suggestions.hidden = false; return; } turns.forEach((t, i) => t.kind === 'user' ? userView(t, i) : t.kind === 'answer' ? answerView(t, i) : null); suggestions.hidden = true; scrollEnd(false); }
+function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); suggestions.hidden = true; return; } turns.forEach((t, i) => t.kind === 'user' ? userView(t, i) : t.kind === 'answer' ? answerView(t, i) : null); suggestions.hidden = true; scrollEnd(false); }
 function newChat() {
   if (busy && controller) { controller._stopped = true; controller.abort(); }
   turns = []; currentId = ''; activeDraft = null; pendingImages = [];

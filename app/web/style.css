@@ -1738,6 +1738,25 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 .agent-user .agent-msg-act:hover { background:rgba(244,241,232,.12); color:var(--paper); }
 .agent-msg-meta { color:var(--text-3); font-size:10px; }
 .agent-live-time { margin-left:auto; color:var(--text-3); font-size:11px; font-variant-numeric:tabular-nums; }
+.agent-live-step { color:var(--gold-strong); font-size:11px; font-variant-numeric:tabular-nums; }
+/* Agent 能力网格（欢迎页） */
+.agent-cap-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; width:min(640px,100%); margin:0 auto 16px; }
+.agent-cap-grid button { display:flex; flex-direction:column; align-items:flex-start; gap:3px; padding:13px 14px; border:1px solid var(--line); border-radius:12px; background:rgba(255,253,247,.7); text-align:left; cursor:pointer; transition:transform .12s ease,border-color .12s ease; }
+.agent-cap-grid button:hover { border-color:var(--gold); background:var(--card); transform:translateY(-1px); }
+.agent-cap-grid .cap-ico { color:var(--gold-strong); font-size:17px; line-height:1; }
+.agent-cap-grid b { font-size:13px; color:var(--ink-900); font-weight:600; }
+.agent-cap-grid small { color:var(--text-3); font-size:11px; line-height:1.4; }
+.agent-cap-note { margin:0; color:var(--text-3); font-size:11px; letter-spacing:.02em; }
+/* Agent 执行面板 */
+.agent-trace > summary { font-size:12px; color:var(--text-2); }
+.agent-trace[open] > summary .agent-trace-more { display:none; }
+.agent-trace-icon { color:var(--gold-strong); }
+.agent-step-idx { min-width:16px; color:var(--text-3); font-size:10px; font-variant-numeric:tabular-nums; }
+.agent-step-name { color:var(--text); }
+.agent-step-args { color:var(--text-3); font-size:11px; font-style:normal; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:46%; }
+.agent-step.is-correct .agent-step-dot { background:var(--gold-strong); }
+.agent-step.is-correct > summary { color:var(--gold-strong); }
+.agent-run-meta { margin-left:auto; color:var(--text-3); font-size:10px; font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 /* 顶栏入口带文字标签（桌面） */
 .agent-page .agent-header-actions a { display:inline-flex; align-items:center; justify-content:center; gap:6px; width:auto; min-width:36px; height:36px; padding:0 11px; font-size:13px; }
 .ha-ico { font-size:15px; }
@@ -1761,6 +1780,9 @@ hr.sep { border: none; border-top: 1px solid var(--line-soft); margin: 18px 0; }
 @media (max-width:640px) {
   #ctxState { display:none; }
   .agent-dock-foot { justify-content:flex-start; }
+  .agent-cap-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+  .agent-cap-grid button { padding:10px 11px; }
+  .agent-step-args { max-width:38%; }
 }
 
 /* ================= 统一 Agent 工作台 =================

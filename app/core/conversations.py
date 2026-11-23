@@ -104,6 +104,9 @@ def _lean_turn(t):
         for k in ("tokens", "elapsed"):
             if isinstance(t.get(k), (int, float)):
                 out[k] = t.get(k)
+        meta = t.get("meta")
+        if isinstance(meta, dict) and meta.get("model"):
+            out["meta"] = {"model": _clip(meta.get("model"), 80)}
         if t.get("route"):
             out["route"] = _clip(t.get("route"), 40)
         steps = []
