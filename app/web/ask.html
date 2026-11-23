@@ -8,10 +8,21 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body class="agent-page">
-<div class="agent-shell">
+<div class="chat-app">
+  <aside class="chat-side" id="side" aria-label="对话历史">
+    <div class="chat-side-top">
+      <span class="chat-side-title">对话</span>
+      <button class="chat-side-fold" id="sideFold" title="收起侧栏" aria-label="收起侧栏">«</button>
+    </div>
+    <div class="chat-side-actions"><button class="chat-side-new" id="sideNew" title="新对话" aria-label="新对话">＋ 新对话</button></div>
+    <div class="chat-side-list" id="sideList" role="list"></div>
+    <div class="chat-side-foot"><span class="chat-side-user" id="sideUser"></span><a href="/settings" title="模型与账号设置">⚙ 设置</a></div>
+  </aside>
+  <div class="chat-side-mask" id="sideMask" hidden></div>
+  <div class="agent-shell">
   <header class="agent-header">
-    <div class="agent-brand"><span class="agent-mark">T</span><strong>智能助手</strong><span class="agent-presence">正在连接 ERP</span></div>
-    <div class="agent-header-actions"><a href="/dashboard" title="经营看板" aria-label="经营看板">◫</a><a href="/settings" title="模型与账号设置" aria-label="模型与账号设置">⚙</a></div>
+    <div class="agent-brand"><button class="agent-menu" id="menuBtn" title="展开对话历史" aria-label="展开对话历史" aria-expanded="false">☰</button><span class="agent-mark">T</span><strong>智能助手</strong><span class="agent-presence">正在连接 ERP</span></div>
+    <div class="agent-header-actions"><a href="/dashboard" title="经营看板" aria-label="经营看板"><span class="ha-ico">◫</span><span class="ha-txt">看板</span></a><a href="/settings" title="模型与账号设置" aria-label="模型与账号设置"><span class="ha-ico">⚙</span><span class="ha-txt">设置</span></a></div>
   </header>
   <main class="agent-main" id="main"><div class="agent-log" id="log" role="log" aria-live="polite"></div></main>
   <footer class="agent-dock">
@@ -22,9 +33,10 @@
       <button class="agent-icon agent-mic" id="mic" title="语音输入" aria-label="语音输入"></button>
       <button class="agent-send" id="send" aria-label="发送" title="发送"><span>↑</span></button>
     </div>
-    <div class="agent-dock-foot"><span id="draftState">草稿确认后才会写入</span><span id="composerHint">Enter 发送 · Shift+Enter 换行</span></div>
+    <div class="agent-dock-foot"><span id="draftState">草稿确认后才会写入</span><span id="ctxState"></span><span id="composerHint">Enter 发送 · Shift+Enter 换行</span></div>
     <div class="agent-thumbs" id="thumbs" hidden></div><input id="imageFile" type="file" accept="image/*,.pdf,.docx,.xlsx,.xlsm,.csv,.tsv,.txt,.md" multiple hidden>
   </footer>
+  </div>
 </div>
 <script src="/common.js"></script>
 <script src="/import.js"></script>
@@ -34,9 +46,113 @@
 const $id = id => document.getElementById(id);
 const log = $id('log'), q = $id('q'), send = $id('send'), suggestions = $id('suggestions');
 const KEY = 't2s_agent_v2';
-let turns = [], busy = false, controller = null, watchdog = null, pendingImages = [], activeDraft = null, currentBubble = null;
 const TOOL_LABEL = {stock_query:'查询库存',low_stock:'检查库存预警',today_stats:'汇总今日经营',month_stats:'汇总本月经营',debts:'核算应收应付',recent_bills:'查看近期单据',stock_value:'计算库存货值',master_count:'统计档案',search_docs:'查阅操作指引',search_history:'检索历史',query_bills:'查询单据明细',sql_query:'核对业务数据',db_schema:'核对数据结构',draft_order:'生成与校验草稿',stock_check:'校验可用库存',last_price:'参考最近成交价',habit_defaults:'参考录入习惯',party_history:'核对往来记录',submit_verdict:'整理校验结论',response_review:'检查回答',decide:'重新思考'};
 const TOOL_VERB = {stock_query:'正在查库存',low_stock:'正在看库存预警',today_stats:'正在汇总今日经营',month_stats:'正在汇总本月经营',debts:'正在核算欠款',recent_bills:'正在查近期单据',stock_value:'正在计算库存货值',master_count:'正在统计档案',search_docs:'正在查操作指引',search_history:'正在找历史记录',query_bills:'正在查单据',sql_query:'正在核对业务数据',draft_order:'正在整理并校验草稿',stock_check:'正在校验库存',last_price:'正在核对历史价格',habit_defaults:'正在参考录入习惯',party_history:'正在核对往来记录',submit_verdict:'正在整理校验结论'};
+let turns = [], busy = false, controller = null, watchdog = null, pendingImages = [], activeDraft = null, currentBubble = null;
+let convs = {active:'', items:[]}, currentId = '', saveTimer = null;
+
+/* ---- 会话侧栏：服务端按登录用户持久化，多端同一账号同步 ---- */
+const sideList = $id('sideList'), side = $id('side'), sideMask = $id('sideMask');
+function relTime(ts) {
+  if (!ts) return '';
+  const d = Math.floor((Date.now() - ts) / 1000);
+  if (d < 60) return '刚刚';
+  if (d < 3600) return Math.floor(d / 60) + ' 分钟前';
+  if (d < 86400) return Math.floor(d / 3600) + ' 小时前';
+  if (d < 86400 * 7) return Math.floor(d / 86400) + ' 天前';
+  const x = new Date(ts), p = n => String(n).padStart(2, '0');
+  return (x.getMonth() + 1) + '/' + p(x.getDate());
+}
+function renderSide() {
+  sideList.innerHTML = '';
+  const items = convs.items || [];
+  if (!items.length) { sideList.innerHTML = '<p class="chat-side-empty">还没有历史对话。<br>发一句话就会自动保存。</p>'; return; }
+  items.forEach(it => {
+    const row = node('chat-side-item' + (it.id === currentId ? ' is-active' : ''));
+    row.setAttribute('role', 'listitem');
+    const open = document.createElement('button');
+    open.type = 'button'; open.className = 'chat-side-open';
+    open.innerHTML = '<span class="csi-title"></span><span class="csi-meta"></span>';
+    open.querySelector('.csi-title').textContent = it.title || '未命名对话';
+    open.querySelector('.csi-meta').textContent = (it.count || 0) + ' 条 · ' + relTime(it.updated);
+    open.onclick = () => openConv(it.id);
+    const tools = node('chat-side-tools');
+    const rn = document.createElement('button'); rn.type = 'button'; rn.title = '重命名'; rn.textContent = '✎';
+    rn.onclick = e => { e.stopPropagation(); renameConv(it); };
+    const del = document.createElement('button'); del.type = 'button'; del.title = '删除'; del.textContent = '×';
+    del.onclick = e => { e.stopPropagation(); deleteConv(it); };
+    tools.append(rn, del);
+    row.append(open, tools);
+    sideList.appendChild(row);
+  });
+}
+async function loadConvs() {
+  const r = await api('/api/conversations');
+  if (!r.ok) throw new Error(r.message || '会话列表读取失败');
+  convs = {active: r.active || '', items: r.items || []};
+  renderSide();
+}
+function titleOf() {
+  const t = turns.find(x => x.kind === 'user' && (x.text || '').trim());
+  return t ? t.text.trim().slice(0, 40) : '';
+}
+function leanTurns() {
+  return turns.slice(-30).map(t => {
+    if (t.kind === 'user') { const o = {kind: 'user', text: t.text}; if (t.files) o.files = t.files.map(f => ({name: f.name})); return o; }
+    const o = {kind: 'answer', answer: t.answer, steps: t.steps || []};
+    ['error', 'tokens', 'elapsed', 'route', 'grounded'].forEach(k => { if (t[k] != null) o[k] = t[k]; });
+    o.drafts = (t.drafts || []).map(p => ({batch_id: p.batch_id, raw_text: p.raw_text, meta: p.meta,
+      bills: (p.bills || []).map(b => ({draft: b.draft, preview: b.preview, attach: b.attach || []})),
+      attachments: p.attachments || [], clarify: p.clarify || null}));
+    return o;
+  });
+}
+function persist() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      const r = await api('/api/conversations', {method: 'POST', body: {action: 'upsert', id: currentId, title: titleOf(), turns: leanTurns()}});
+      if (r.ok && r.item) { currentId = r.item.id; convs.active = r.item.id; const i = convs.items.findIndex(x => x.id === r.item.id); if (i >= 0) convs.items[i] = r.item; else convs.items.unshift(r.item); renderSide(); }
+    } catch (_) { /* 会话保存失败不阻断本轮对话 */ }
+  }, 220);
+}
+async function openConv(id) {
+  if (busy) { toast('等这一轮完成再切换会话', 'warn'); return; }
+  if (id === currentId) { closeSide(); return; }
+  try {
+    const r = await api('/api/conversations?id=' + encodeURIComponent(id));
+    if (!r.ok || !r.item) throw new Error(r.message || '会话读取失败');
+    currentId = id; turns = r.item.turns || []; activeDraft = null;
+    $id('draftState').textContent = '草稿确认后才会写入';
+    renderHistory(); renderSide(); ctxNote(); closeSide();
+    try { sessionStorage.removeItem(KEY); } catch (_) {}
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function deleteConv(it) {
+  if (!window.confirm('删除「' + (it.title || '未命名对话') + '」？此操作不可恢复。')) return;
+  try {
+    const r = await api('/api/conversations', {method: 'POST', body: {action: 'delete', id: it.id}});
+    if (!r.ok) throw new Error(r.message || '删除失败');
+    convs = {active: r.active || '', items: r.items || []};
+    if (currentId === it.id) { currentId = ''; turns = []; renderHistory(); ctxNote(); }
+    renderSide(); toast('已删除', 'ok');
+  } catch (e) { toast(e.message, 'bad'); }
+}
+async function renameConv(it) {
+  const v = window.prompt('重命名对话', it.title || '');
+  if (v == null) return;
+  try {
+    const r = await api('/api/conversations', {method: 'POST', body: {action: 'rename', id: it.id, title: v}});
+    if (!r.ok) throw new Error(r.message || '重命名失败');
+    convs = {active: r.active || convs.active, items: r.items || convs.items};
+    renderSide();
+  } catch (e) { toast(e.message, 'bad'); }
+}
+function openSide() { side.classList.add('is-open'); sideMask.hidden = false; $id('menuBtn').setAttribute('aria-expanded', 'true'); }
+function closeSide() { side.classList.remove('is-open'); sideMask.hidden = true; $id('menuBtn').setAttribute('aria-expanded', 'false'); }
+function ctxNote() {
+  $id('ctxState').textContent = turns.length ? '上下文 · 最近 ' + Math.min(turns.length, 10) + ' 条' : '';
+}
 const readJSON = (storage, key, fallback) => { try { const v = JSON.parse(storage.getItem(key)); return v == null ? fallback : v; } catch (_) { return fallback; } };
 function save() {
   try {
@@ -56,14 +172,13 @@ function restore() {
     const old = readJSON(sessionStorage, 't2s_ask_v1', []);
     if (Array.isArray(old)) turns = old.map(m => m.t === 'u' ? {kind:'user',text:m.q} : m.t === 'b' && m.r ? {kind:'answer',answer:m.r.answer,steps:m.r.steps || [],route:m.r.route,grounded:m.r.grounded} : null).filter(Boolean);
   }
-  if (turns.length) renderHistory(); else welcome();
 }
 function node(cls, text) { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; return d; }
 function scrollEnd(smooth = true) { $id('main').scrollTo({top:$id('main').scrollHeight,behavior:smooth && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth':'auto'}); }
 function welcome() {
   log.innerHTML = '<section class="agent-welcome"><div class="agent-orbit">T</div><p class="agent-eyebrow">YOUR BUSINESS, IN CONVERSATION</p><h1>今天，想处理什么？</h1><p>查一笔账，或录一张单。</p><div class="agent-welcome-actions"><button data-q="帮我看看今天经营得怎么样">看看今天的经营 <span>↗</span></button><button data-q="从美宜佳买30瓶可乐，单价3块5，入原料仓">说一句话，开始录单 <span>↗</span></button></div></section>';
 }
-function userView(t) {
+function userView(t, idx) {
   const d = node('agent-turn agent-user', t.text); log.appendChild(d);
   if (t.files && t.files.length) {
     const files = node('agent-user-files');
@@ -71,24 +186,65 @@ function userView(t) {
     d.appendChild(files);
   }
   if (t.images && t.images.length) { const images = node('agent-message-images'); t.images.forEach(src => { const img = document.createElement('img'); img.src = src; img.alt = '随消息发送的单据图片'; images.appendChild(img); }); d.appendChild(images); }
+  if (idx != null && idx >= 0) {
+    const tools = node('agent-msg-tools');
+    const ed = document.createElement('button');
+    ed.type = 'button'; ed.className = 'agent-msg-act'; ed.textContent = '编辑重发';
+    ed.onclick = () => editTurn(idx);
+    tools.appendChild(ed); d.appendChild(tools);
+  }
+}
+function editTurn(i) {
+  if (busy) { toast('等这一轮完成再修改', 'warn'); return; }
+  const t = turns[i];
+  if (!t || t.kind !== 'user') return;
+  q.value = t.text || '';
+  turns = turns.slice(0, i);
+  activeDraft = null;
+  $id('draftState').textContent = '草稿确认后才会写入';
+  renderHistory(); ctxNote(); resizeInput(); q.focus({preventScroll:true});
+  persist();
+  toast('已放回输入框，修改后发送', 'ok');
+}
+async function copyText(text, btn) {
+  const done = () => { if (btn) { const old = btn.textContent; btn.textContent = '已复制'; setTimeout(() => { btn.textContent = old; }, 1200); } };
+  try {
+    if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); done(); return; }
+  } catch (_) { /* 回退到 execCommand */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done();
+  } catch (_) { toast('复制失败，请手动选择文本', 'warn'); }
 }
 function stepView(s) {
   const detail = document.createElement('details'); detail.className = 'agent-step' + (s.ok === false ? ' is-error':'');
-  const summary = document.createElement('summary'); summary.innerHTML = '<span class="agent-step-dot"></span><span>' + esc(TOOL_LABEL[s.tool] || s.tool || '重新思考') + '</span>' + (s.latency_ms ? '<time>' + s.latency_ms + 'ms</time>':'') + '<span class="agent-step-caret">⌄</span>';
+  const label = TOOL_LABEL[s.tool] || s.tool || (s.correction ? '重新思考' : (s.ok === false ? '未完成的步骤' : '思考'));
+  const summary = document.createElement('summary'); summary.innerHTML = '<span class="agent-step-dot"></span><span>' + esc(label) + '</span>' + (s.latency_ms ? '<time>' + s.latency_ms + 'ms</time>':'') + '<span class="agent-step-caret">⌄</span>';
   const body = node('agent-step-body'); if (s.thought) body.appendChild(node('agent-thought', s.thought));
-  if (s.observation != null) { const pre = document.createElement('pre'); pre.textContent = JSON.stringify(s.observation, null, 2).slice(0,3000); body.appendChild(pre); }
+  const obs = s.observation && typeof s.observation === 'object' ? (s.observation.error || s.observation) : s.observation;
+  if (obs != null) { const pre = document.createElement('pre'); pre.textContent = (typeof obs === 'string' ? obs : JSON.stringify(obs, null, 2)).slice(0,3000); body.appendChild(pre); }
+  else if (s.error) body.appendChild(node('agent-thought', String(s.error)));
   detail.append(summary,body); return detail;
 }
 function answerView(t) {
   const article = node('agent-turn agent-answer'); if (t.error) article.classList.add('agent-error');
   article.appendChild(node('agent-answer-text',t.answer || t.message || '这次没有完成，请换个说法再试。'));
-  const steps = (t.steps || []).filter(s => s.tool || s.correction);
-  if (steps.length) {
-    const trace = document.createElement('details'); trace.className = 'agent-trace'; const summary = document.createElement('summary'); const n = steps.filter(s => s.tool && s.ok).length;
-    summary.innerHTML = '<span class="agent-trace-icon">✓</span><span>已完成 · ' + n + ' 次工具调用</span><span class="agent-trace-more">过程</span>';
-    trace.appendChild(summary); const box = node('agent-trace-list'); steps.forEach(s => box.appendChild(stepView(s))); trace.appendChild(box); article.appendChild(trace);
+  const allSteps = t.steps || [];
+  if (allSteps.length) {
+    const trace = document.createElement('details'); trace.className = 'agent-trace'; const summary = document.createElement('summary');
+    const okCount = allSteps.filter(s => s.ok !== false).length;
+    summary.innerHTML = '<span class="agent-trace-icon">' + (t.error ? '!' : '✓') + '</span><span>' + (t.error ? '过程' : '已完成') + ' · ' + allSteps.length + ' 步' + (okCount !== allSteps.length ? '（' + (allSteps.length - okCount) + ' 步未成功）' : '') + (t.elapsed ? ' · ' + t.elapsed + 's' : '') + '</span><span class="agent-trace-more">过程</span>';
+    trace.appendChild(summary); const box = node('agent-trace-list'); allSteps.forEach(s => box.appendChild(stepView(s))); trace.appendChild(box); article.appendChild(trace);
   }
-  (t.drafts || []).forEach(p => article.appendChild(draftView(p,t))); log.appendChild(article); return article;
+  (t.drafts || []).forEach(p => article.appendChild(draftView(p,t)));
+  const tools = node('agent-msg-tools');
+  const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'agent-msg-act'; cp.textContent = '复制';
+  cp.onclick = () => copyText(t.answer || '', cp);
+  tools.appendChild(cp);
+  if (!allSteps.length && t.elapsed) tools.appendChild(node('agent-msg-meta', t.elapsed + ' 秒'));
+  article.appendChild(tools);
+  log.appendChild(article); return article;
 }
 function draftSummary(payload) {
   return (payload.bills || []).map(b => { const d = b.draft || {}, p = b.preview || {}; return {biz:(BIZ[d.biz] || {}).label || d.biz || '业务草稿',party:d.party || '待补往来单位',depot:d.depot || '',total:p.total || 0,items:d.items || [],attachments:(b.attach || payload.attachments || []).map(a => a.name || a).filter(Boolean),warnings:p.warnings || [],errors:p.errors || []}; });
@@ -120,21 +276,37 @@ function openDrafts(payload,parent,btn) {
         if (parent) { parent.draftCommitted = {batch_id:payload.batch_id,count:committed.length}; }
         btn.textContent = '已写入 ERP'; btn.disabled = true; const status = btn.parentElement.querySelector('.agent-draft-status'); if (status) status.textContent = '✓ ' + committed.length + ' 张已写入';
         activeDraft = null; $id('draftState').textContent = '已写入 · 可以继续问经营';
-        turns.push({kind:'answer',answer:'已写入 ' + committed.length + ' 张单据，单据编号：' + committed.map(b => (b.res || {}).number || '已生成').join('、'),steps:[]}); save(); renderHistory();
+        turns.push({kind:'answer',answer:'已写入 ' + committed.length + ' 张单据，单据编号：' + committed.map(b => (b.res || {}).number || '已生成').join('、'),steps:[]}); save(); persist(); renderHistory();
       }
     }});
   }).catch(e => { btn.disabled = false; toast(e.message,'bad'); });
 }
 function workingView() {
-  const article = node('agent-turn agent-answer agent-working'), live = node('agent-working-line'); live.innerHTML = '<span class="agent-thinking"></span><span>正在理解你的需求</span>'; article.appendChild(live);
-  const trace = node('agent-live-steps'); article.appendChild(trace); log.appendChild(article); scrollEnd(); return {article,live,trace,steps:[]};
+  const article = node('agent-turn agent-answer agent-working');
+  const live = node('agent-working-line');
+  live.innerHTML = '<span class="agent-thinking"></span><span class="agent-live-text">正在理解你的需求</span><time class="agent-live-time">0s</time>';
+  article.appendChild(live);
+  const trace = node('agent-live-steps'); article.appendChild(trace); log.appendChild(article); scrollEnd();
+  const started = Date.now();
+  const tick = setInterval(() => {
+    const el = article.querySelector('.agent-live-time');
+    if (el) el.textContent = Math.round((Date.now() - started) / 1000) + 's';
+  }, 450);
+  return {article,live,trace,steps:[],started,tick};
+}
+function setLive(text) {
+  if (!currentBubble) return;
+  const el = currentBubble.live.querySelector('.agent-live-text');
+  if (el) el.textContent = text;
 }
 function eventStep(s) { if (!s.tool && !s.correction) return; currentBubble.steps.push(s); const v = stepView(s); v.open = s.ok === false; currentBubble.trace.appendChild(v); scrollEnd(); }
 function compactPayload(p) { return {batch_id:p.batch_id || '',raw_text:p.raw_text || '',meta:p.meta || {},bills:(p.bills || []).map(b => ({draft:b.draft,preview:b.preview,confirm_token:b.confirm_token,attach:b.attach || []})),attachments:p.attachments || [],clarify:p.clarify || null}; }
 function finishWorking(r,drafts) {
   if (!r || r.ok === false) throw new Error((r && r.message) || '这次请求没有完成');
-  const t = {kind:'answer',answer:r.answer,route:r.route,grounded:r.grounded,steps:r.steps && r.steps.length ? r.steps : currentBubble.steps,tokens:r.tokens,drafts:drafts.map(compactPayload)};
-  turns.push(t); save(); const next = answerView(t); currentBubble.article.replaceWith(next); currentBubble = null;
+  const elapsed = currentBubble ? Math.max(0.1, Math.round((Date.now() - currentBubble.started) / 100) / 10) : null;
+  if (currentBubble && currentBubble.tick) clearInterval(currentBubble.tick);
+  const t = {kind:'answer',answer:r.answer,route:r.route,grounded:r.grounded,steps:r.steps && r.steps.length ? r.steps : currentBubble.steps,tokens:r.tokens,elapsed,drafts:drafts.map(compactPayload)};
+  turns.push(t); save(); persist(); const next = answerView(t); currentBubble.article.replaceWith(next); currentBubble = null;
   const last = drafts[drafts.length - 1];
   if (last) { activeDraft = last; const missing = last.clarify && last.clarify.question; $id('draftState').textContent = missing || '可继续用自然语言修改这张草稿'; if (missing) toast(missing,'warn'); else toast('草稿已生成，点卡片核对','ok'); }
   scrollEnd();
@@ -158,12 +330,12 @@ async function doAskWithFiles(text) {
   if (pendingImages.some(p => p.busy)) { toast('附件正在准备，请稍候','warn'); return; }
   const files = pendingImages.slice();
   const user = {kind:'user',text:text || '请识别这些附件并生成草稿',files:files.map(p => ({name:p.name,type:p.file.type || p.file.name.split('.').pop()})),images:files.filter(p => p.isImage && p.dataUrl).map(p => p.dataUrl)};
-  turns.push(user); save();
+  turns.push(user); save(); persist();
   if (log.querySelector('.agent-welcome')) log.innerHTML = '';
-  userView(user); suggestions.hidden = true;
+  userView(user, turns.length - 1); suggestions.hidden = true;
   pendingImages = []; renderThumbs(); q.value = ''; resizeInput(); setBusy(true);
   currentBubble = workingView();
-  currentBubble.live.lastElementChild.textContent = '正在读取附件并规划…';
+  setLive('正在读取附件并规划…');
   const fd = new FormData();
   fd.append('text', text);
   fd.append('history', JSON.stringify(historyPayload()));
@@ -180,10 +352,11 @@ async function doAskWithFiles(text) {
     if (!r.ok) throw new Error(r.message || '附件处理失败');
     finishWorking(r, r.drafts || []);
   } catch (e) {
+    if (currentBubble && currentBubble.tick) clearInterval(currentBubble.tick);
     if (currentBubble) currentBubble.article.remove();
     currentBubble = null;
     turns.push({kind:'answer',answer:e.message || '附件处理失败',error:true,steps:[]});
-    save(); renderHistory();
+    save(); persist(); renderHistory();
   } finally {
     setBusy(false); q.focus({preventScroll:true});
   }
@@ -194,7 +367,7 @@ async function doAsk(text) {
   if (!text) return;
   const user = {kind:'user',text:text || '识别这张单据'};
   if (pendingImages.length) { user.images = pendingImages.map(p => p.dataUrl).filter(Boolean); user.imageCount = pendingImages.length; }
-  turns.push(user); save(); if (log.querySelector('.agent-welcome')) log.innerHTML = ''; userView(user); suggestions.hidden = true;
+  turns.push(user); save(); persist(); if (log.querySelector('.agent-welcome')) log.innerHTML = ''; userView(user, turns.length - 1); suggestions.hidden = true;
   const images = pendingImages.map(p => p.dataUrl).filter(Boolean); pendingImages = []; renderThumbs(); q.value = ''; resizeInput(); setBusy(true); currentBubble = workingView();
   controller = new AbortController(); let gotAny = false, completed = false; const drafts = [];
   const timer = () => { clearTimeout(watchdog); watchdog = setTimeout(() => controller && controller.abort(),120000); }; timer();
@@ -208,22 +381,24 @@ async function doAsk(text) {
       while ((idx = buffer.indexOf('\n\n')) >= 0) {
         const chunk = buffer.slice(0,idx); buffer = buffer.slice(idx + 2); const line = chunk.split('\n').find(l => l.startsWith('data:')); if (!line) continue;
         let ev; try { ev = JSON.parse(line.slice(5)); } catch (_) { continue; } gotAny = true;
-        if (ev.type === 'action') currentBubble.live.lastElementChild.textContent = (TOOL_VERB[ev.tool] || '正在处理') + '…';
+        if (ev.type === 'start') setLive('正在理解你的需求…');
+        else if (ev.type === 'action') setLive((TOOL_VERB[ev.tool] || '正在处理') + '…');
         else if (ev.type === 'step') eventStep(ev.step);
-        else if (ev.type === 'draft') { if (!drafts.some(p => p.batch_id && p.batch_id === (ev.payload || {}).batch_id)) drafts.push(ev.payload || {}); currentBubble.live.lastElementChild.textContent = '草稿已整理好'; }
+        else if (ev.type === 'draft') { if (!drafts.some(p => p.batch_id && p.batch_id === (ev.payload || {}).batch_id)) drafts.push(ev.payload || {}); setLive('草稿已整理好…'); }
         else if (ev.type === 'done') { const r = ev.result || {}; finishWorking(r,r.drafts && r.drafts.length ? r.drafts : drafts); completed = true; }
         else if (ev.type === 'error') throw new Error(ev.message || '请求未完成');
       }
     }
     if (!completed) throw new Error('连接中断，这次没有写入数据');
   } catch (e) {
+    if (currentBubble && currentBubble.tick) clearInterval(currentBubble.tick);
     if (currentBubble) currentBubble.article.remove(); currentBubble = null;
     const stopped = controller && controller._stopped;
     const msg = stopped ? '已停止。已生成的内容不会自动写入。' : e.name === 'AbortError' ? '等待超时。可重试，或缩小这次任务。' : e.message;
-    turns.push({kind:'answer',answer:msg,error:true,steps:[]}); save();
+    turns.push({kind:'answer',answer:msg,error:true,steps:[]}); save(); persist();
     if (!gotAny && !stopped && e.name !== 'AbortError' && !images.length) {
       try { const r = await api('/api/ask',{method:'POST',body:{text,images,history:historyPayload(),draft:currentDraftPayload()}}); turns.pop(); currentBubble = workingView(); finishWorking(r,r.drafts || []); }
-      catch (fallback) { turns.push({kind:'answer',answer:fallback.message,error:true,steps:[]}); renderHistory(); }
+      catch (fallback) { turns.push({kind:'answer',answer:fallback.message,error:true,steps:[]}); persist(); renderHistory(); }
     } else renderHistory();
   } finally { clearTimeout(watchdog); controller = null; setBusy(false); q.focus({preventScroll:true}); }
 }
@@ -253,10 +428,16 @@ function attachmentMenu() {
   const menu = node('agent-attach-menu'); menu.id = 'attachMenu'; menu.innerHTML = '<button id="chooseImage"><span>▧</span><div><b>附件与单据照片</b><small>多选图片、PDF、Word、Excel</small></div></button><button id="chooseSheet"><span>▦</span><div><b>表格导入与修复</b><small>先核对字段，再生成草稿</small></div></button><a href="/new?mode=form"><span>▤</span><div><b>手动填写</b><small>逐字段录入</small></div></a>';
   $id('composer').appendChild(menu); $id('plus').setAttribute('aria-expanded','true');
   $id('chooseImage').onclick = () => { menu.remove(); $id('imageFile').click(); };
-  $id('chooseSheet').onclick = () => { menu.remove(); if (!window.ImportDialog) { location.href = '/new?mode=import'; return; } ImportDialog.open({onDrafts:p => { const t = {kind:'answer',answer:'表格已整理成 ' + (p.bills || []).length + ' 张草稿。',steps:[],drafts:[p]}; turns.push(t); save(); renderHistory(); activeDraft = p; $id('draftState').textContent = '可继续用自然语言修改这张草稿'; }}); };
+  $id('chooseSheet').onclick = () => { menu.remove(); if (!window.ImportDialog) { location.href = '/new?mode=import'; return; } ImportDialog.open({onDrafts:p => { const t = {kind:'answer',answer:'表格已整理成 ' + (p.bills || []).length + ' 张草稿。',steps:[],drafts:[p]}; turns.push(t); save(); persist(); renderHistory(); activeDraft = p; $id('draftState').textContent = '可继续用自然语言修改这张草稿'; }}); };
 }
-function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); suggestions.hidden = false; return; } turns.forEach(t => t.kind === 'user' ? userView(t) : t.kind === 'answer' ? answerView(t):null); suggestions.hidden = true; scrollEnd(false); }
-function newChat() { if (busy && controller) { controller._stopped = true; controller.abort(); } turns = []; activeDraft = null; pendingImages = []; renderThumbs(); try { sessionStorage.removeItem(KEY); } catch (_) {} $id('draftState').textContent = '草稿确认后才会写入'; renderHistory(); q.value = ''; resizeInput(); q.focus({preventScroll:true}); }
+function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); suggestions.hidden = false; return; } turns.forEach((t, i) => t.kind === 'user' ? userView(t, i) : t.kind === 'answer' ? answerView(t, i) : null); suggestions.hidden = true; scrollEnd(false); }
+function newChat() {
+  if (busy && controller) { controller._stopped = true; controller.abort(); }
+  turns = []; currentId = ''; activeDraft = null; pendingImages = [];
+  renderThumbs(); try { sessionStorage.removeItem(KEY); } catch (_) {}
+  $id('draftState').textContent = '草稿确认后才会写入';
+  renderHistory(); ctxNote(); q.value = ''; resizeInput(); q.focus({preventScroll:true}); closeSide();
+}
 send.onclick = () => { if (busy && controller) { controller._stopped = true; controller.abort(); } else doAsk(q.value); };
 q.addEventListener('input',resizeInput); q.addEventListener('keydown',e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) doAsk(q.value); } });
 q.addEventListener('paste',e => { const files = Array.from((e.clipboardData || {}).items || []).filter(x => x.kind === 'file' && x.type.startsWith('image/')).map(x => x.getAsFile()).filter(Boolean); if (files.length) { e.preventDefault(); addImages(files); } });
@@ -269,9 +450,36 @@ const mic = $id('mic'), SR = window.SpeechRecognition || window.webkitSpeechReco
 mic.innerHTML = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
 if (!SR) mic.hidden = true;
 else { let recording = null, base = ''; mic.onclick = () => { if (recording) { recording.stop(); return; } if (!window.isSecureContext) { toast('语音输入需要 HTTPS 或本地访问','warn'); return; } const r = new SR(); recording = r; base = q.value; r.lang = 'zh-CN'; r.interimResults = true; mic.classList.add('is-recording'); r.onresult = e => { let s = ''; for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript; q.value = base + s; resizeInput(); }; r.onerror = e => { if (!['no-speech','aborted'].includes(e.error)) toast('语音识别暂不可用，请直接输入','warn'); }; r.onend = () => { recording = null; mic.classList.remove('is-recording'); q.focus({preventScroll:true}); }; try { r.start(); } catch (_) { recording = null; mic.classList.remove('is-recording'); } }; }
-const newBtn = document.createElement('button'); newBtn.className = 'agent-new'; newBtn.title = '新建对话'; newBtn.setAttribute('aria-label','新建对话'); newBtn.textContent = '＋'; newBtn.onclick = newChat; document.querySelector('.agent-header-actions').prepend(newBtn);
+$id('menuBtn').onclick = () => {
+  if (matchMedia('(max-width:900px)').matches) { side.classList.contains('is-open') ? closeSide() : openSide(); return; }
+  const app = document.querySelector('.chat-app');
+  const collapsed = app.classList.toggle('side-collapsed');
+  try { localStorage.setItem('t2s_side_collapsed', collapsed ? '1' : '0'); } catch (_) {}
+};
+$id('sideFold').onclick = () => {
+  if (matchMedia('(max-width:900px)').matches) { closeSide(); return; }
+  document.querySelector('.chat-app').classList.add('side-collapsed');
+  try { localStorage.setItem('t2s_side_collapsed', '1'); } catch (_) {}
+};
+$id('sideNew').onclick = newChat;
+sideMask.onclick = closeSide;
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSide(); });
+try { if (localStorage.getItem('t2s_side_collapsed') === '1') document.querySelector('.chat-app').classList.add('side-collapsed'); } catch (_) {}
 api('/api/master').then(() => { const p = document.querySelector('.agent-presence'); if (p) { p.textContent = 'ERP 在线'; p.classList.add('is-online'); } }).catch(() => { const p = document.querySelector('.agent-presence'); if (p) { p.textContent = 'ERP 待连接'; p.classList.add('is-offline'); } });
-restore(); resizeInput(); if (!matchMedia('(pointer:coarse)').matches) q.focus({preventScroll:true});
+// 启动：优先恢复服务端当前会话，其次本地兜底（迁移旧会话时首次发送会自动落库）
+(async function boot() {
+  try { await loadConvs(); } catch (_) { renderSide(); }
+  if (convs.active) {
+    try {
+      const r = await api('/api/conversations?id=' + encodeURIComponent(convs.active));
+      if (r.ok && r.item) { currentId = convs.active; turns = r.item.turns || []; }
+    } catch (_) { /* 服务端不可用时退回本地缓存 */ }
+  }
+  if (!turns.length) restore();
+  renderHistory(); ctxNote(); renderSide();
+  api('/api/auth/me').then(me => { if (me && !me.local) $id('sideUser').textContent = me.username || me.login || ''; }).catch(() => {});
+  resizeInput(); if (!matchMedia('(pointer:coarse)').matches) q.focus({preventScroll:true});
+})();
 })();
 </script>
 </body>

@@ -989,6 +989,43 @@ def api_usage(_q, _body):
     return {"ok": True, "usage": llmmod.usage_summary()}
 
 
+def api_conversations_list(q, _body):
+    """问答会话（侧栏）：无 id 回列表摘要；带 id 回完整消息。"""
+    from core import conversations as convmod
+    login = cfgmod.current_request_user() or "local"
+    cid = (q.get("id") or [""])[0].strip()
+    if cid:
+        item = convmod.get_item(login, cid)
+        if item is None:
+            return {"ok": False, "message": "会话不存在或已删除"}
+        return {"ok": True, "item": item}
+    return {"ok": True, **convmod.list_items(login)}
+
+
+def api_conversations_post(_q, body):
+    """会话写入：upsert（每轮结束后覆盖）/ delete / rename。"""
+    from core import conversations as convmod
+    login = cfgmod.current_request_user() or "local"
+    action = (body.get("action") or "upsert").strip()
+    cid = (body.get("id") or "").strip()
+    if action in ("delete", "rename") and not cid:
+        return {"ok": False, "message": "缺少会话 id"}
+    if action == "delete":
+        convmod.delete(login, cid)
+        return {"ok": True, **convmod.list_items(login)}
+    if action == "rename":
+        item = convmod.rename(login, cid, body.get("title") or "")
+        if item is None:
+            return {"ok": False, "message": "会话不存在"}
+        return {"ok": True, "item": item, **convmod.list_items(login)}
+    turns = body.get("turns")
+    if not isinstance(turns, list):
+        return {"ok": False, "message": "turns 必须是数组"}
+    item = convmod.upsert(login, cid, body.get("title") or "", turns,
+                          activate=body.get("activate", True) is not False)
+    return {"ok": True, "item": item}
+
+
 def api_dashboard(q, _body):
     from core import report as reportmod
     lite = (q.get("lite") or [""])[0].strip().lower() in ("1", "true", "yes")
@@ -1150,6 +1187,8 @@ ROUTES = {
     ("GET", "/api/daily/agent"): api_daily_agent,
     ("POST", "/api/daily/regenerate"): api_daily_regenerate,
     ("GET", "/api/usage"): api_usage,
+    ("GET", "/api/conversations"): api_conversations_list,
+    ("POST", "/api/conversations"): api_conversations_post,
     ("POST", "/api/parse"): api_parse,
     ("POST", "/api/resolve"): api_resolve,
     ("POST", "/api/commit"): api_commit,
@@ -1272,6 +1311,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.close_connection = True
+        # 立刻推一条 start：前端点击后就能显示「正在理解」，不再等首次模型决策（6~7s 空窗）
+        try:
+            ev({"type": "start"})
+        except Exception:
+            return
         try:
             from core import ask as askmod
             r = askmod.ask(text, _erp(), on_event=ev, history=body.get("history"),
