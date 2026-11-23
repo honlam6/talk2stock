@@ -24,15 +24,27 @@
 
   <div class="kpi-grid" id="kpiRow"></div>
 
-  <!-- AI 经营洞察：规则事实 + LLM 组织语言，数字全部接地可追溯；日报在其下展开 -->
+  <!-- AI 经营洞察：规则事实 + LLM 组织语言，数字全部接地可追溯；日报/深度诊断在其下展开 -->
   <div class="card mb-4" id="aiCard">
     <h2><span class="bar"></span>AI 经营洞察
       <span class="muted" style="font-size:12px;font-weight:400" id="insSrc"></span>
       <span class="flex-1"></span>
+      <button class="btn btn-sm" id="diagBtn">深度诊断</button>
       <button class="btn btn-sm" id="reportBtn">生成日报</button>
     </h2>
     <div id="insBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div></div>
+    <div id="diagBox" hidden></div>
     <div id="reportBox" hidden></div>
+  </div>
+
+  <!-- 智能采购建议：确定性算法（销量/库存/安全库存/采购周期），数量可复算；草稿须人工确认 -->
+  <div class="card mb-4" id="procCard">
+    <h2><span class="bar"></span>智能采购建议
+      <span class="muted" style="font-size:12px;font-weight:400" id="procSrc">· 按近 30 天销量与库存计算</span>
+      <span class="flex-1"></span>
+      <button class="btn btn-sm" id="procDraftBtn" disabled>生成采购草稿</button>
+    </h2>
+    <div id="procBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div><div class="skel skel-bar w-60"></div></div>
   </div>
 
   <div class="db-grid">
@@ -848,6 +860,214 @@ async function genReport() {
 }
 $('#reportBtn').onclick = genReport;
 loadInsights();
+
+// ---------- 深度诊断：多步调查，步骤实时可见 ----------
+const DIAG_VERB = { today_stats: '汇总今日经营', month_stats: '汇总本月经营', debts: '核算应收应付',
+  low_stock: '检查库存预警', stock_value: '计算库存货值', recent_bills: '查看近期单据',
+  query_bills: '追查单据明细', sql_query: '核对业务数据', db_schema: '核对数据结构',
+  submit_diagnosis: '整理诊断结论', response_review: '检查回答', decide: '重新思考' };
+let diagBusy = false;
+function diagStepLine(s) {
+  if (!s || (!s.tool && !s.correction)) return '';
+  const label = DIAG_VERB[s.tool] || s.tool || '重新思考';
+  const mark = s.ok === false ? '✕' : '✓';
+  return `<div class="diag-step${s.ok === false ? ' is-error' : ''}"><span>${mark}</span>${esc(label)}${s.latency_ms ? `<time>${s.latency_ms}ms</time>` : ''}</div>`;
+}
+function renderDiag(r) {
+  const box = $('#diagBox');
+  if (!r || r.ok === false) {
+    box.innerHTML = `<div class="muted">${esc((r && r.message) || '诊断未完成')}</div>`;
+    return;
+  }
+  const steps = (r.steps || []).filter(s => s.tool || s.correction);
+  const used = steps.filter(s => s.tool && s.ok !== false);
+  const stepMap = {};
+  used.forEach(s => { if (s.step) stepMap[s.step] = s; });
+  const tools = [...new Set(used.map(s => s.tool))];
+  const meta = r.meta || {};
+  const secs = meta.latency_ms ? (meta.latency_ms / 1000).toFixed(1) + 's' : '—';
+  const src = r.degraded ? 'AI 调查未完成，已降级为规则摘要' :
+    (r.lax && r.lax.length ? '部分结论退化为全量观察校验' : '每条结论都有调查步骤支撑');
+  const iIco = { warn: '⚠', good: '✓', info: '•' };
+  const issues = (r.issues || []).map(p => {
+    const chips = (p.evidence_steps || []).map(n => {
+      const t = stepMap[n];
+      return `<span class="diag-step-chip">第 ${n} 步${t ? ' · ' + esc(DIAG_VERB[t.tool] || t.tool) : ''}</span>`;
+    }).join('');
+    return `
+    <div class="diag-issue ${p.severity === 'warn' ? 'is-warn' : ''}">
+      <div class="diag-issue-head">${iIco[p.severity] || '•'} ${esc(p.title)}</div>
+      <div class="diag-line"><b>数据证据</b>${esc(p.evidence)}</div>
+      ${p.cause ? `<div class="diag-line"><b>可能原因</b>${esc(p.cause)}</div>` : ''}
+      ${p.action ? `<div class="diag-line"><b>改进建议</b>${esc(p.action)}</div>` : ''}
+      ${chips ? `<div class="diag-ref">调查链 ${chips}</div>` : ''}
+    </div>`;
+  }).join('');
+  box.innerHTML = `
+    <div class="diag-card">
+      <div class="diag-head">
+        <span class="diag-title">经营诊断 · ${esc(r.date || '')}</span>
+        <span class="diag-stats">${used.length} 步调查 · ${tools.length} 个工具${meta.model ? ' · ' + esc(meta.model) : ''} · ${secs} · 全程只读</span>
+        <span class="muted" style="font-size:12px">${esc(src)}</span>
+      </div>
+      ${r.overview ? `<p class="diag-overview">${esc(r.overview)}</p>` : ''}
+      ${issues || '<div class="muted">本次诊断没有可落地的结论</div>'}
+      <details class="diag-trace" open><summary>调查过程 · ${used.length} 次工具调用（点击收起）</summary>${steps.map(diagStepLine).join('')}</details>
+    </div>`;
+}
+async function genDiag() {
+  if (diagBusy) return;
+  diagBusy = true;
+  const btn = $('#diagBtn'), box = $('#diagBox');
+  btn.disabled = true; btn.textContent = '诊断中…';
+  box.hidden = false;
+  box.innerHTML = '<div class="diag-live" id="diagLive">正在读取经营数据…</div><div class="diag-steps" id="diagSteps"></div>';
+  try {
+    const pass = localStorage.getItem('t2s_pass');
+    const resp = await fetch('/api/diagnose/stream', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, pass ? { 'X-T2S-Pass': pass } : {}),
+      body: '{}'
+    });
+    if (resp.status === 403) throw new Error('该功能仅管理员可用');
+    if (!resp.ok || !resp.body) throw new Error('连接未完成（HTTP ' + resp.status + '）');
+    const reader = resp.body.getReader(), decoder = new TextDecoder();
+    let buffer = '', result = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
+        const line = chunk.split('\n').find(l => l.startsWith('data:'));
+        if (!line) continue;
+        let ev; try { ev = JSON.parse(line.slice(5)); } catch (_) { continue; }
+        if (ev.type === 'action') {
+          const live = $('#diagLive'); if (live) live.textContent = (DIAG_VERB[ev.tool] || '正在调查') + '…';
+        } else if (ev.type === 'step') {
+          const list = $('#diagSteps');
+          if (list) { const html = diagStepLine(ev.step); if (html) list.insertAdjacentHTML('beforeend', html); }
+        } else if (ev.type === 'done') {
+          result = ev.result;
+        } else if (ev.type === 'error') {
+          throw new Error(ev.message || '诊断失败');
+        }
+      }
+    }
+    if (!result) throw new Error('诊断没有返回结果');
+    renderDiag(result);
+  } catch (e) {
+    box.innerHTML = `<div class="muted">诊断失败：${esc(e.message)}</div>`;
+  } finally {
+    diagBusy = false; btn.disabled = false; btn.textContent = '深度诊断';
+  }
+}
+$('#diagBtn').onclick = genDiag;
+
+// ---------- 智能采购建议：确定性算法，数字可复算；草稿须人工确认 ----------
+let PROC = null, procBusy = false;
+const PROC_LEVEL = { urgent: ['紧急', 'bad'], reorder: ['需补货', 'warn'], ok: ['充足', 'ok'] };
+async function loadProcurement() {
+  const box = $('#procBox'), btn = $('#procDraftBtn');
+  try {
+    const r = await api('/api/procurement/suggest');
+    if (!r.ok) {
+      box.innerHTML = `<div class="muted" style="font-size:13px">采购建议暂不可用：${esc(r.message || '')}</div>`;
+      btn.disabled = true;
+      return;
+    }
+    PROC = r;
+    const all = r.rows || [];
+    const rows = all.filter(x => x.level !== 'ok');
+    const t = r.totals || {};
+    $('#procSrc').textContent = `· 近 ${r.params.days} 天销量 · 覆盖 ${r.params.cover_days} 天 · ${t.kinds} 种商品中 ${t.to_buy} 种需采购`;
+    if (!rows.length) {
+      box.innerHTML = '<div class="muted">当前库存可覆盖预期需求，暂无需要采购的商品。</div>';
+      btn.disabled = true;
+      return;
+    }
+    const trs = rows.slice(0, 12).map(x => {
+      const [lbl, cls] = PROC_LEVEL[x.level] || ['—', 'ok'];
+      const daily = x.daily ? x.daily.toFixed(2) : '0';
+      return `<tr>
+        <td>${esc(x.name)}${x.model ? `<span class="muted" style="font-size:12px"> ${esc(x.model)}</span>` : ''}</td>
+        <td class="num">${x.stock}${esc(x.unit || '')}</td>
+        <td class="num">${x.sold}${esc(x.unit || '')}</td>
+        <td class="num"><b>${x.suggest_qty}</b>${esc(x.unit || '')}</td>
+        <td><span class="pill proc-${cls}">${lbl}</span></td>
+        <td class="proc-reason" title="${esc(x.reason)}">${esc(x.reason)}</td>
+      </tr>`;
+    }).join('');
+    // 窄屏卡片列表（同「最近单据」的 db-recent-cards 模式：<=640px 表格整体隐藏）
+    const cards = rows.slice(0, 12).map(x => {
+      const [lbl, cls] = PROC_LEVEL[x.level] || ['—', 'ok'];
+      const unit = esc(x.unit || '');
+      const daily = x.daily ? x.daily.toFixed(2) : '0';
+      return `<div class="proc-card ${cls === 'bad' ? 'pc-bad' : 'pc-warn'}">
+        <div class="pc-top"><span class="pc-name">${esc(x.name)}</span><span class="pill proc-${cls}">${lbl}</span><span class="pc-qty">+${x.suggest_qty}${unit}</span></div>
+        <div class="pc-mid">库存 ${x.stock}${unit} · 近 ${r.params.days} 天销量 ${x.sold}${unit} · 日均 ${daily}</div>
+        <div class="pc-reason">${esc(x.reason)}</div>
+      </div>`;
+    }).join('');
+    // 取证清单（真实查询来源与行数，不是装饰）：Agent 读了什么、算了多久，一眼可见
+    const evi = (r.evidence || []).map(e =>
+      `<span class="pe-item" title="${esc(e.table || '')}">⌁ ${esc(e.label)} <b>${e.rows}</b></span>`).join('');
+    const eviRow = evi
+      ? `<div class="proc-evi">${evi}<span class="pe-ms">${r.elapsed_ms || 0}ms · 只读</span></div>` : '';
+    const more = all.filter(x => x.level !== 'ok').length > 12
+      ? `<div class="muted" style="font-size:12px;margin-top:6px">仅显示前 12 行，完整清单请用对话问「该补什么货」。</div>` : '';
+    const asm = (r.assumptions || []).length
+      ? `<details class="proc-asm"><summary>计算假设与数据说明</summary>${r.assumptions.map(a => `<div>${esc(a)}</div>`).join('')}
+         <div>公式：建议量 = ⌈日均销量 ×（采购周期 + 覆盖天数）+ 安全库存 − 当前库存⌉（向上取整，负值记 0）。</div></details>` : '';
+    box.innerHTML = `
+      ${eviRow}
+      <div class="tbl-wrap proc-table-wrap">
+        <table class="dtable proc-table">
+          <thead><tr><th>商品</th><th class="num">当前库存</th><th class="num">近 ${r.params.days} 天销量</th>
+            <th class="num">建议采购量</th><th>状态</th><th>理由</th></tr></thead>
+          <tbody>${trs}</tbody>
+        </table>
+      </div>
+      <div class="proc-cards">${cards}</div>${more}${asm}
+      <div class="muted" style="font-size:12px;margin-top:8px">建议量由确定性算法算出，可逐行复算；生成的是草稿，确认后才会写入 ERP。</div>`;
+    btn.disabled = false;
+  } catch (e) {
+    box.innerHTML = `<div class="muted">采购建议加载失败：${esc(e.message)}</div>`;
+    btn.disabled = true;
+  }
+}
+$('#procDraftBtn').onclick = async () => {
+  if (procBusy || !PROC) return;
+  procBusy = true;
+  const btn = $('#procDraftBtn');
+  btn.disabled = true; btn.textContent = '生成中…';
+  try {
+    const ids = (PROC.rows || []).filter(x => x.suggest_qty > 0).map(x => x.material_id);
+    const r = await api('/api/procurement/draft', { method: 'POST', body: { only: ids } });
+    if (!r.ok) throw new Error(r.message || '生成失败');
+    if ((r.skipped || []).length) {
+      toast('有 ' + r.skipped.length + ' 种商品缺供应商记录，未进草稿：' + r.skipped.map(x => x.name).join('、'), 'warn');
+    }
+    await loadMaster();
+    showMultiPreview(r.bills, {
+      source: 'procurement', rawText: 'AI 采购建议（确定性算法）',
+      onClose: updated => {
+        const committed = (updated || []).filter(b => b.state === 'committed');
+        if (committed.length) {
+          toast('已写入 ' + committed.length + ' 张采购单', 'ok');
+          if (typeof load === 'function') load();
+          loadProcurement();
+        }
+        btn.disabled = false; btn.textContent = '生成采购草稿';
+      }
+    });
+  } catch (e) {
+    toast(e.message, 'bad');
+    btn.disabled = false; btn.textContent = '生成采购草稿';
+  } finally { procBusy = false; }
+};
+loadProcurement();
 
 $('#trendToggle').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;

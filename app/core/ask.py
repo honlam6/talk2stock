@@ -12,7 +12,7 @@ import uuid
 from . import config as cfgmod
 from . import dbread as dbmod
 from . import draft as draftmod
-from .report import official_stats, recent_bills as _rb, stock_overview, summary
+from .report import official_stats, recent_bills as _rb, stock_overview, summary, _safe_stock_map
 from .erp import get_client, parallel
 
 PROMPT_VERSION = "unified-v1-20261119"
@@ -182,7 +182,7 @@ def _stock_query(args, erp):
 
 
 def _low_stock(_args, erp):
-    ov = stock_overview(erp)
+    ov = stock_overview(erp, safe_map=_safe_stock_map(erp))
     warn = ov.get("warn_list") or []
     data = {"kinds": ov.get("kinds"), "negative": ov.get("negative"),
             "low": ov.get("low"), "threshold": ov.get("threshold"),
@@ -240,6 +240,12 @@ def _stock_value(_args, erp):
     data = {"total_stock": sm.get("total_stock"), "total_value": sm.get("total_value")}
     return data, (f"库存货值约 {sm.get('total_value'):,.2f} 元"
                   f"（{sm.get('total_stock'):g} 件，按当前成本价估算）。")
+
+
+def _procurement_suggest(args, erp):
+    """agent 工具：智能采购建议（确定性算法，数字可复算）。"""
+    from . import procurement as pmod
+    return pmod.tool_suggest(erp, args)
 
 
 def _master_count(args, erp):
@@ -495,6 +501,9 @@ def _tools(erp, on_event=None, images=None, previous_draft=None, attachments=Non
         "query_bills": {"desc": "按条件查单据明细（谁买了什么/某天卖了什么/某商品最近进出/某单位欠款单）",
                         "args_hint": '{"party":"往来单位，可空","date":"YYYY-MM-DD或今天/昨天，可空","material":"商品名，可空"}',
                         "run": lambda a: _query_bills(a, erp)},
+        "procurement_suggest": {"desc": "哪些商品该补货、建议采购多少（按近30天销量/当前库存/安全库存/采购周期确定性计算，数字可复算）",
+                                "args_hint": '{"days":"销量统计天数，可空默认30"}',
+                                "run": lambda a: _procurement_suggest(a, erp)},
         "sql_query": {"desc": "对 ERP 全库只读 SQL 查询：任意表的清单/数量/明细/汇总/排名/时间区间，专用工具没覆盖的问题一律用它",
                       "args_hint": '{"sql":"单条 SELECT；表结构见上下文；软删除表加 delete_flag 为 0 的条件；大表带 LIMIT"}',
                       "run": lambda a: dbmod.sql_query(a)},

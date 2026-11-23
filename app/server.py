@@ -37,6 +37,10 @@
     GET    /api/history           → 最近录单（审计日志 commit_ok 的只读视图）
     POST   /api/ask               → 只读问答（选工具 → 查数 → 依数据作答）
     POST   /api/upload            → 附件上传代理
+    GET    /api/procurement/suggest → 智能采购建议（确定性算法，只读、零 LLM）
+    POST   /api/procurement/draft   → 采购建议 → 采购入库单草稿（逐单令牌，不写库）
+    POST   /api/diagnose          → AI 经营诊断（多步调查 + 调查链接地；仅管理员）
+    POST   /api/diagnose/stream   → 诊断 SSE：调查步骤逐推，done 带完整结论
 
 所有 /api 响应均为 UTF-8 JSON；任何异常都被捕获成
 {"ok": false, "message": "中文提示"}，不会向客户端抛栈。
@@ -851,6 +855,11 @@ def api_commit(_q, body):
         reportmod.invalidate()
     except Exception:
         pass
+    try:
+        from core import procurement as pmod
+        pmod.invalidate()
+    except Exception:
+        pass
     return res
 
 
@@ -982,6 +991,45 @@ def api_daily_regenerate(_q, _body):
     """强制重跑日报 agent（管理员门禁在 _handle 层）。"""
     from core import daily as dailymod
     return dailymod.morning_report(_erp(), operator=cfgmod.current_username() or "", force=True)
+
+
+def api_procurement_suggest(q, _body):
+    """智能采购建议（只读、零 LLM）：确定性算法算出建议量，前端表格直读。"""
+    from core import procurement as pmod
+    days = (q.get("days") or [""])[0].strip()
+    cover = (q.get("cover_days") or [""])[0].strip()
+
+    def _int(v):
+        try:
+            return int(v) if v else None
+        except ValueError:
+            return None
+
+    res = pmod.suggest(_erp(), days=_int(days), cover_days=_int(cover))
+    return res
+
+
+def api_procurement_draft(_q, body):
+    """把采购建议转成采购入库单草稿（只出草稿，不写库）。
+
+    数量一律由服务端重算：请求只接受要采购的 material_id 列表（前端勾选），
+    不接受客户端传数量——否则草稿里的数就脱离了可复算的算法口径。
+    """
+    from core import procurement as pmod
+    erp = _erp()
+    res = pmod.suggest(erp)
+    if not res.get("ok"):
+        return res
+    only = body.get("only") if isinstance(body, dict) else None
+    if only is not None and not isinstance(only, list):
+        return {"ok": False, "message": "only 应为 material_id 数组"}
+    return pmod.to_drafts(res, erp, only=only)
+
+
+def api_diagnose(_q, _body):
+    """AI 经营诊断（同步版）：多步调查 + 调查链校验；管理员门禁在 _handle 层。"""
+    from core import diagnosis as dmod
+    return dmod.diagnose(_erp(), operator=cfgmod.current_username() or "")
 
 
 def api_usage(_q, _body):
@@ -1186,6 +1234,9 @@ ROUTES = {
     ("GET", "/api/daily-report"): api_daily_report,
     ("GET", "/api/daily/agent"): api_daily_agent,
     ("POST", "/api/daily/regenerate"): api_daily_regenerate,
+    ("GET", "/api/procurement/suggest"): api_procurement_suggest,
+    ("POST", "/api/procurement/draft"): api_procurement_draft,
+    ("POST", "/api/diagnose"): api_diagnose,
     ("GET", "/api/usage"): api_usage,
     ("GET", "/api/conversations"): api_conversations_list,
     ("POST", "/api/conversations"): api_conversations_post,
@@ -1328,6 +1379,38 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+    # ---- 流式诊断（SSE）：调查步骤逐推，done 带完整结论 ----
+    def _diagnose_stream(self, body):
+        """经营诊断的流式版本：agent 每步（查库存/追订单/算欠款）即推给前端，
+        让「AI 正在调查什么」可见；done(result) 与 POST /api/diagnose 同形状。"""
+        if not llmmod.is_configured():
+            self._json({"ok": False, "need_config": True,
+                        "message": "尚未配置 AI 模型，请点右上角「设置」添加。"}, 200)
+            return
+
+        def ev(obj):
+            data = json.dumps(obj, ensure_ascii=False, default=str)
+            self.wfile.write(("data: %s\n\n" % data).encode("utf-8"))
+            self.wfile.flush()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            from core import diagnosis as dmod
+            r = dmod.diagnose(_erp(), operator=cfgmod.current_username() or "", on_event=ev)
+            ev({"type": "done", "result": r})
+        except Exception as e:
+            sys.stderr.write(traceback.format_exc())
+            try:
+                ev({"type": "error", "message": friendly(e)})
+            except Exception:
+                pass
+
     # ---- 流式解析（SSE）：parse + 校验 agent 每步即推，done 带完整 parse 响应 ----
     def _parse_stream(self, body):
         """对话录单的流式版本：校验 agent 的取证步骤（查库存/查历史价/查习惯）
@@ -1404,10 +1487,10 @@ class Handler(BaseHTTPRequestHandler):
             cfgmod.set_request_user(login, role, uname, uid)
             # 管理员门禁：/api/config/* 是共享配置（ERP 连接 + 共享模型档案），
             # 成员在接口层就被拒绝，而不是前端藏一下
-            if path.startswith("/api/daily/") and role != "admin":
-                # 老板日报是老板视角（admin）：成员在接口层被拒，前端据此隐藏卡片
+            if (path.startswith("/api/daily/") or path.startswith("/api/diagnose")) and role != "admin":
+                # 老板日报与经营诊断都是老板视角（admin）：成员在接口层被拒，前端据此隐藏入口
                 self._json({"ok": False, "need_admin": True,
-                            "message": "该接口仅管理员可用（老板日报）"}, 403)
+                            "message": "该接口仅管理员可用（经营诊断/老板日报）"}, 403)
                 return
             if path.startswith("/api/config") and role != "admin":
                 self._json({"ok": False, "need_admin": True,
@@ -1430,6 +1513,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": False, "message": str(e)}, 400)
                     return
                 self._parse_stream(body)
+                return
+            # SSE 流式诊断：调查步骤（查库存/追订单）逐推，done 带完整结论
+            if method == "POST" and path == "/api/diagnose/stream":
+                try:
+                    body = self._body()
+                except ValueError as e:
+                    self._json({"ok": False, "message": str(e)}, 400)
+                    return
+                self._diagnose_stream(body)
                 return
             fn = ROUTES.get((method, path))
             if not fn:

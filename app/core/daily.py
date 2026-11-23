@@ -15,8 +15,10 @@
       → 全部点被丢 / LLM 失败 → 规则模板兜底（degraded=True，句子复用问一问
         各统计工具的模板句，只用函数返回的数字——零编造有结构保证）
 
-不变量：全程只读；日报本身不写库；补货建议只是草稿（无 price），真正写入必须
-由用户在确认卡确认（/api/resolve 换令牌 → /api/commit 过闸门）。
+不变量：全程只读；日报本身不写库；补货建议只是草稿（无 price），**建议数量一律
+由 procurement 的确定性算法给出**（模型只决定「建议哪些商品」，模型自报的 qty
+不作数）；真正写入必须由用户在确认卡确认（/api/resolve 换令牌 → /api/commit
+过闸门）。算法不可用（只读 SQL 通道断）时不出补货建议——宁缺不错。
 """
 import ast
 import json
@@ -59,9 +61,9 @@ suggest_draft 元素：{{"biz":"purchase_in","party":"供应商名","items":[{{"
 3. 每个 point 的 detail 必须引用观察里的数字（原样照抄，禁止编造、禁止心算新数字），
    数字带单位（元/瓶/种/笔）。没有数字支撑的角度不要写。
 4. severity 只能取 info / warn / good：风险用 warn，向好用 good，中性用 info。
-5. suggest_drafts 最多 2 条补货建议：party 必须是观察里出现过的供应商（采购单对手方），
-   items 的 qty 是依据观察（销量/库存）给的建议补货量，items 里绝不含 price——
-   价格由确认卡与校验 agent 补。观察里没有可靠依据就不出建议，空数组完全合法。
+5. suggest_drafts 最多 2 条补货建议：party 写你观察到的供应商（采购单对手方），
+   items 只写商品名与单位——**数量不需要你给**（系统会用销量/库存/采购周期的
+   确定性算法重算，你给了也不作数）；观察里没有依据的商品不要写，空数组完全合法。
 6. submit_verdict 必须调用恰好一次，调用后不要再输出其他动作。
 
 # 任务
@@ -164,34 +166,56 @@ def _valid_points(raw, observations):
     return out[:6]
 
 
-def _valid_drafts(raw, observations):
-    """补货建议合法化：biz 限 purchase_in；party 必须在观察 JSON 里出现过
-    （防编造往来单位）；items 只留 name/qty/unit——price 即使模型给了也剥掉
-    （价格由确认卡与校验 agent 补，日报建议不该带价）；最多 2 条。"""
-    obs_text = json.dumps(observations or [], ensure_ascii=False)
-    out = []
+def _suggest_map(erp):
+    """算法侧补货建议：{商品名: 建议行}。SQL 不可达返回 {}——日报宁可不给建议，
+    也不让模型猜数量。"""
+    try:
+        from . import procurement as pmod
+        res = pmod.suggest(erp)
+    except Exception:
+        return {}
+    if not isinstance(res, dict) or not res.get("ok"):
+        return {}
+    out = {}
+    for r in res.get("rows") or []:
+        if (r.get("suggest_qty") or 0) > 0:
+            out[str(r.get("name") or "")] = r
+    return out
+
+
+def _valid_drafts(raw, observations, erp=None):
+    """补货建议合法化（v2）：模型只决定「建议哪些商品」，数量一律来自
+    procurement 的确定性算法（销量/安全库存/采购周期可复算）；模型给的 qty
+    不作为数量依据。算法不认为要补的商品直接丢弃；供应商用该商品最近采购的
+    往来单位（算法给出），模型不给供应商时也不猜——交给确认卡人工选。
+    """
+    algo = _suggest_map(erp)
+    out, seen = [], set()
     for d in (raw or []):
         if not isinstance(d, dict) or len(out) >= 2:
             continue
         if str(d.get("biz") or "").strip() != "purchase_in":
             continue
-        party = str(d.get("party") or "").strip()[:60]
-        if not party or party not in obs_text:
-            continue
-        items = []
+        groups = {}
         for it in (d.get("items") or []):
             if not isinstance(it, dict):
                 continue
             name = str(it.get("name") or "").strip()[:60]
-            try:
-                qty = round(float(it.get("qty")), 2)
-            except (TypeError, ValueError):
+            row = algo.get(name)
+            if not row or name in seen:
+                continue                     # 算法不认为要补 / 同名商品已在前面建议过
+            party = str(row.get("supplier") or "").strip()[:60]
+            if not party:
                 continue
-            if not name or qty <= 0:
-                continue
-            items.append({"name": name, "qty": qty,
-                          "unit": str(it.get("unit") or "").strip()[:10]})
-        if items:
+            seen.add(name)
+            bucket = groups.setdefault(party, [])
+            if any(x["name"] == name for x in bucket):
+                continue                     # 同名商品去重（模型可能重复列）
+            bucket.append({"name": name, "qty": int(row["suggest_qty"]),
+                           "unit": str(row.get("unit") or "").strip()[:10]})
+        for party, items in groups.items():
+            if len(out) >= 2:
+                break
             out.append({"biz": "purchase_in", "party": party, "items": items})
     return out[:2]
 
@@ -244,14 +268,15 @@ def morning_report(erp, operator="", on_event=None, force=False):
     grounded, prompt_version[, degraded]}；
     未配置模型 → {ok: False, message}；LLM 失败 → 规则模板兜底（ok=True, degraded=True）。"""
     today = time.strftime("%Y-%m-%d")
-    erp = erp or get_client()
     if not force:
         with _lock:
             hit = _cache.get("data")
             if _cache.get("date") == today and isinstance(hit, dict):
                 return dict(hit, cached=True)
     if not cfgmod.agent_profile():
+        # 未配置模型不必连 ERP：无模型时报告无从生成，先给配置提示
         return {"ok": False, "message": "尚未配置 AI 模型，请先在「设置」里添加。"}
+    erp = erp or get_client()
 
     goal = "为 %s 生成一份给老板看的经营早报" % today
     try:
@@ -272,7 +297,7 @@ def morning_report(erp, operator="", on_event=None, force=False):
     points, drafts = [], []
     if verdict is not None:
         points = _valid_points(verdict.get("points"), observations)
-        drafts = _valid_drafts(verdict.get("suggest_drafts"), observations)
+        drafts = _valid_drafts(verdict.get("suggest_drafts"), observations, erp=erp)
 
     if points:
         result = {

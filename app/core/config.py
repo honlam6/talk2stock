@@ -62,6 +62,11 @@ DEFAULTS = {
         "default_depot_out": "成品仓",
         "default_account_id": 25,
     },
+    "procurement": {
+        "days": 30,            # 销量统计窗口（天）
+        "cover_days": 30,      # 到货后目标覆盖天数
+        "lead_time_days": 7,   # 无历史采购记录时的采购周期（天）
+    },
 }
 
 
