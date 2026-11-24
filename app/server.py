@@ -1145,10 +1145,25 @@ def api_conversations_post(_q, body):
     return {"ok": True, "item": item}
 
 
+def _bill_total_sql():
+    """全部单据数（直查 DB，绕过 REST 列表的翻页上限）。不可达返回 None。"""
+    try:
+        from core import dbread as dbmod
+        data, _ = dbmod.sql_query(
+            {"sql": "SELECT COUNT(*) AS n FROM jsh_depot_head WHERE delete_flag='0'"})
+        rows = data.get("rows") or []
+        return int(rows[0].get("n") or 0) if rows else None
+    except Exception:
+        return None
+
+
 def api_dashboard(q, _body):
     from core import report as reportmod
     lite = (q.get("lite") or [""])[0].strip().lower() in ("1", "true", "yes")
-    return reportmod.dashboard(_erp(), lite=lite)
+    out = reportmod.dashboard(_erp(), lite=lite)
+    if isinstance(out, dict) and out.get("ok"):
+        out.setdefault("bill_total", _bill_total_sql())
+    return out
 
 
 def api_history(q, _body):

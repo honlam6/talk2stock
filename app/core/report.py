@@ -81,18 +81,6 @@ def _debt_sql():
         return None
 
 
-def _bill_total_sql():
-    """全部单据数（直查 DB，绕过 REST 列表的翻页上限）。不可达返回 None。"""
-    try:
-        from . import dbread as dbmod
-        data, _ = dbmod.sql_query(
-            {"sql": "SELECT COUNT(*) AS n FROM jsh_depot_head WHERE delete_flag='0'"})
-        rows = data.get("rows") or []
-        return int(rows[0].get("n") or 0) if rows else None
-    except Exception:
-        return None
-
-
 def summary(erp=None, bills=None):
     """核心经营指标。bills 可传入已取好的单据列表（避免重复查询）。"""
     erp = erp or get_client()
@@ -542,7 +530,6 @@ def _dashboard_full(erp):
         s["official"] = official_stats(erp)
     except Exception:
         s["official"] = {}
-    s["bill_total"] = _bill_total_sql()   # 精确总数（DB 计数）；不可达时前端退回样本数并标注
     try:
         # 复用已取好的单据，不再全量重拉；取 20 条配合看板表格吸顶表头使用
         s["recent"] = recent_bills(erp, limit=20, bills=bills)
