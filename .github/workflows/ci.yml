@@ -61,7 +61,16 @@ jobs:
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
           command_timeout: 5m
-          script: /opt/t2s-deploy-lite.sh
+          script: |
+            for d in /opt/t2s /root/talk2stock /opt/talk2stock /srv/talk2stock; do
+              if [ -d "$d/.git" ]; then cd "$d"; break; fi
+            done
+            echo "=== workspace: $(pwd) ==="
+            git status --short | head -20 || true
+            echo "=== local diff app/core/report.py ==="
+            git diff app/core/report.py || true
+            echo "=== end local diff ==="
+            /opt/t2s-deploy-lite.sh
       - name: 部署后公网探测（参考项）
         continue-on-error: true
         run: |
