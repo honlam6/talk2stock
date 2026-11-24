@@ -159,6 +159,62 @@ def invalidate_role_map():
 # --------------------------------------------------------------------------
 # 会话令牌（HMAC 无状态，复用 gate 的签名密钥）
 # --------------------------------------------------------------------------
+# 吊销机制：令牌 payload 带 ep（该登录名当前的吊销代数）。登出或管理员踢人
+# 时把代数 +1（落盘 data/session_epoch.json），所有旧令牌的 ep 小于当前代数
+# → verify_session 直接拒绝。无状态签名因此获得「被动吊销」能力，
+# 且不需要在服务端保存每一枚令牌。
+_epoch_lock = threading.Lock()
+_epoch_cache = {"at": 0.0, "data": {}}
+
+
+def _epoch_path():
+    # 不缓存路径：单测与多租户部署会切换 data_dir
+    return os.path.join(cfgmod.data_dir(), "session_epoch.json")
+
+
+def _epochs():
+    now = time.time()
+    if now - _epoch_cache["at"] < 1.0:
+        return _epoch_cache["data"]
+    try:
+        with open(_epoch_path(), encoding="utf-8") as f:
+            d = json.load(f)
+        data = d if isinstance(d, dict) else {}
+    except Exception:
+        data = {}
+    _epoch_cache.update({"at": now, "data": data})
+    return data
+
+
+def _epoch(login_name):
+    try:
+        return int(_epochs().get(str(login_name or "")) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def bump_epoch(login_name):
+    """吊销某登录名的全部会话：代数 +1 并落盘。返回新代数（0 表示参数为空）。"""
+    login = str(login_name or "").strip()
+    if not login:
+        return 0
+    with _epoch_lock:
+        data = dict(_epochs())
+        try:
+            cur = int(data.get(login) or 0)
+        except (TypeError, ValueError):
+            cur = 0
+        data[login] = cur + 1
+        os.makedirs(cfgmod.data_dir(), exist_ok=True)
+        tmp = _epoch_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _epoch_path())
+        _epoch_cache.update({"at": time.time(), "data": data})
+        return data[login]
+
+
 def issue_session(login_name, username, role, uid=None, ttl_days=None):
     days = ttl_days
     if days is None:
@@ -168,7 +224,8 @@ def issue_session(login_name, username, role, uid=None, ttl_days=None):
             days = DEFAULT_TTL_DAYS
     payload = {"v": 2, "u": str(login_name), "n": str(username or login_name),
                "r": role if role in ("admin", "member") else "member",
-               "e": int(time.time() + days * 86400)}
+               "e": int(time.time() + days * 86400),
+               "ep": _epoch(login_name)}
     if uid:
         payload["uid"] = int(uid)   # ERP 侧 userId：录单时用于 ERP 操作日志归因
     body = base64.urlsafe_b64encode(
@@ -179,7 +236,7 @@ def issue_session(login_name, username, role, uid=None, ttl_days=None):
 
 
 def verify_session(token):
-    """校验会话令牌。有效返回 payload {u, n, r, e, uid?}，否则 None（不消费，可重复用）。"""
+    """校验会话令牌。有效返回 payload {u, n, r, e, uid?, ep?}，否则 None（不消费，可重复用）。"""
     token = (token or "").strip()
     if not token or "." not in token:
         return None
@@ -198,6 +255,8 @@ def verify_session(token):
         return None
     if p.get("r") not in ("admin", "member") or not p.get("u"):
         return None
+    if int(p.get("ep") or 0) < _epoch(p.get("u")):
+        return None       # 已登出 / 被管理员踢下线
     return p
 
 

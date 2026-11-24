@@ -20,12 +20,15 @@
     DELETE /api/config/llm?key=x  → 删除档案（仅管理员）
     POST   /api/config/llm/test   → 测试档案连通性（仅管理员）
     POST   /api/auth/login        → ERP 账号登录 → 会话令牌（无需凭证）
+    POST   /api/auth/logout       → 吊销当前登录名全部令牌（登出即失效）
+    POST   /api/auth/revoke       → 管理员吊销指定登录名（员工离职/设备丢失）
     GET    /api/auth/me           → 当前登录者与角色
     GET    /api/my/model          → 我的模型档案（私有，key 脱敏）+ 共享档案只读状态
     POST   /api/my/model          → 我的模型管理（action=save|activate|delete|test）
     POST   /api/parse             → 自然语言 → bills[] 草稿 + 逐单预览 + 独立确认令牌
     POST   /api/parse/image       → 单据照片（multipart）→ 视觉解析 → bills[]
     POST   /api/resolve           → draft → 预览（只读）+ 确认令牌
+    POST   /api/bill/reverse      → 已写入单据 → 反向草稿（退货/冲销）+ 令牌
     POST   /api/commit            → draft + 确认令牌 → 真正写入 ERP（无令牌一律拒绝）
     POST   /api/commit/batch      → items[{draft,confirm_token}] → 逐单过闸门写入（batch_id 串联审计）
     POST   /api/sheet/inspect     → Excel/CSV（multipart）→ 工作表清单 + 前 8 行预览
@@ -64,11 +67,13 @@ if APP_DIR not in sys.path:
 
 from core import config as cfgmod          # noqa: E402
 from core import auth as authmod           # noqa: E402
+from core import dedupe as dedupemod       # noqa: E402
 from core import draft as draftmod          # noqa: E402
 from core import erp as erpmod              # noqa: E402
 from core import gate as gatemod            # noqa: E402
 from core import llm as llmmod              # noqa: E402
 from core import oplog as oplogmod          # noqa: E402
+from core import reverse as reversemod      # noqa: E402
 from core import sheet as sheetmod          # noqa: E402
 from core.sheet import SheetError           # noqa: E402
 
@@ -300,6 +305,22 @@ def api_auth_me(_q, _body):
             "username": cfgmod.current_username() or ""}
 
 
+def api_auth_revoke(_q, body):
+    """管理员吊销某个登录名的全部会话（员工离职/设备丢失）。
+
+    无状态 HMAC 令牌靠 session_epoch.json 的代数递增失效：该登录名所有
+    旧令牌下一次请求即被 verify_session 拒绝，无需重启、不影响他人。
+    """
+    if cfgmod.current_role() != "admin":
+        return {"ok": False, "need_admin": True, "message": "仅管理员可吊销他人登录"}
+    login = str((body or {}).get("login") or "").strip()
+    if not login:
+        return {"ok": False, "message": "缺少 login（要吊销的登录名）"}
+    epoch = authmod.bump_epoch(login)
+    return {"ok": True, "login": login, "epoch": epoch,
+            "message": "已吊销 %s 的全部登录状态" % login}
+
+
 def _my_model_view():
     login = cfgmod.current_request_user()
     mine = authmod.masked_user_profiles(login) if login else {"profiles": {}, "active": ""}
@@ -425,8 +446,21 @@ def api_master(_q, _body):
 # 签令牌 / 批量预览管线在 core/draft.py：问一问的 draft_order 起草工具与
 # 对话录单共用同一份实现——同一个闸门、同一种令牌、同一种审计形状。
 _confirm_meta = draftmod.confirm_meta
-_parse_to_bills = draftmod.prepare_bills
 _bill_meta_public = draftmod.meta_public
+
+
+def _parse_to_bills(drafts, meta, erp, source, raw_text, batch_id=""):
+    """prepare_bills + 业务防重：每张卡的预览多带 duplicate，
+    前端显示「近 30 分钟疑似已录过同单」，不阻断提交。"""
+    bills = draftmod.prepare_bills(drafts, meta, erp, source, raw_text, batch_id)
+    for b in bills:
+        try:
+            pr = b.get("preview") or {}
+            pid = ((pr.get("party") or {}).get("id"))
+            pr["duplicate"] = dedupemod.check(b.get("draft") or {}, organ_id=pid)
+        except Exception:
+            pass
+    return bills
 
 
 MAX_PARSE_CHARS = 1000   # 多单契约放宽：一段话多单（；分单）允许更长，但仍拒绝整篇文章
@@ -590,6 +624,10 @@ def api_commit_batch(_q, body):
     try:
         from core import report as reportmod
         reportmod.invalidate()
+    except Exception:
+        pass
+    try:
+        dedupemod.invalidate()
     except Exception:
         pass
     return {"ok": ok_count > 0, "batch_id": batch_id, "results": results,
@@ -778,10 +816,39 @@ def api_resolve(_q, body):
         return {"ok": False, "message": "缺少草稿数据"}
     erp = _erp()
     preview = draftmod.resolve(d, erp)
+    try:
+        preview["duplicate"] = dedupemod.check(
+            d, organ_id=(preview.get("party") or {}).get("id"))
+    except Exception:
+        preview["duplicate"] = {"hit": False, "skipped": True}
     meta_info = _confirm_meta((body.get("source") or "form").strip(),
                               extra={"draft_resolved": d})
     preview["confirm_token"] = gatemod.issue(d, meta_info)
     return {"ok": True, "draft": d, "preview": preview}
+
+
+def api_bill_reverse(_q, body):
+    """已写入单据 → 反向草稿（采购退货/销售退货）+ 一次性令牌；只出卡，不写库。
+
+    这是「只做加法」边界内的冲销路径：原单不动，新增一张方向相反的单，
+    由确认卡上的人决定是否真的写。前端在批量提交成功后按结果逐单调这里。
+    """
+    d = _pick_draft(body)
+    if not d:
+        return {"ok": False, "message": "缺少原单草稿（draft）"}
+    out = reversemod.build(
+        d,
+        bill_no=str(body.get("bill_no") or "").strip(),
+        reason=str(body.get("reason") or "退货/冲销").strip())
+    if not out.get("ok"):
+        return out
+    erp = _erp()
+    preview = draftmod.resolve(out["draft"], erp)
+    preview["duplicate"] = {"hit": False, "skipped": True}
+    meta_info = _confirm_meta("reverse", extra={"draft_resolved": out["draft"]})
+    preview["confirm_token"] = gatemod.issue(out["draft"], meta_info)
+    return {"ok": True, "draft": out["draft"], "preview": preview,
+            "message": out["message"]}
 
 
 def _erp_operator_log(erp, operator, d, res):
@@ -855,11 +922,15 @@ def api_commit(_q, body):
         reportmod.invalidate()
     except Exception:
         pass
-    try:
-        from core import procurement as pmod
-        pmod.invalidate()
-    except Exception:
-        pass
+        try:
+            from core import procurement as pmod
+            pmod.invalidate()
+        except Exception:
+            pass
+        try:
+            dedupemod.invalidate()   # 刚写入的单不能在下一次出卡时被当成历史重复
+        except Exception:
+            pass
     return res
 
 
@@ -1222,6 +1293,7 @@ ROUTES = {
     ("POST", "/api/config/llm/test"): api_llm_test,
     ("POST", "/api/auth/login"): api_auth_login,
     ("GET", "/api/auth/me"): api_auth_me,
+    ("POST", "/api/auth/revoke"): api_auth_revoke,
     ("GET", "/api/my/model"): api_my_model_get,
     ("POST", "/api/my/model"): api_my_model_post,
     ("GET", "/api/master"): api_master,
@@ -1242,6 +1314,7 @@ ROUTES = {
     ("POST", "/api/conversations"): api_conversations_post,
     ("POST", "/api/parse"): api_parse,
     ("POST", "/api/resolve"): api_resolve,
+    ("POST", "/api/bill/reverse"): api_bill_reverse,
     ("POST", "/api/commit"): api_commit,
     ("POST", "/api/commit/batch"): api_commit_batch,
     ("POST", "/api/upload"): api_upload,
@@ -1485,6 +1558,15 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 role, login, uname, uid = sess if sess else ("admin", "", "", None)
             cfgmod.set_request_user(login, role, uname, uid)
+            if method == "POST" and path == "/api/auth/logout":
+                # 登出：把当前登录名的吊销代数 +1，本机所有旧令牌立即失效
+                if login:
+                    try:
+                        authmod.bump_epoch(login)
+                    except Exception:
+                        pass
+                self._json({"ok": True, "message": "已退出登录"})
+                return
             # 管理员门禁：/api/config/* 是共享配置（ERP 连接 + 共享模型档案），
             # 成员在接口层就被拒绝，而不是前端藏一下
             if (path.startswith("/api/daily/") or path.startswith("/api/diagnose")) and role != "admin":

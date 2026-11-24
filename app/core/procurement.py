@@ -8,6 +8,7 @@
 
 数据口径（全部只读，经 dbread 的只读事务护栏）：
 - 当前库存  jsh_material_current_stock.current_number（分仓，ERP 审核单据后维护）
+- 在途采购  采购订单（其它·采购订单，status 1/3）明细 − 已关联入库量
 - 近期销量  jsh_depot_item × jsh_depot_head：出库·销售 − 入库·销售退货，按商品汇总
 - 采购历史  同上：入库·采购，近 180 天（最近单价/供应商/采购间隔中位数）
 - 安全库存  jsh_material_initial_stock.low_safe_stock（每仓下限，跨仓求和）
@@ -17,7 +18,8 @@
     L = 该商品采购间隔中位数（样本≥2）否则默认 7 天
     S = 安全库存（跨仓求和；未设 = 0）
     T = d × (L + 覆盖天数) + S                 目标库存
-    建议量 = ceil(max(0, T − 当前库存))
+    A = 当前库存 + 在途采购量                   可支配库存
+    建议量 = ceil(max(0, T − A))
 分级：库存为负 / 周转期都撑不到 / 低于安全线 → urgent；建议量 > 0 → reorder；其余 ok。
 护栏：日均销量为 0 的商品不催货（负库存改提示盘点，避免账实不符被当成补货需求）。
 
@@ -84,6 +86,29 @@ SELECT material_id, SUM(IFNULL(low_safe_stock, 0)) AS safe_stock
 FROM jsh_material_initial_stock
 WHERE delete_flag = '0'
 GROUP BY material_id
+"""
+
+# 在途采购：已审核但未入库的采购订单明细，扣除已关联入库的数量。
+# status 语义见 jsh_depot_head DDL：0未审核、1已审核、2完成采购、3部分采购。
+# 入库单明细的 link_id 指回订单明细 id；没有 link_id 的老数据按未入库计
+# （保守：宁可少扣，也不把已到货的量当成在途）。
+_SQL_PENDING = """
+SELECT oi.material_id AS material_id,
+       SUM(GREATEST(IFNULL(oi.basic_number, oi.oper_number) - IFNULL(done.qty, 0), 0)) AS pending
+FROM jsh_depot_item oi
+JOIN jsh_depot_head oh ON oh.id = oi.header_id
+LEFT JOIN (
+    SELECT di.link_id AS link_id, SUM(IFNULL(di.basic_number, di.oper_number)) AS qty
+    FROM jsh_depot_item di
+    JOIN jsh_depot_head dh ON dh.id = di.header_id
+    WHERE di.link_id IS NOT NULL AND di.delete_flag = '0' AND dh.delete_flag = '0'
+      AND dh.type = '入库' AND dh.sub_type = '采购'
+    GROUP BY di.link_id
+) done ON done.link_id = oi.id
+WHERE oh.type = '其它' AND oh.sub_type = '采购订单'
+  AND oh.delete_flag = '0' AND oi.delete_flag = '0'
+  AND oh.status IN ('1', '3')
+GROUP BY oi.material_id
 """
 
 _SQL_SUPPLIER = """
@@ -187,6 +212,14 @@ def compute(erp, days=None, cover_days=None, lead_time_default=None, limit=30):
         return {"ok": False,
                 "message": "经营数据查询失败（%s）——采购建议需要只读数据库通道" % str(e)[:120]}
 
+    # 在途采购单独降级：订单表/字段在旧版本可能缺失，失败不拖垮整份建议，
+    # 但必须让调用方看见「这批数没算在途」（assumptions 里标注）。
+    try:
+        pending_rows = _q(_SQL_PENDING, limit=5000)
+        pending_ok = True
+    except Exception:
+        pending_rows, pending_ok = [], False
+
     # ---- 当前库存（分仓明细 + 合计）
     stock_by_mat, depot_of_mat = {}, {}
     for r in stock_rows:
@@ -216,6 +249,15 @@ def compute(erp, days=None, cover_days=None, lead_time_default=None, limit=30):
         except (TypeError, ValueError):
             continue
         safe_by_mat[mid] = _to_float(r.get("safe_stock"))
+
+    # ---- 在途采购（未入库订单量）
+    pending_by_mat = {}
+    for r in pending_rows:
+        try:
+            mid = int(r.get("material_id"))
+        except (TypeError, ValueError):
+            continue
+        pending_by_mat[mid] = pending_by_mat.get(mid, 0.0) + _to_float(r.get("pending"))
 
     # ---- 采购历史：按商品聚合（最近日期/最近单价/供应商/间隔中位数）
     sup_name = {}
@@ -267,22 +309,25 @@ def compute(erp, days=None, cover_days=None, lead_time_default=None, limit=30):
             lead_src = "default"
 
         target = round(daily * (lead + cover_days) + safe, 2)
+        pending = round(pending_by_mat.get(mid, 0.0), 2)
+        available = round(stock + pending, 2)
         if daily <= 0:
             # 无需求不催货；负库存是账实问题，不是采购需求
             suggest = 0
             level = LEVEL_URGENT if stock < 0 else LEVEL_OK
         else:
-            need = max(0.0, target - stock)
+            need = max(0.0, target - available)
             suggest = int(math.ceil(need)) if need > 0 else 0
-            if stock < 0 or stock < daily * lead or (safe > 0 and stock <= safe):
+            if stock < 0 or available < daily * lead or (safe > 0 and available <= safe):
                 level = LEVEL_URGENT
             elif suggest > 0:
                 level = LEVEL_REORDER
             else:
                 level = LEVEL_OK
 
-        days_cover = round(stock / daily, 1) if daily > 0 else None
-        reason = _reason(stock, daily, safe, lead, cover_days, lead_src, days_cover, suggest, level)
+        days_cover = round(available / daily, 1) if daily > 0 else None
+        reason = _reason(stock, daily, safe, lead, cover_days, lead_src, days_cover,
+                         suggest, level, pending=pending)
         if lead_src == "default" and daily > 0:
             assumptions.append("%s：无历史采购记录，采购周期按默认 %d 天计" % (meta["name"], lead))
         if safe <= 0 and daily > 0:
@@ -294,6 +339,8 @@ def compute(erp, days=None, cover_days=None, lead_time_default=None, limit=30):
             "model": meta["model"],
             "unit": meta["unit"],
             "stock": stock,
+            "pending_qty": pending,
+            "available": available,
             "by_depot": depot_of_mat.get(mid, []),
             "sold": sold,
             "days": days,
@@ -318,12 +365,17 @@ def compute(erp, days=None, cover_days=None, lead_time_default=None, limit=30):
     # 不是装饰——行数就是查询返回的记录数）
     evidence = [
         {"label": "当前库存", "table": "jsh_material_current_stock", "rows": len(stock_rows)},
+        {"label": "在途采购（未入库订单）",
+         "table": "jsh_depot_item × jsh_depot_head（采购订单）", "rows": len(pending_rows)},
         {"label": "近 %d 天销售单" % days,
          "table": "jsh_depot_item × jsh_depot_head", "rows": len(sold_rows)},
         {"label": "采购历史 180 天",
          "table": "jsh_depot_item × jsh_depot_head", "rows": len(purchase_rows)},
         {"label": "安全库存", "table": "jsh_material_initial_stock", "rows": len(safe_rows)},
     ]
+    if not pending_ok:
+        assumptions.append("在途采购查询不可用：建议量未扣减已下单未入库的采购订单，"
+                           "下单前请人工核对在途量")
     todo = [r for r in rows if r["suggest_qty"] > 0]
     return {
         "ok": True,
@@ -340,22 +392,26 @@ def compute(erp, days=None, cover_days=None, lead_time_default=None, limit=30):
     }
 
 
-def _reason(stock, daily, safe, lead, cover_days, lead_src, days_cover, suggest, level):
+def _reason(stock, daily, safe, lead, cover_days, lead_src, days_cover, suggest, level,
+            pending=0.0):
     """确定性理由句：只用本行已有的数字，前端与日报直接引用。"""
     if daily <= 0:
         if stock < 0:
             return "当前库存为负且近期无销量，账实可能不符，建议先盘点核实。"
         return "近期无销售记录，暂不建议采购。"
+    # 有在途时把「可支配」说清楚，否则用户看到 0 库存会误以为算法漏算
+    shown = ("%g（在途 %g，可支配 %g）" % (stock, pending, stock + pending)
+             if pending > 0 else "%g" % stock)
     cover = "，约可支撑 %.1f 天" % days_cover if days_cover is not None else ""
     if level == LEVEL_URGENT:
-        return ("当前库存 %g%s，低于周转需求（日均 %g × 采购周期 %d 天%s），"
+        return ("当前库存 %s%s，低于周转需求（日均 %g × 采购周期 %d 天%s），"
                 "建议立即补 %d，否则可能断货。" % (
-                    stock, cover, daily, lead,
+                    shown, cover, daily, lead,
                     "，按历史采购间隔" if lead_src == "history" else "，按默认周期", suggest))
     if level == LEVEL_REORDER:
-        return ("当前库存 %g%s，按日均 %g、覆盖 %d 天+安全库存 %g 计，"
-                "建议补 %d 维持周转。" % (stock, cover, daily, cover_days, safe, suggest))
-    return ("当前库存 %g%s，可覆盖预期需求，暂不采购。" % (stock, cover))
+        return ("当前库存 %s%s，按日均 %g、覆盖 %d 天+安全库存 %g 计，"
+                "建议补 %d 维持周转。" % (shown, cover, daily, cover_days, safe, suggest))
+    return ("当前库存 %s%s，可覆盖预期需求，暂不采购。" % (shown, cover))
 
 
 _res_cache = {"at": 0.0, "key": None, "data": None}
@@ -498,7 +554,9 @@ def tool_suggest(erp, args=None):
     if not res.get("ok"):
         return {"error": res.get("message")}, None
     rows = res["rows"]
-    compact = [{"name": r["name"], "stock": r["stock"], "sold": r["sold"],
+    compact = [{"name": r["name"], "stock": r["stock"],
+                "pending_qty": r.get("pending_qty", 0), "available": r.get("available"),
+                "sold": r["sold"],
                 "unit": r["unit"], "daily": r["daily"],
                 "lead_time_days": r["lead_time_days"],
                 "safe_stock": r["safe_stock"], "suggest_qty": r["suggest_qty"],

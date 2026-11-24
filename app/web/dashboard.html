@@ -532,7 +532,7 @@ function renderRecent() {
   const narrow = window.matchMedia('(max-width: 640px)').matches;
   recentNarrow = narrow;
   $('#recentCnt').textContent = rows.length
-    ? `（最近 ${rows.length} 张 / 共 ${D.bill_count || rows.length} 张${narrow ? '' : ' · 点表头排序'}）`
+    ? `（最近 ${rows.length} 张 / 共 ${D.bill_total || D.bill_count || rows.length} 张${D.bill_total ? '' : '（REST 样本）'}${narrow ? '' : ' · 点表头排序'}）`
     : '';
   const c = RECENT_COLS[recentSort.col];
   rows = rows.slice().sort((a, b) => {
@@ -992,7 +992,7 @@ async function loadProcurement() {
       const daily = x.daily ? x.daily.toFixed(2) : '0';
       return `<tr>
         <td>${esc(x.name)}${x.model ? `<span class="muted" style="font-size:12px"> ${esc(x.model)}</span>` : ''}</td>
-        <td class="num">${x.stock}${esc(x.unit || '')}</td>
+        <td class="num">${x.stock}${esc(x.unit || '')}${x.pending_qty > 0 ? `<div class="muted" style="font-size:11px">在途 ${x.pending_qty}</div>` : ''}</td>
         <td class="num">${x.sold}${esc(x.unit || '')}</td>
         <td class="num"><b>${x.suggest_qty}</b>${esc(x.unit || '')}</td>
         <td><span class="pill proc-${cls}">${lbl}</span></td>
@@ -1006,7 +1006,7 @@ async function loadProcurement() {
       const daily = x.daily ? x.daily.toFixed(2) : '0';
       return `<div class="proc-card ${cls === 'bad' ? 'pc-bad' : 'pc-warn'}">
         <div class="pc-top"><span class="pc-name">${esc(x.name)}</span><span class="pill proc-${cls}">${lbl}</span><span class="pc-qty">+${x.suggest_qty}${unit}</span></div>
-        <div class="pc-mid">库存 ${x.stock}${unit} · 近 ${r.params.days} 天销量 ${x.sold}${unit} · 日均 ${daily}</div>
+        <div class="pc-mid">库存 ${x.stock}${unit}${x.pending_qty > 0 ? `（在途 ${x.pending_qty}）` : ''} · 近 ${r.params.days} 天销量 ${x.sold}${unit} · 日均 ${daily}</div>
         <div class="pc-reason">${esc(x.reason)}</div>
       </div>`;
     }).join('');

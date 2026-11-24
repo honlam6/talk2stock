@@ -204,10 +204,20 @@ async function accountSheet() {
   const out = mask.querySelector('#__acctOut');
   if (out) out.onclick = () => {
     done();
+    endSession();
+  };
+}
+
+// 登出：先让服务端吊销该登录名的令牌代数（旧令牌立即失效），
+// 网络失败也照常清本地，避免卡在「退不出去」。
+function endSession() {
+  const finish = () => {
     localStorage.removeItem('t2s_pass');
     localStorage.removeItem('t2s_tried_erp');
+    window.__t2sMe = null;
     location.reload();
   };
+  api('/api/auth/logout', { method: 'POST', body: {} }).catch(() => {}).then(finish);
 }
 
 // ---------- 当前登录者徽章 ----------
@@ -220,12 +230,7 @@ function renderUserChip() {
       `<span class="me-badge ${me.role === 'admin' ? 'admin' : 'member'}">${me.role === 'admin' ? '管理员' : '成员'}</span>` +
       `<a id="__navLogout" href="javascript:void 0" title="退出登录">退出</a>`;
     const lo = $('#__navLogout');
-    if (lo) lo.onclick = () => {
-      localStorage.removeItem('t2s_pass');
-      localStorage.removeItem('t2s_tried_erp');
-      window.__t2sMe = null;
-      location.reload();
-    };
+    if (lo) lo.onclick = () => endSession();
   }).catch(() => { /* 未登录时不展示，等 401 触发登录弹窗 */ });
 }
 
@@ -1026,6 +1031,12 @@ function showMultiPreview(bills, extra) {
   if (old) old.remove();
   extra = extra || {};
 
+  // 已写入单据可以一键生成反向草稿（退货/冲销）：原单不动，新增反向单走同一闸门
+  const REVERSIBLE = {
+    purchase_in: '采购退货单', sale_out: '销售退货单',
+    purchase_return: '采购入库单', sale_return: '销售出库单',
+  };
+
   const st = {
     source: extra.source || 'ai',
     rawText: extra.rawText || '',
@@ -1116,9 +1127,14 @@ function showMultiPreview(bills, extra) {
     return `
       <div data-errs="${b.idx}">${errs.length ? `<div class="alert alert-error"><b>无法提交：</b><br>${errs.map(esc).join('<br>')}</div>` : ''}</div>
       ${aiFlag ? `<div class="alert ${ai.confidence === 'low' ? 'alert-warn' : 'alert-info'}"><b>AI 提示（置信度：${esc(ai.confidence || '—')}）：</b>${esc(ai.note || '')}${(ai.problems || []).length ? '<br>解析问题：' + ai.problems.map(esc).join('；') : ''}</div>` : ''}
+      ${(p.duplicate && p.duplicate.hit) ? `<div class="alert alert-warn"><b>⚠ 疑似重复录入：</b><br>${(p.duplicate.matches || []).map(m => `近 ${p.duplicate.window_minutes} 分钟已有 <b>${esc(m.number)}</b>（${esc(m.time)}，${esc(m.party)}，${(m.hits || []).map(h => esc(h.name) + '×' + h.qty).join('、')}）`).join('<br>')}<br>若这是同一笔业务，请先核对上面的单号，避免重复入库/出库。</div>` : ''}
       ${toCreate.length ? `<div class="alert alert-warn"><b>⚠ 将自动新建：</b>${toCreate.map(esc).join('；')}</div>` : ''}
       ${warns.length ? `<div class="alert alert-info"><b>提醒：</b><br>${warns.map(esc).join('<br>')}</div>` : ''}
-      <div data-res="${b.idx}"></div>
+      <div data-res="${b.idx}">${b.state === 'committed' && b.res
+        ? `<div class="alert alert-ok"><b>✓ 已写入：</b>${esc(b.res.number || '')} ${esc(b.res.message || '')}${REVERSIBLE[d.biz] ? `<div class="mt-2"><button class="btn btn-ghost btn-sm" data-reverse="${b.idx}">生成${REVERSIBLE[d.biz]}（冲销本单）</button></div>` : ''}</div>`
+        : (b.state === 'failed' && b.res
+          ? `<div class="alert alert-error"><b>写入失败：</b>${esc(b.res.message || '请检查后重试')}${b.res.need_confirm ? '（令牌失效，点重试会先刷新确认令牌）' : ''}<div class="mt-2"><button class="btn btn-ghost btn-sm" data-retry="${b.idx}">重试本单</button></div></div>`
+          : '')}</div>
       <div class="pv-form">
         <div class="pv-line">
           <label>${esc((p.party && p.party.type) || (BIZ[d.biz] && BIZ[d.biz].party) || '往来单位')}</label>
@@ -1334,6 +1350,10 @@ function showMultiPreview(bills, extra) {
 
     $(`[data-refresh="${i}"]`, el).onclick = () => refreshBill(i);
     $(`[data-commitone="${i}"]`, el).onclick = () => commitOne(i);
+    const rv = $(`[data-reverse="${i}"]`, el);
+    if (rv) rv.onclick = () => reverseBill(i);
+    const rt = $(`[data-retry="${i}"]`, el);
+    if (rt) rt.onclick = () => commitOne(i);
   }
 
   async function pickCandidate(cardIdx, chip) {
@@ -1369,7 +1389,8 @@ function showMultiPreview(bills, extra) {
 
   async function commitOne(i) {
     const b = st.bills[i];
-    if (b.dirty && !(await refreshBill(i, true))) return;
+    // 失败单的令牌可能已被闸门消费：重试前必须换新令牌，否则必然再被拒
+    if ((b.dirty || b.state === 'failed') && !(await refreshBill(i, true))) return;
     const btn = $(`[data-commitone="${i}"]`);
     if (btn) { btn.disabled = true; btn.textContent = '写入中…'; }
     try {
@@ -1395,6 +1416,28 @@ function showMultiPreview(bills, extra) {
     updateBars();
   }
 
+  async function reverseBill(i) {
+    const b = st.bills[i];
+    try {
+      const r = await api('/api/bill/reverse', { method: 'POST', body: {
+        draft: b.draft, bill_no: (b.res && b.res.number) || '', reason: '退货/冲销',
+      } });
+      if (!r.ok) { toast(r.message || '生成反向草稿失败', 'bad'); return; }
+      const idx = st.bills.length;
+      st.bills.push({
+        idx,
+        draft: r.draft,
+        preview: r.preview,
+        confirm_token: r.preview.confirm_token,
+        ai: { confidence: 'high', note: r.message || '反向单据（原单不动，新增冲销单）', problems: [] },
+        attach: [], collapsed: false, dirty: false, state: 'open', res: null,
+      });
+      renderCard(idx);
+      updateBars();
+      toast(r.message || '已生成反向草稿，确认后写入', 'ok');
+    } catch (e) { toast(e.message, 'bad'); }
+  }
+
   async function commitSelected() {
     if (st.busy) return;
     const sel = st.bills.filter(b => {
@@ -1406,9 +1449,9 @@ function showMultiPreview(bills, extra) {
     updateBars();
     const prog = $('#__mprog'), progFill = prog ? prog.querySelector('i') : null;
     const progTxt = $('#__mprogTxt');
-    // 脏单先刷新换新令牌（旧令牌绑定旧内容，直接提交会被闸门拒）
+    // 脏单/失败单先刷新换新令牌（旧令牌绑定旧内容或已被消费，直接提交会被闸门拒）
     for (const b of sel) {
-      if (b.dirty) {
+      if (b.dirty || b.state === 'failed') {
         if (progTxt) progTxt.textContent = `刷新第 ${b.idx + 1} 单预览…`;
         const ok = await refreshBill(b.idx, true);
         if (!ok) { st.busy = false; updateBars(); return; }

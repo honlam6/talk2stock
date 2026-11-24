@@ -50,6 +50,48 @@ class SessionTokenTest(unittest.TestCase):
         self.assertIsNone(authmod.verify_session("some-static-password"))
 
 
+class SessionRevokeTest(unittest.TestCase):
+    """被动吊销：登出/管理员踢人后，旧无状态令牌必须立即失效，其他人不受影响。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self._old_dir = cfgmod.DATA_DIR
+        cfgmod.DATA_DIR = self._tmp.name
+        authmod._epoch_cache.update({"at": 0.0, "data": {}})
+
+    def tearDown(self):
+        cfgmod.DATA_DIR = self._old_dir
+        authmod._epoch_cache.update({"at": 0.0, "data": {}})
+        self._tmp.cleanup()
+
+    def test_logout_invalidates_all_tokens_of_login(self):
+        a = authmod.issue_session("staff", "员工", "member")
+        b = authmod.issue_session("staff", "员工", "member")
+        self.assertIsNotNone(authmod.verify_session(a))
+        authmod.bump_epoch("staff")
+        self.assertIsNone(authmod.verify_session(a))
+        self.assertIsNone(authmod.verify_session(b))
+        # 重新登录签发的新令牌（ep 已是最新）照常可用
+        c = authmod.issue_session("staff", "员工", "member")
+        self.assertIsNotNone(authmod.verify_session(c))
+
+    def test_revoke_is_per_login(self):
+        alice = authmod.issue_session("alice", "A", "member")
+        bob = authmod.issue_session("bob", "B", "member")
+        authmod.bump_epoch("alice")
+        self.assertIsNone(authmod.verify_session(alice))
+        self.assertIsNotNone(authmod.verify_session(bob))
+
+    def test_epoch_persists_across_cache_reset(self):
+        tok = authmod.issue_session("staff", "员工", "member")
+        authmod.bump_epoch("staff")
+        authmod._epoch_cache.update({"at": 0.0, "data": {}})   # 模拟重启/缓存过期
+        self.assertIsNone(authmod.verify_session(tok))
+
+    def test_empty_login_is_noop(self):
+        self.assertEqual(authmod.bump_epoch(""), 0)
+
+
 class RoleDecisionTest(unittest.TestCase):
     """C11 回归：ismanager 对租户内所有用户都是 1，不能作为管理员信号；
     角色判定只认 ERP roleName（/user/list）与 T2S_ADMINS 名单。"""

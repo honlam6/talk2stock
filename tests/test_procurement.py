@@ -71,6 +71,8 @@ def _q(sql, **kw):
         ]
     if "jsh_supplier" in sql:
         return [{"id": 100, "supplier": "美宜佳"}]
+    if "sub_type = '采购订单'" in sql:
+        return []          # 默认无在途订单；需要时由专门 case 注入
     return []
 
 
@@ -146,6 +148,38 @@ class TestCompute(unittest.TestCase):
             m = pmod.safe_stock_map(_erp())
         self.assertEqual(m[1], 10)
         self.assertEqual(m[3], 20)
+
+    def test_pending_purchase_reduces_suggestion(self):
+        """在途 100 件覆盖缺口：目标 115 −（库存 20 + 在途 100）≤ 0，
+        建议量归零、等级从 reorder 降为 ok——避免重复下单。"""
+        def _q_pending(sql, **kw):
+            if "sub_type = '采购订单'" in sql:
+                return [{"material_id": 1, "pending": 100}]
+            return _q(sql, **kw)
+
+        with mock.patch.object(pmod, "_q", side_effect=_q_pending):
+            res = pmod.compute(_erp())
+        by = {r["name"]: r for r in res["rows"]}
+        cola = by["可乐"]
+        self.assertEqual(cola["pending_qty"], 100)
+        self.assertEqual(cola["available"], 120)
+        self.assertEqual(cola["suggest_qty"], 0)
+        self.assertEqual(cola["level"], pmod.LEVEL_OK)
+
+    def test_pending_query_failure_degrades(self):
+        """在途查询不可用 → 整份建议照常出，但 assumptions 明确标注未扣在途。"""
+        def _q_fail_pending(sql, **kw):
+            if "sub_type = '采购订单'" in sql:
+                raise RuntimeError("unknown column link_id")
+            return _q(sql, **kw)
+
+        with mock.patch.object(pmod, "_q", side_effect=_q_fail_pending):
+            res = pmod.compute(_erp())
+        self.assertTrue(res["ok"])
+        by = {r["name"]: r for r in res["rows"]}
+        self.assertEqual(by["可乐"]["suggest_qty"], 95)   # 与无在途口径一致
+        joined = "\n".join(res["assumptions"])
+        self.assertIn("在途采购查询不可用", joined)
 
 
 class TestDrafts(unittest.TestCase):
