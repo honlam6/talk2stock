@@ -442,32 +442,37 @@ def invalidate():
     """清采购建议与安全库存缓存（单据写入后由 server 调用）。"""
     with _res_lock:
         _res_cache.update({"at": 0.0, "key": None, "data": None})
-    _safe_cache.update({"at": 0.0, "data": {}})
+    with _safe_lock:
+        _safe_cache.update({"at": 0.0, "data": {}})
 
 
 # 安全库存映射缓存：库存预警口径统一用 material_initial_stock.low_safe_stock
 # （数量），不再用 material/list 的 lowDecimal（那是「最低售价」，价格字段）。
 _safe_cache = {"at": 0.0, "data": {}}
+_safe_lock = threading.Lock()
 
 
 def safe_stock_map(erp=None, max_age=60):
     """{material_id: 最低库存数量}——跨仓求和。SQL 不可达时返回上次缓存/空，
     绝不因库存预警把问答或看板拖进超时。"""
     now = time.time()
-    if _safe_cache["data"] and now - _safe_cache["at"] < max_age:
-        return _safe_cache["data"]
+    with _safe_lock:
+        if _safe_cache["data"] and now - _safe_cache["at"] < max_age:
+            return _safe_cache["data"]
     try:
         rows = _q(_SQL_SAFE)
     except Exception:
-        _safe_cache["at"] = now - max_age + 10   # 失败只缓存 10 秒，避免每次请求都吃超时
-        return _safe_cache["data"]
+        with _safe_lock:
+            _safe_cache["at"] = now - max_age + 10   # 失败只缓存 10 秒，避免每次请求都吃超时
+            return _safe_cache["data"]
     out = {}
     for r in rows:
         try:
             out[int(r.get("material_id"))] = _to_float(r.get("safe_stock"))
         except (TypeError, ValueError):
             continue
-    _safe_cache.update({"at": now, "data": out})
+    with _safe_lock:
+        _safe_cache.update({"at": now, "data": out})
     return out
 
 

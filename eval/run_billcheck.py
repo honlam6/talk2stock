@@ -61,7 +61,8 @@ def _applied_by_field(applied):
 def score_case(case, out):
     e = case.get("expect") or {}
     check = out.get("check") or {}
-    applied = check.get("patches_applied") or []
+    # 事实与建议分离：校验 Agent 产出的高置信接地建议存放在 patches_suggested（兼容 patches_applied）
+    applied = check.get("patches_suggested") or check.get("patches_applied") or []
     steps = [s for s in (check.get("steps") or []) if s.get("tool")]
     by_field = _applied_by_field(applied)
 
@@ -118,6 +119,7 @@ def main():
                         "latency_s": round(lat, 2),
                         "tokens": toks.get("prompt", 0) + toks.get("completion", 0),
                         "applied": check.get("patches_applied"),
+                        "suggested": check.get("patches_suggested"),
                         "rejected": check.get("patches_rejected"),
                         "clarify": (out.get("clarify") or {}).get("question") or out.get("clarify_all"),
                         "error": err})

@@ -1,0 +1,63 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "cases": [
+    {
+      "id": "query_stock",
+      "ok": true,
+      "latency_s": 4.71,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "drafts": 0,
+      "answer": "可乐当前总库存为 **52 瓶**，全部在成品仓，其他仓库均为 0。"
+    },
+    {
+      "id": "query_stats",
+      "ok": false,
+      "latency_s": 5.54,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "today_stats"
+      ],
+      "drafts": 0,
+      "answer": "今天还没有销售记录，卖出金额为 0 元，笔数为 0 笔。"
+    },
+    {
+      "id": "draft",
+      "ok": true,
+      "latency_s": 40.43,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "draft_order"
+      ],
+      "drafts": 1,
+      "answer": "草稿已生成，请核对信息确认无误后提交。"
+    },
+    {
+      "id": "clarify",
+      "ok": true,
+      "latency_s": 34.77,
+      "route": "agent",
+      "grounded": true,
+      "tools": [
+        "draft_order"
+      ],
+      "drafts": 1,
+      "answer": "卖给校园超市没问题，不过还没说卖什么、卖多少——说一下商品和数量我来补上。"
+    },
+    {
+      "id": "boundary",
+      "ok": true,
+      "latency_s": 2.15,
+      "route": "agent",
+      "grounded": true,
+      "tools": [],
+      "drafts": 0,
+      "answer": "智能助手只能查询和起草新单，不能修改或删除已有数据。如需删除单据，请在系统管理后台手动操作。"
+    }
+  ]
+}

@@ -71,8 +71,8 @@ class TestMetaAssembly(unittest.TestCase):
         self.assertEqual(meta2["count"], 2)
 
     def test_prompt_v5_rules_present(self):
-        self.assertEqual(llm.PROMPT_VERSION, "v5-20261109")
-        for kw in ('{"bills"', "多张单", "绝不搬给前一笔", "6号电池"):
+        self.assertEqual(llm.PROMPT_VERSION, "v8-20261125")
+        for kw in ('{"bills"', "多张单", "绝不搬给前一笔", "6号电池", "商品17", "绝不从下方示例里照抄供应商名"):
             self.assertIn(kw, llm.SYSTEM_PROMPT)
         # 旧版「只处理第一笔」的规则必须已移除
         self.assertNotIn("只处理语序上的第一笔", llm.SYSTEM_PROMPT)

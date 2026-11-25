@@ -84,22 +84,23 @@ def erp_login(login_name, password):
     return u, ""
 
 
+_SVC_TENANT = {"_v": None}
+_SVC_TENANT_LOCK = threading.Lock()
+
+
 def _service_tenant_id():
     """服务账号的 tenantId（进程内缓存）：登录校验的租户绑定基准。None = 不校验。"""
-    global _SVC_TENANT
-    if _SVC_TENANT["_v"] is not None:
+    with _SVC_TENANT_LOCK:
+        if _SVC_TENANT["_v"] is not None:
+            return _SVC_TENANT["_v"]
+        try:
+            from . import erp as erpmod
+            cl = erpmod.get_client()
+            info = cl._req("/user/getUserSession")
+            _SVC_TENANT["_v"] = ((info or {}).get("data", {}).get("user") or {}).get("tenantId")
+        except Exception:
+            _SVC_TENANT["_v"] = None
         return _SVC_TENANT["_v"]
-    try:
-        from . import erp as erpmod
-        cl = erpmod.get_client()
-        info = cl._req("/user/getUserSession")
-        _SVC_TENANT["_v"] = ((info or {}).get("data", {}).get("user") or {}).get("tenantId")
-    except Exception:
-        _SVC_TENANT["_v"] = None
-    return _SVC_TENANT["_v"]
-
-
-_SVC_TENANT = {"_v": None}
 
 
 # --------------------------------------------------------------------------
@@ -112,6 +113,7 @@ def admins():
 
 
 _ROLE_MAP_TS = [0.0, None]   # [上次拉取时间, {loginName: roleName}]（进程内缓存）
+_ROLE_MAP_LOCK = threading.Lock()
 
 
 def role_map(max_age=60):
@@ -121,19 +123,20 @@ def role_map(max_age=60):
     ismanager=1（admin 与 test1 无差别），该字段没有区分度——用它判定导致
     test1 拿到管理员会话（失败案例 C11）。roleName 才是 ERP 侧的真实角色。
     """
-    now = time.time()
-    if _ROLE_MAP_TS[1] is not None and now - _ROLE_MAP_TS[0] < max_age:
-        return _ROLE_MAP_TS[1]
-    try:
-        from . import erp as erpmod
-        rows = erpmod.get_client().list("/user/list", page_size=500)
-        m = {str(r.get("loginName") or ""): str(r.get("roleName") or "")
-             for r in rows if r.get("loginName")}
-        if m:
-            _ROLE_MAP_TS[0], _ROLE_MAP_TS[1] = now, m
-        return _ROLE_MAP_TS[1] or {}
-    except Exception:
-        return _ROLE_MAP_TS[1] or {}   # ERP 抖动时用旧缓存；从未拿到过则空
+    with _ROLE_MAP_LOCK:
+        now = time.time()
+        if _ROLE_MAP_TS[1] is not None and now - _ROLE_MAP_TS[0] < max_age:
+            return _ROLE_MAP_TS[1]
+        try:
+            from . import erp as erpmod
+            rows = erpmod.get_client().list("/user/list", page_size=500)
+            m = {str(r.get("loginName") or ""): str(r.get("roleName") or "")
+                 for r in rows if r.get("loginName")}
+            if m:
+                _ROLE_MAP_TS[0], _ROLE_MAP_TS[1] = now, m
+            return _ROLE_MAP_TS[1] or {}
+        except Exception:
+            return _ROLE_MAP_TS[1] or {}   # ERP 抖动时用旧缓存；从未拿到过则空
 
 
 def decide_role(login_name, role_name=None):
@@ -153,7 +156,8 @@ def decide_role(login_name, role_name=None):
 
 
 def invalidate_role_map():
-    _ROLE_MAP_TS[0], _ROLE_MAP_TS[1] = 0.0, None
+    with _ROLE_MAP_LOCK:
+        _ROLE_MAP_TS[0], _ROLE_MAP_TS[1] = 0.0, None
 
 
 # --------------------------------------------------------------------------
@@ -352,6 +356,11 @@ def _norm_prof(key, profile, old=None):
             prof[opt] = old[opt]
         elif profile.get(opt):
             prof[opt] = profile[opt]
+    # vision：视觉能力位（与共享档案同口径）
+    if "vision" in profile:
+        prof["vision"] = bool(profile["vision"])
+    elif "vision" in old:
+        prof["vision"] = old["vision"]
     # reasoning_effort / extra_body 在「我的模型」表单里可编辑：本次提交携带该键
     # 即以本次为准（空值=清除），未携带（旧客户端）才从旧档案继承
     if "reasoning_effort" in profile:

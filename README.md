@@ -154,7 +154,7 @@ OpenAI function-calling 协议，任意兼容端点行为一致）：
 │   │   ├── gate.py          #   一次性确认令牌（HMAC 无状态 + nonce 黑名单）
 │   │   ├── auth.py          #   ERP 账号联动登录 + 两级权限（管理员/成员）
 │   │   ├── agent.py         #   手写 function-calling loop（步数 + token 双预算 + 数字接地）
-│   │   ├── ask.py           #   三层问答路由：规则直答 / agent loop / 模板兜底
+│   │   ├── ask.py           #   统一 Agent 入口：工具选择 / 数字接地 / 模板兜底
 │   │   ├── insight.py       #   经营洞察、主动预警、每日日报
 │   │   ├── procurement.py   #   智能采购建议：确定性补货算法 + 采购草稿（按供应商分组）
 │   │   ├── diagnosis.py     #   AI 经营诊断：多步调查 agent + 调查链接地
@@ -473,7 +473,8 @@ python3 eval/run_unified.py            # 当前统一 Agent 冒烟：查询/起�
   v3 复跑（本地网关在线波动）为 96.7%，比 v2 少 1 条对抗用例 a03：同一模型同一提示词存在 ±1 条的网络侧波动，
   这本身就是"为什么最终交付按 95%+ 口径、并按失败用例做分析"的依据。固定失败用例 `a12`
   （"客户1那里拿点衣服"，业务类型+数量双模糊）进 failure analysis。
-  token 效率的另一个维度：高频统计问句（"今天卖了多少"等）被规则直答层拦截，**0 token** 秒回；
+  token 效率的另一个维度：确定性统计工具（"今天卖了多少"等）`today_stats` 仍可被模型一步直调；
+  2026-11-20 的统一改造后，规则预路由退出决策位（ADR-2 修订），简单问句的代价是一次决策调用。
   详见 `docs/失败案例与迭代证据-agent升级.md`（含"网关固定注入 8.5K/请求触发预算熔断"的 C3 案例）。
 - 人工基线实验（2 名无 ERP 经验组员 × 4 任务 × 2 工具，共 16 条正式记录）
   已入库：`eval/baseline_timing_slim.csv`。统计口径：空白错误/中断按 0 计；
@@ -481,6 +482,8 @@ python3 eval/run_unified.py            # 当前统一 Agent 冒烟：查询/起�
   - 场景 A（档案齐全）：ERP 均值 88.00s / Talk2Stock 48.45s，快 45.0%；
   - 场景 B（缺档案）：ERP 均值 86.48s / Talk2Stock 50.29s，快 41.8%；
   - ERP 侧共 5 次中断（建档/来回），Talk2Stock 0 次；原始备注与操作错误均在 CSV。
+- **完整链路口径（2026-11-24 稳定化前，prompt v7）**：71 条完整链路（抽取 + 校验 agent 静默写回），OpenRouter `deepseek/deepseek-v4.1-flash-1017`：65/71 = 91.5% 整单全对，幻觉 0，均值 11.19s / p95 19.07s（`run_20261124-030929-fullchain-v7-20261124.md`）。
+- **完整链路口径（2026-11-25 稳定化后，prompt v8 / ADR-16）**：引入「事实与建议分离 + 终结型工具 + 确定性快路径 + prompt v8」后复跑同 71 条冻结语料与种子库：**71/71 = 100.0%** 整单全对（9 项字段全部 100%）、**幻觉 0**、**报错 0**，均值延迟降至 **4.92s（-56%）** / p95 **16.19s**（`run_20261125-143514-v8-stabilized-20261125.md`）；校验 Agent 专项 `billcheck` **4/4 = 100.0%**（`billcheck_20261125-142924-v2-20261125-fix.md`）；统一 Agent 冒烟 **5/5**（起草 33.71s → **10.24s**，提速 70%，`unified_agent_smoke_20261125-142617.json`）。
 - 历次结果在 `eval/results/`（JSON + Markdown）。
 
 ### 问一问评测（34 条冻结问句）
@@ -490,15 +493,18 @@ python3 eval/run_ask.py                 # 全量（含 agent 多步取证，耗�
 python3 eval/run_ask.py --tag smoke     # 冒烟
 ```
 
-语料 `eval/ask_cases.jsonl`（`ask-v1-20261109` 冻结，34 条）分四类：`rule`（规则直答）、
+语料 `eval/ask_cases.jsonl`（`ask-v2-20261124`，34 条）分四类场景：`rule`（原本可规则直答的简单统计）、
 `agent`（需多工具取证）、`compound`（复合问题）、`boundary`（越界/拒答）。
-打分口径：答案是否正确 + 数字是否全部来自工具观察（接地）+ 数字集合是否齐全。
-每次改动提示词/工具都留档在 `eval/results/ask_*.md`，这是 v1→v5 的完整证据链：
+打分口径（v2）：答案正确 + 数字全部来自工具观察（接地）+ 数字集合齐全；
+**路由类型不计分**（统一 Agent 后不再有 rule/agent 之分），0 允许自然语言表达（「没有采购」「不欠钱」）。
+每次改动提示词/工具都留档在 `eval/results/ask_*.md`：
 
-| 版本 | 提示词 | 总通过率 | rule / agent / compound / boundary | agent 均值延迟 | agent token/问 |
-|---|---|---|---|---|---|
-| v1 | ask-v1 | 76.5% | 100% / 62% / 67% / 83% | 130.0s | 10774 |
-| v5（当前） | ask-v7-20261109 | **94.1%** | 100% / 94% / 67% / 100% | 63.2s | 7685 |
+| 版本 | 口径 | 语料 | 总通过率 | 说明 |
+|---|---|---|---|---|
+| v1 | 三层（规则直答在位） | 34 条 | 76.5% | rule 100% / agent 62% / compound 67% / boundary 83% |
+| v5 | 三层（规则直答在位） | 34 条 | **94.1%** | rule 100% / agent 94% / compound 67% / boundary 100% |
+| v8b | 三层 | 40 条 | **95.0%** | 增加 draft 类，draft 100% |
+| v2 口径（2026-11-25 稳定化后） | 统一 Agent，路由不计分 | 34 条 | **97.1%**（33/34） | `agent` 100% / `compound` **100%（3/3）** / `boundary` 100% / `rule` 88.9%（仅 r5 漏说总商品数 12）；均值 5.39s / p95 9.22s（`ask_20261125-143817-v2-20261125.md`） |
 
 v1→v5 的有效改动（全部由失败用例驱动）：规则路由加**实体护栏**（问句含主数据名时不许
 `today_stats` 截胡，交 agent 抽参）、步数预算 6→4（专用工具 1~2 步即答，多余步数只烧钱）、
@@ -513,11 +519,8 @@ v1→v5 的有效改动（全部由失败用例驱动）：规则路由加**实�
 
 ### 已知边界与未解问题
 
-- **单据列表规模边界（open）**：`/depotHead/list` 带 `search` 时翻页不可靠（`currentPage`
-  翻页为空、`pageNo` 重复第一页），单类单据超约 200 张时只覆盖最新一页 → 欠款合计会漏老账
-  （260 张真实未付单实测漏 23%）。主数据侧已修；单据侧可行方向与触发条件记录在
-  `docs/failure-cases.md`（P4）。
-- 复合问句（一句话里问两件事）通过率 67%，是当前最弱的一类，失败样本见 `eval/results/ask_*-v5.md`。
+- **单据明细 REST 翻页边界**：欠款合计与归因已通过只读 SQL 直查（`_debt_sql`，ADR-13）彻底解决（1200 单压测 15,600 = 15,600，漏报 0）；但上游 jshERP 的 `/depotHead/list` 带 `search` 时翻页仍不可靠，非聚合明细清单在单类超约 200 张时仅覆盖最新一页（主数据侧已通过自适应翻页修复，细节见 `docs/failure-cases.md` P4）。
+- **输入与部署边界**：扫描版 PDF 需走图片路径（无本地 OCR）、旧版二进制 `.doc/.xls` 不支持；生产上线还需 HTTPS（浏览器 Web Speech 语音输入依赖安全上下文）与多并发压测。
 
 ---
 
@@ -528,25 +531,27 @@ v1→v5 的有效改动（全部由失败用例驱动）：规则路由加**实�
 - ~~审计日志~~：`app/data/audit.jsonl`（原话、模型、提示词版本+hash、与签发草稿的 diff、结果、被拒记录）。
 - ~~回归沉淀~~：用户改过的字段自动写入 `app/data/regression.jsonl`。
 - ~~评测资产~~：60 条冻结语料 + `eval/run.py`（v1→v2 提示词迭代证据见 `eval/results/`）；token 维度（每单均值）。
-- ~~只读问答智能体~~：三层架构（规则直答 0 token / 手写 agent loop 多步取证 / 数字接地兜底）+ SSE 流式过程可视化；失败案例与迭代证据见 `docs/失败案例与迭代证据-agent升级.md`。
+- ~~只读问答智能体~~：统一 Agent 循环（模型选择确定性工具 / 多步取证 / 数字接地兜底）+ SSE 流式过程可视化；规则预路由已于 2026-11-20 退出决策位（ADR-2 修订）。失败案例与迭代证据见 `docs/失败案例与迭代证据-agent升级.md`。
 - ~~主动澄清~~：缺关键信息 agent 追问（≤2 轮，可跳过），复用多轮修正链路。
 - ~~轻检索（RAG-lite）~~：BM25 双索引（操作文档 + 历史单据）注册为 agent 工具。
 - ~~经营洞察 / 主动预警 / 每日日报~~：规则事实 + LLM 组织 + 逐条数字接地。
 - ~~token 用量台账~~：usage.jsonl 精确计量 + 设置页成本条 + /api/usage。
 - ~~主数据候选匹配~~：匹配失败时给 top3 相似候选，确认卡上点选后自动重新预览。
 - ~~单位换算与含税口径~~：商品建档带 `unitId`，`unit` 传用户单位，后端 `DepotItemService` 按单位组 ratio 自动折算 `basicNumber`；行级 `tax_rate` 落 `taxRate / taxMoney / taxLastMoney`，含税/未税口径跟随 ERP 的 `materialPriceTaxFlag`。
-- ~~CI / 离线回归~~：Python 编译检查、`unittest` 当前 183 项、前端内联 JS `node --check`；统一 Agent 冒烟 `eval/run_unified.py` 5/5。
+- ~~CI / 离线回归~~：Python 编译检查、`unittest` 当前 25 模块 **236 项全绿**、前端内联 JS `node --check`；统一 Agent 冒烟 `eval/run_unified.py` **5/5**，完整链路录单 **71/71 = 100.0%**，校验 `billcheck` **4/4 = 100%**，问一问 **33/34 = 97.1%**（2026-11-25 实测）。
+- ~~业务闭环补齐（2026-11-25）~~：采购建议扣减在途订单（`procurement._SQL_PENDING`）；近 30 分钟相似单据防重提示（`core/dedupe.py`）；会话令牌可吊销（登出/管理员踢人，`session_epoch.json`）；批量失败单重试（自动换新令牌）；已写入单据一键生成反向草稿（`core/reverse.py`，原单不动）；看板单据总数改 DB 精确计数；ADR-16 事实与建议分离（草稿原话保真 + 确认卡一键采纳接地建议）、终结型工具立即退出与确定性预检快路径。
 - ~~公网部署~~：云服务器实例 <http://111.91.30.23:8090/>，systemd 守护 + 鉴权开启，见[生产部署与运维](#生产部署与运维)。
 
-- ~~Supervisor 统一智能助手~~：问一问起草单据（写意图路由到草稿，闸门不变）+ 录单自主校验 agent + 操作员习惯记忆 + 导入修复 agent + 老板日报 agent（ADR-10/11/12）；评测资产 ask_cases_v2 / billcheck_cases / repair_cases / daily_cases + 各自跑分器。
+- ~~Supervisor 统一智能助手~~：问一问起草单据（写意图路由到草稿，闸门不变）+ 录单自主校验 agent + 操作员习惯记忆 + 导入修复 agent + 老板日报 agent（ADR-10/11/12/16）；评测资产 cases（71 条）/ ask_cases（34 条）/ billcheck_cases（4 条）/ repair_cases / daily_cases + 各自跑分器。
 - ~~P4 欠款规模漏报闭合~~：欠款聚合 SQL 直查（ADR-13，stress_scale P4 探针漏报 0；三路尝试完整证据链）。
 - ~~语音输入~~：Web Speech API + 安全上下文三级降级 + HTTPS 部署文档。
-- ~~问答评测体系~~：34 条冻结问句 + `run_ask.py`，通过率 76.5% → 94.1%；规模基准 `stress_scale.py`。
+- ~~问答评测体系~~：34 条冻结问句 + `run_ask.py`，通过率 76.5% → 94.1%（三层口径）→ **97.1%**（2026-11-25 统一 Agent 全量，复合问句 100%）；规模基准 `stress_scale.py`。
+- ~~人工基线实验~~：`eval/baseline_timing_slim.csv` 16 条正式计时记录已入库（场景 A -45.0%、场景 B -41.8%、中断 5→0，n=2 描述性试点）。
 
 下一步（按对答辩的价值排序）：
-1. **最终材料预演**：按 `docs/final/Presentation_Outline_*.md` 的 10 分钟时间轴走两遍，确认 live demo 与回退截图都可用。
-2. **基线实验落地**：`docs/基线对比实验手册.md` 的两场景计时（`eval/baseline_timing_slim.csv` 仍是空模板，需人工录两遍同一批单）。
-3. 将统一 Agent 的冻结评测扩到完整语料，并补扫描件 OCR 与旧版 Office 格式。
+1. **最终材料预演**：按 `docs/final/Presentation_Outline_*.md` 的 10 分钟时间轴走两遍，并在报告 6.1 节补填小组成员真实姓名与学号、按课程命名要求重命名为 `L0X_Group10_final.pdf`。
+2. **公网同步与 HTTPS**：将本次稳定化代码推送并同步至公网部署节点，后续按 `docs/语音输入HTTPS部署.md` 升级 HTTPS。
+3. 将多单/多附件冒烟扩展为大规模冻结回归集，并补扫描件 OCR 与旧版 Office 格式支持。
 
 ---
 
@@ -554,24 +559,12 @@ v1→v5 的有效改动（全部由失败用例驱动）：规则路由加**实�
 
 完整索引见 [`docs/final/README.md`](docs/final/README.md)。
 
-- 最终报告：[English DOCX](docs/final/Talk2Stock_Final_Report_EN.docx) / [PDF](docs/final/Talk2Stock_Final_Report_EN.pdf) · [中文 DOCX](docs/final/Talk2Stock_Final_Report_ZH.docx) / [PDF](docs/final/Talk2Stock_Final_Report_ZH.pdf)
+- 最终报告（2026-11-25 v3 稳定化更新，英文 22 页 = 正文 15 + 附录 7 / 中文 19 页 = 正文 12 + 附录 7，含 6 图）：[English DOCX](docs/final/Talk2Stock_Final_Report_EN_v3.docx) / [PDF](docs/final/Talk2Stock_Final_Report_EN_v3.pdf) · [中文 DOCX](docs/final/Talk2Stock_Final_Report_ZH_v3.docx) / [PDF](docs/final/Talk2Stock_Final_Report_ZH_v3.pdf)
+- 最终报告（2026-11-24 课程模板版，英文 12 页 / 中文 9 页）：[English DOCX](docs/final/Talk2Stock_Final_Report_EN_20261124.docx) / [PDF](docs/final/Talk2Stock_Final_Report_EN_20261124.pdf) · [中文 DOCX](docs/final/Talk2Stock_Final_Report_ZH_20261124.docx) / [PDF](docs/final/Talk2Stock_Final_Report_ZH_20261124.pdf)
+- 最终报告（2026-11-22 档案版）：[English DOCX](docs/final/Talk2Stock_Final_Report_EN.docx) / [PDF](docs/final/Talk2Stock_Final_Report_EN.pdf) · [中文 DOCX](docs/final/Talk2Stock_Final_Report_ZH.docx) / [PDF](docs/final/Talk2Stock_Final_Report_ZH.pdf)
 - 10 分钟演示：[English PPTX](docs/final/Talk2Stock_Presentation_EN.pptx) / [PDF](docs/final/Talk2Stock_Presentation_EN.pdf) · [中文 PPTX](docs/final/Talk2Stock_Presentation_ZH.pptx) / [PDF](docs/final/Talk2Stock_Presentation_ZH.pdf)
 - 逐页大纲：[EN](docs/final/Presentation_Outline_EN.md) · [ZH](docs/final/Presentation_Outline_ZH.md)
 - 共用图表与界面素材：`docs/final/assets/`
-=======
-- ~~CI~~：GitHub Actions（`py_compile` + unittest **112 项** + 前端内联 JS `node --check`）。
-- ~~公网部署~~：云服务器实例 <http://111.91.30.23:8090/>，systemd 守护 + 鉴权开启，见[生产部署与运维](#生产部署与运维)。
-- ~~登录与权限~~：ERP 账号联动登录（密码不落盘）+ 管理员/成员两级权限 + 私有模型档案 + 防爆破。
-- ~~推理强度/厂商参数~~：档案级 `reasoning_effort` / `extra_body` / `extra_headers`，agent 决策步默认 low。
-- ~~列表全量拉取~~：主数据自适应翻页（修 500 条截断）；单据侧仍有规模边界（见[已知边界](#已知边界与未解问题)）。
-- ~~问答评测体系~~：34 条冻结问句 + `run_ask.py`，通过率 76.5% → 94.1%；规模基准 `stress_scale.py`。
-
-下一步（按对答辩的价值排序）：
-1. **基线实验落地**：`docs/基线对比实验手册.md` 的两场景计时（`eval/baseline_timing_slim.csv` 仍是空模板，需人工录两遍同一批单）。
-2. **单据侧规模边界**：按 `docs/failure-cases.md` P4 的时间桶方案收口，让欠款合计在 1000+ 单据下也可信。
-3. **复合问句**：67% 通过率是问答侧最后一块短板，先把「一句话两件事」拆解做完。
-4. 语音输入（浏览器转写，计划书里是可选项）。
->>>>>>> origin/main
 
 ---
 

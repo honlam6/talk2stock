@@ -21,8 +21,9 @@ from . import dbread as dbmod
 from .erp import BILL_TYPES, _norm_text
 
 WINDOW_MINUTES = 30
-_CACHE_TTL = 45          # 同一业务类型 45 秒内复用查询结果（出卡瞬间多次 resolve）
-_cache = {"at": 0.0, "key": None, "rows": None}
+_CACHE_TTL = 45          # 同一业务类型+往来单位 45 秒内复用查询结果（出卡瞬间多次 resolve）
+_CACHE_MAX = 32
+_cache = {}              # key -> (at, rows)
 _lock = threading.Lock()
 
 _SQL = """
@@ -65,13 +66,15 @@ def _recent_rows(btype, sub_type, window, organ_id):
     key = (btype, sub_type, window, organ_id)
     now = time.time()
     with _lock:
-        if _cache["rows"] is not None and _cache["key"] == key \
-                and now - _cache["at"] < _CACHE_TTL:
-            return _cache["rows"]
+        hit = _cache.get(key)
+        if hit is not None and now - hit[0] < _CACHE_TTL:
+            return hit[1]
     rows = _q(_SQL % (btype.replace("'", "''"), sub_type.replace("'", "''"),
                       int(organ_id), int(window)))
     with _lock:
-        _cache.update({"at": now, "key": key, "rows": rows})
+        if len(_cache) >= _CACHE_MAX:
+            _cache.clear()
+        _cache[key] = (now, rows)
     return rows
 
 
@@ -142,4 +145,4 @@ def check(draft, organ_id=None, window_minutes=WINDOW_MINUTES):
 def invalidate():
     """写入成功后清缓存，避免刚提交的单据在下一轮出卡时被当成历史重复。"""
     with _lock:
-        _cache.update({"at": 0.0, "key": None, "rows": None})
+        _cache.clear()

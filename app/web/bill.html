@@ -31,7 +31,7 @@
           </div>
 
           <div class="say-row">
-            <textarea id="text" rows="3"
+            <textarea id="text" rows="4"
               placeholder="例如：从美宜佳买3瓶可乐单价3块5；卖给张记便利店2箱方便面单价45&#10;多笔业务用「；」分隔，一次出多张单（⌘/Ctrl+Enter 快速解析）"></textarea>
             <button class="mic-btn" id="micBtn" title="语音输入（再点一次结束）" style="display:none">🎤</button>
             <button class="cam-btn" id="camBtn" title="拍照 / 截图识别单据（可配一句补充说明）">📷</button>
@@ -383,23 +383,29 @@ function renderConv() {
 
 // ---------- 校验轨迹（P-B）：录单校验 agent 的取证步骤可见可展开 ----------
 const CHECK_LABEL = { stock_check: '库存核对', last_price: '历史成交价',
-  habit_defaults: '习惯默认值', party_history: '往来单位近况' };
+  habit_defaults: '习惯默认值', party_history: '往来单位近况', submit_verdict: '校验结论',
+  depot: '仓库', price: '单价' };
 
 function checkTraceShell(t, i) {
   const ck = t.check || {};
   const steps = (ck.steps || []).filter(s => s.tool);
-  const nApplied = (ck.patches_applied || []).length;
+  const suggs = ck.patches_suggested || [];
+  const appliedList = ck.patches_applied || [];
+  const nSugg = suggs.length;
+  const nApplied = appliedList.length;
   const nRejected = (ck.patches_rejected || []).length;
-  if (!steps.length && !nApplied && !t.checkNote && !(ck.risks || '').trim()) return '';
+  if (!steps.length && !nApplied && !nSugg && !t.checkNote && !(ck.risks || '').trim()) return '';
   const bits = [];
   if (steps.length) bits.push(steps.length + ' 步取证');
-  if (nApplied) bits.push('自动补全 ' + nApplied + ' 项');
+  if (nSugg) bits.push('参考建议 ' + nSugg + ' 项');
+  if (nApplied) bits.push('已采纳 ' + nApplied + ' 项');
   if (nRejected) bits.push(nRejected + ' 项依据不足未采纳');
   const head = bits.length ? bits.join(' · ') : '校验完成';
   const note = t.checkNote ? `<div class="alert alert-info mt-1">❓ ${esc(t.checkNote)}</div>` : '';
   const risk = (ck.risks || '').trim() ? `<div class="alert alert-warn mt-1">⚠ ${esc(ck.risks)}</div>` : '';
-  const applied = nApplied ? `<div class="hint mt-1">🛠 ${(ck.patches_applied || []).map(p => esc((CHECK_LABEL[p.field] || p.field) + '←' + p.value + (p.reason ? '（' + p.reason + '）' : ''))).join('；')}</div>` : '';
-  return `<details class="check-trace" data-trace="${i}"><summary>🧠 校验轨迹 · ${esc(head)}</summary>${note}${risk}${applied}<div class="al-steps"></div></details>`;
+  const suggHtml = nSugg ? `<div class="hint mt-1">💡 校验建议（未改原草稿，确认卡可一键采纳）：${suggs.map(p => esc((CHECK_LABEL[p.field] || p.field) + '建议 ' + p.value + (p.reason ? '（' + p.reason + '）' : ''))).join('；')}</div>` : '';
+  const applied = nApplied ? `<div class="hint mt-1">🛠 ${appliedList.map(p => esc((CHECK_LABEL[p.field] || p.field) + '←' + p.value + (p.reason ? '（' + p.reason + '）' : ''))).join('；')}</div>` : '';
+  return `<details class="check-trace" data-trace="${i}"><summary>🧠 校验轨迹 · ${esc(head)}</summary>${note}${risk}${suggHtml}${applied}<div class="al-steps"></div></details>`;
 }
 
 function hydrateTrace() {
@@ -541,6 +547,7 @@ function openPreview(turn) {
   showPreview(turn.preview, turn.draft, (res, finalDraft) => handleCommitted(turn, res, finalDraft), turn.attach, {
     source: 'ai',
     rawText: turn.rawText,
+    check: turn.check || null,
     onCancel: d => {
       turn.state = 'cancelled';
       turn.draft = d;
@@ -573,6 +580,7 @@ function openMultiPreview(turn) {
   showMultiPreview(turn.bills, {
     source: 'ai',
     rawText: turn.rawText || '',
+    check: turn.check || null,
     onClose: bills => { turn.bills = bills; renderConv(); loadHistory(); },
   });
 }
@@ -606,8 +614,15 @@ $('#conv').onclick = async e => {
   }
 };
 
-$('#convClear').onclick = () => {
-  if (turns.length && !confirm('清空本次会话记录？（不影响已写入 ERP 的单据）')) return;
+$('#convClear').onclick = async () => {
+  if (turns.length) {
+    const ok = await askInline({
+      title: '清空本次会话记录？',
+      hint: '不影响已写入 ERP 的单据。',
+      okText: '清空',
+    }).then(v => v !== null).catch(() => false);
+    if (!ok) return;
+  }
   turns = [];
   exitCorrect();
   exitClarify(true);   // 会话清空 = 重新开始：澄清/修正态一并重置，否则新输入仍带旧草稿
@@ -1158,18 +1173,23 @@ $('#impRefile').onclick = () => {
 
 function renderMap() {
   const m = IMP.mapping || {};
-  const s = IMP.sheets.find(x => x.name === IMP.sheet) || { rows: [] };
-  const ncol = s.total_cols || 0;
+  const s = IMP.sheets.find(x => x.name === IMP.sheet) || { preview: [] };
+  const previewRows = s.preview || s.rows || [];
+  const ncol = s.total_cols || (previewRows[0] ? previewRows[0].length : 0);
   const colOpts = (sel, any) => {
     let o = any ? `<option value="">（不使用）</option>` : '';
     for (let c = 0; c < ncol; c++) {
       const letter = colLetter(c);
-      const head = (s.rows[m.header_row ? m.header_row - 1 : 0] || [])[c] || '';
+      const head = (previewRows[m.header_row ? Math.min(m.header_row - 1, Math.max(0, previewRows.length - 1)) : 0] || [])[c] || '';
       o += `<option value="${letter}"${sel === letter ? ' selected' : ''}>${letter}列 ${esc(String(head).slice(0, 12))}</option>`;
     }
     return o;
   };
-  const cur = m.cols || {};   // {字段: 列字母}（前端展示形态；后端收列字母键）
+  // 后端 m.cols 是 {列字母: 字段}，翻成 {字段: 列字母} 供每行下拉回显
+  const cur = {};
+  Object.entries(m.cols || {}).forEach(([col, field]) => {
+    if (field && field !== 'ignore' && !cur[field]) cur[field] = String(col).toUpperCase();
+  });
   $('#impMapTable').innerHTML = `
     <tr><th>表头行</th><td><input id="im_hr" type="number" min="1" value="${m.header_row || 1}" style="width:80px"></td>
       <th>业务类型</th><td><select id="im_biz">${Object.entries(BIZ).map(([k, v]) => `<option value="${k}"${(m.file_biz || 'purchase_in') === k ? ' selected' : ''}>${v.label}</option>`).join('')}</select></td></tr>

@@ -1,0 +1,200 @@
+{
+ "summary": {
+  "corpus_version": "v2-20261025",
+  "model": "deepseek/deepseek-v4.1-flash-1017",
+  "prompt": "v7-20261124/e6c5b2e1",
+  "n": 3,
+  "whole_bill_acc": 1.0,
+  "field_acc": {
+   "biz": [
+    3,
+    3
+   ],
+   "party": [
+    3,
+    3
+   ],
+   "item_name": [
+    3,
+    3
+   ],
+   "item_qty": [
+    3,
+    3
+   ],
+   "item_unit": [
+    3,
+    3
+   ],
+   "item_price": [
+    3,
+    3
+   ],
+   "depot": [
+    3,
+    3
+   ],
+   "date": [
+    3,
+    3
+   ],
+   "pay_amount": [
+    3,
+    3
+   ]
+  },
+  "hallucination_total": 0,
+  "hallucination_cases": 0,
+  "errors": [],
+  "latency_avg_s": 10.03,
+  "latency_p95_s": 10.36,
+  "tokens_prompt_avg": 2067,
+  "tokens_completion_avg": 71,
+  "tokens_total_avg": 2137,
+  "conf_low_on_adversarial": "0/0",
+  "conf_low_on_spec": "0/0"
+ },
+ "results": [
+  {
+   "id": "n01",
+   "type": "normal",
+   "latency_s": 10.36,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "可乐",
+      "qty": 30,
+      "unit": "瓶",
+      "price": 3.5
+     },
+     "draft": {
+      "name": "可乐",
+      "qty": 30.0,
+      "unit": "瓶",
+      "price": 3.5,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 2054,
+    "completion_tokens": 74,
+    "estimated": false
+   }
+  },
+  {
+   "id": "n02",
+   "type": "normal",
+   "latency_s": 10.12,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "纸箱",
+      "qty": 200,
+      "unit": "个",
+      "price": 5
+     },
+     "draft": {
+      "name": "纸箱",
+      "qty": 200.0,
+      "unit": "个",
+      "price": 5.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 2080,
+    "completion_tokens": 68,
+    "estimated": false
+   }
+  },
+  {
+   "id": "n03",
+   "type": "normal",
+   "latency_s": 9.61,
+   "confidence": "high",
+   "note": "",
+   "fields": {
+    "biz": true,
+    "party": true,
+    "item_name": true,
+    "item_qty": true,
+    "item_unit": true,
+    "item_price": true,
+    "depot": true,
+    "date": true,
+    "pay_amount": true
+   },
+   "hallucinations": [],
+   "fuzzy_party": false,
+   "item_detail": [
+    {
+     "gold": {
+      "name": "矿泉水",
+      "qty": 100,
+      "unit": "瓶",
+      "price": 2
+     },
+     "draft": {
+      "name": "矿泉水",
+      "qty": 100.0,
+      "unit": "瓶",
+      "price": 2.0,
+      "tax_rate": 0
+     },
+     "name": true,
+     "qty": true,
+     "unit": true,
+     "price": true
+    }
+   ],
+   "all_correct": true,
+   "tokens": {
+    "prompt_tokens": 2066,
+    "completion_tokens": 70,
+    "estimated": false
+   }
+  }
+ ]
+}

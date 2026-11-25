@@ -100,6 +100,7 @@ def _tools(erp):
                       '"evidence":"..（引用观察数字）","evidence_steps":[步骤号],'
                       '"cause":"..","action":"..","severity":"warn|info|good"}]}'),
         "run": _submit,
+        "terminal": True,
     }
     return tools, verdict_box
 
@@ -273,7 +274,7 @@ def diagnose(erp, operator="", on_event=None):
     if verdict is not None and issues:
         overview = str(verdict.get("overview") or "").strip()[:400]
         overview_ok = bool(overview) and agentmod.numeric_grounded(overview, observations)
-        if not overview:
+        if not overview_ok:
             overview = "共发现 %d 个需要关注的问题。" % len(issues)
 
     if issues:

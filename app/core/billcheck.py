@@ -22,7 +22,7 @@ from . import ask as askmod
 from . import config as cfgmod
 from . import habits as habitsmod
 
-BILL_CHECK_PROMPT_VERSION = "bcheck-v1-20261116"
+BILL_CHECK_PROMPT_VERSION = "bcheck-v2-20261125"
 
 BILL_CHECK_PROMPT = """你是录单校验 agent。本次任务：校验用户话里抽出的单据草稿（完整草稿 JSON 见文末「待校验目标」）。
 
@@ -39,18 +39,19 @@ BILL_CHECK_PROMPT = """你是录单校验 agent。本次任务：校验用户话
 patch 元素：{{"bill_index":0,"item_index":0,"field":"depot|price","value":值,"reason":"依据（引用观察里的数字）","confidence":0.0~1.0}}
 
 # 规则
-1. 最多 {max_steps} 轮，需要什么查什么：缺单价查 last_price 或 habit_defaults；
+1. 最多 {max_steps} 轮，需要什么查什么：缺单价查 last_price（务必传 unit 防止不同单位串价）或 habit_defaults；
    没说仓库查 habit_defaults；卖单查 stock_check 看库存够不够；往来单位不熟查 party_history。
    观察已经足够就立即用 submit_verdict 收尾，不要为查而查。
-2. submit_verdict 的 patches 只补缺失项：depot 只在草稿没写仓库时补，price 只在明细
-   缺价或为 0 时补。草稿里已有的值一个都不许动。
-3. patch 的 value 必须来自工具观察（历史成交价 / 习惯仓库），禁止编造、禁止心算新数字；
-   没有可靠依据就不出 patch——宁缺勿错，空 patches 完全合法。
+2. submit_verdict 的 patches 只给「建议补全」：depot 只在草稿没写仓库时建议，price 只在明细
+   缺价或为 0 时建议。草稿里已有的值一个都不许动。
+3. patch 的 value 必须原样来自工具观察（历史成交价 / 习惯仓库），禁止编造、禁止心算新数字；
+   来自同往来单位+同商品且单位一致的 last_price 或 habit_defaults 明确记录时，confidence 给 0.90~0.95；
+   仅在跨客户估算或单位存疑时压低至 ≤0.75；若单位不一致或查无记录，就不出 patch——宁缺勿错，空 patches 完全合法。
 4. 关键信息缺失（商品 / 数量 / 往来单位）时在 submit_verdict 的 clarify 写一句自然的
    中文追问；多张单缺什么合并成一句，带上「第几张单缺什么」。没有缺失就 null。
 5. risks 用一句话提示观察到的风险（库存不够 / 该单位有大额欠款 / 价格与历史差异大），
    没有就空串。
-6. submit_verdict 必须调用恰好一次，调用后不要再输出其他动作。
+6. submit_verdict 必须调用恰好一次，调用后循环立即结束。
 
 # 待校验目标
 {goal}"""
@@ -70,31 +71,41 @@ def _sql_escape(s):
 
 
 def _tool_last_price(args, erp):
-    """某往来单位某商品最近成交单价。
+    """某往来单位某商品最近成交单价（精确商品优先 + 单位一致性防护）。
 
     实现走 dbread 只读 SQL（jsh_depot_item.unit_price 是真实行价；REST 的
     getDetailList 不吐行价，只吐商品档案价快照 purchaseDecimal，不能用）。"""
     party = str(args.get("party") or "").strip()
     material = str(args.get("material") or "").strip()
     direction = str(args.get("direction") or "").strip() or "out"
+    want_unit = str(args.get("unit") or "").strip()
     if not party or not material:
         return ({"error": "party 与 material 必填", "got": args},
                 "last_price 需要 party 和 material 两个参数。")
     from . import dbread as dbmod
-    from . import config as cfgmod
     erp_user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
     tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
               % erp_user.replace("'", "''"))   # 不加租户锚会跨租户捞价（正确性）
     type_zh = "出库" if direction == "out" else "入库"
     organ_type = "客户" if direction == "out" else "供应商"
+    # 精确商品匹配优先（避免 LIKE '%PPR管%' 或同名多规格串价）
+    mat_cond = ("di.material_id IN (SELECT id FROM jsh_material WHERE delete_flag='0' AND name LIKE '%%%s%%')"
+                % _sql_escape(material))
+    if erp is not None:
+        try:
+            mrow, mkind = erp.find_material(material)
+            if mrow and mrow.get("id") and mkind in ("exact", "fuzzy"):
+                mat_cond = "di.material_id=%d" % int(mrow["id"])
+        except Exception:
+            pass
     sql = ("SELECT dh.oper_time AS time, di.unit_price AS price, di.oper_number AS qty, di.material_unit AS unit "
            "FROM jsh_depot_item di JOIN jsh_depot_head dh ON di.header_id = dh.id "
            "WHERE dh.delete_flag='0' AND di.delete_flag='0' AND dh.type='%s' AND di.unit_price > 0 "
            "AND dh.tenant_id=%s "
            "AND dh.organ_id IN (SELECT id FROM jsh_supplier WHERE delete_flag='0' AND type='%s' AND supplier LIKE '%%%s%%') "
-           "AND di.material_id IN (SELECT id FROM jsh_material WHERE delete_flag='0' AND name LIKE '%%%s%%') "
-           "ORDER BY dh.oper_time DESC LIMIT 6") % (
-        type_zh, tenant, organ_type, _sql_escape(party), _sql_escape(material))
+           "AND %s "
+           "ORDER BY dh.oper_time DESC LIMIT 8") % (
+        type_zh, tenant, organ_type, _sql_escape(party), mat_cond)
     data, note = dbmod.sql_query({"sql": sql})
     rows = data.get("rows") or [] if "error" not in data else []
     records = []
@@ -103,19 +114,38 @@ def _tool_last_price(args, erp):
             records.append({"time": str(r.get("time") or "")[:10],
                             "price": round(float(r.get("price")), 4),
                             "qty": float(r.get("qty") or 0),
-                            "unit": r.get("unit") or ""})
+                            "unit": str(r.get("unit") or "").strip()})
         except (TypeError, ValueError):
             continue
+    # 单位一致性检查：避免「箱」单套用「瓶」的历史价
+    unit_mismatch = False
+    other_unit_records = []
+    if want_unit and records:
+        same = [x for x in records if not x["unit"] or x["unit"] == want_unit]
+        other = [x for x in records if x["unit"] and x["unit"] != want_unit]
+        if same:
+            records = same
+        elif other:
+            unit_mismatch = True
+            other_unit_records = other[:3]
+            records = []
     out = {"found": bool(records), "party": party, "material": material,
-           "direction": direction, "records": records}
+           "direction": direction, "unit": want_unit, "records": records}
+    if unit_mismatch:
+        out["unit_mismatch"] = True
+        out["other_unit_records"] = other_unit_records
+        o0 = other_unit_records[0]
+        return out, ("%s 的 %s 历史成交单位为「%s」（%g元），与本单单位「%s」不一致，不可直接套用单价。"
+                     % (party, material, o0["unit"], o0["price"], want_unit))
     if not records:
         if "error" in data:
             return out, "历史价查询失败（%s），请改用 habit_defaults 或向用户确认。" % str(data["error"])[:60]
         note = "最近单据里没有 %s 的 %s %s记录。" % (party, material, "销售" if direction == "out" else "采购")
         return out, note
     first = records[0]
-    note = "%s 最近一笔 %s %s单价 %g 元（%s）。" % (
-        party, material, "销售" if direction == "out" else "采购", first["price"], first["time"])
+    note = "%s 最近一笔 %s %s单价 %g 元/%s（%s）。" % (
+        party, material, "销售" if direction == "out" else "采购",
+        first["price"], first["unit"] or want_unit or "件", first["time"])
     return out, note
 
 
@@ -193,8 +223,8 @@ def _tools(erp, operator, drafts):
         "stock_check": {"desc": "查某商品库存够不够（卖单出货前必看）",
                         "args_hint": '{"material":"商品名","depot":"仓库名，没说就空字符串"}',
                         "run": bind(_TOOLS["stock_check"])},
-        "last_price": {"desc": "查某往来单位某商品最近成交单价（补缺失价格用）",
-                       "args_hint": '{"party":"往来单位","material":"商品名","direction":"out=卖价/in=进价"}',
+        "last_price": {"desc": "查某往来单位某商品最近成交单价（补缺失价格用，带单位一致性核对）",
+                       "args_hint": '{"party":"往来单位","material":"商品名","direction":"out=卖价/in=进价","unit":"本单单位，可空"}',
                        "run": bind(_TOOLS["last_price"])},
         "habit_defaults": {"desc": "查操作员习惯：常用仓库、历史单价（补默认值用）",
                            "args_hint": '{"operator":"操作员名","party":"往来单位，可空","biz":"业务类型，可空"}',
@@ -204,7 +234,8 @@ def _tools(erp, operator, drafts):
                           "run": bind(_TOOLS["party_history"])},
         "submit_verdict": {"desc": "提交校验结论（结束取证，恰好调用一次）",
                            "args_hint": '{"patches":[{"bill_index":0,"item_index":0,"field":"depot|price","value":..,"reason":"..","confidence":0.0-1.0}],"clarify":null,"risks":""}',
-                           "run": _submit},
+                           "run": _submit,
+                           "terminal": True},
     }, verdict_box
 
 
@@ -246,9 +277,17 @@ PATCH_MIN_CONFIDENCE = 0.85   # 低于阈值不出自动补丁——宁缺勿错
 _PATCH_FIELDS = {"depot", "price"}
 
 
-def apply_patches(drafts, patches):
-    """白名单字段 + 置信度阈值 + 只补缺失——模型只能建议，写回是确定性代码。
+def apply_patches(drafts, patches, observations=None, apply_to_draft=True):
+    """白名单字段 + 置信度阈值 + 观察接地 + 只补缺失——模型只能建议，写回是确定性代码。
+
+    observations: 传入非空/空列表（非 None）时，强制校验补丁值必须来自工具观察（防模型编造价格/仓库）。
+    apply_to_draft: True 时直接写回 drafts（供显式采纳或单测）；False 时只做校验归集为
+                    patches_suggested，绝不静默篡改用户抽取出的草稿（事实与建议分离）。
     返回 (applied, rejected)：rejected 带拒绝原因（trace 展示用）。"""
+    obs_nums, obs_text = None, None
+    if observations is not None:
+        obs_text = json.dumps(observations, ensure_ascii=False)
+        obs_nums = agentmod._numbers_in(obs_text)
     applied, rejected = [], []
     for p in patches or []:
         if not isinstance(p, dict):
@@ -265,6 +304,11 @@ def apply_patches(drafts, patches):
         reason = str(p.get("reason") or "")[:120]
         base = {"bill_index": i, "field": field, "value": p.get("value"),
                 "reason": reason, "confidence": conf}
+        if field == "price":
+            try:
+                base["item_index"] = int(p.get("item_index") or 0)
+            except (TypeError, ValueError):
+                base["item_index"] = -1
         if i < 0 or i >= len(drafts):
             rejected.append({**base, "why": "bill_index 越界"})
             continue
@@ -283,12 +327,13 @@ def apply_patches(drafts, patches):
             if not val:
                 rejected.append({**base, "why": "空值"})
                 continue
-            d["depot"] = val
+            if obs_text is not None and val not in obs_text:
+                rejected.append({**base, "why": "建议仓库未出现在工具观察中（接地拦截）"})
+                continue
+            if apply_to_draft:
+                d["depot"] = val
         else:   # price
-            try:
-                item_i = int(p.get("item_index") or 0)
-            except (TypeError, ValueError):
-                item_i = -1
+            item_i = base.get("item_index", -1)
             items = d.get("items") or []
             if item_i < 0 or item_i >= len(items):
                 rejected.append({**base, "why": "item_index 越界"})
@@ -305,86 +350,205 @@ def apply_patches(drafts, patches):
             if cur not in (None, "", 0, 0.0):
                 rejected.append({**base, "why": "明细已填单价，不许覆盖"})
                 continue
-            items[item_i]["price"] = val
+            if obs_nums is not None and round(val, 2) not in obs_nums:
+                rejected.append({**base, "why": "建议价格未出现在工具观察中（接地拦截）"})
+                continue
+            base["value"] = val
+            if apply_to_draft:
+                items[item_i]["price"] = val
         applied.append(base)
     return applied, rejected
 
 
 # --------------------------------------------------------------------------
-# 编排：parse → check → patches → clarify 决策（server 三入口与评测跑分器共用）
+# 确定性预检：完整草稿直接通过（0 LLM 额外延迟）；缺字段/库存异常/低置信走完整 Agent 循环
 # --------------------------------------------------------------------------
-def run_check(drafts, erp, operator="", on_event=None):
-    """只读校验 loop。返回 {ok, patches, clarify, risks, steps, grounded, tokens}。"""
+def _needs_agent_check(drafts, erp, operator="", meta=None):
+    """返回 (needs_llm, pre_steps, pre_risks, pre_patches)。
+    完整单（要素齐全、非低置信、出库库存充足、无待查价格）直接由确定性取证闭环，
+    省掉 2~3 轮无意义 LLM 调用，同时保留真实库存校验轨迹。"""
+    pre_steps, pre_risks, pre_patches = [], [], []
+    needs_llm = False
+    bills_meta = (meta or {}).get("bills") or []
+    for bi, d in enumerate(drafts):
+        biz = str(d.get("biz") or "")
+        party = str(d.get("party") or "").strip()
+        depot = str(d.get("depot") or "").strip()
+        items = d.get("items") or []
+        bm = bills_meta[bi] if bi < len(bills_meta) and isinstance(bills_meta[bi], dict) else {}
+        if bm.get("confidence") == "low" or bm.get("problems"):
+            needs_llm = True
+        if not items:
+            needs_llm = True
+        if biz in ("purchase_in", "sale_out", "purchase_return", "sale_return") and not party:
+            needs_llm = True
+        for it in items:
+            try:
+                q = float(it.get("qty") or 0)
+            except (TypeError, ValueError):
+                q = 0.0
+            try:
+                pr = float(it.get("price") or 0)
+            except (TypeError, ValueError):
+                pr = 0.0
+            if q <= 0 or (pr <= 0 and biz in ("purchase_in", "sale_out", "purchase_return", "sale_return")):
+                needs_llm = True
+        # 未写仓库时，先用 1ms 本地习惯记忆查一下（无记录则无需跑 LLM 空转）
+        if not depot and not needs_llm:
+            try:
+                hs = habitsmod.summary(operator=operator, party=party, biz=biz)
+                if hs.get("depot"):
+                    pre_steps.append({
+                        "step": len(pre_steps) + 1, "tool": "habit_defaults",
+                        "args": {"operator": operator, "party": party, "biz": biz},
+                        "ok": True, "thought": "检查操作员常用仓库习惯",
+                        "observation": {"depot": hs["depot"], "records": hs.get("records", 0)},
+                    })
+                    pre_patches.append({
+                        "bill_index": bi, "field": "depot", "value": hs["depot"],
+                        "reason": "操作员常用仓库（%d条历史记录）" % hs.get("records", 0),
+                        "confidence": 0.9,
+                    })
+            except Exception:
+                pass
+        # 出库单：在确定性通道快速核对库存是否足够
+        if biz in ("sale_out", "purchase_return", "other_out") and erp is not None and not needs_llm:
+            for it in items:
+                nm = str(it.get("name") or "").strip()
+                if not nm:
+                    continue
+                try:
+                    sdata, snote = _tool_stock_check({"material": nm, "depot": depot}, erp)
+                    pre_steps.append({
+                        "step": len(pre_steps) + 1, "tool": "stock_check",
+                        "args": {"material": nm, "depot": depot},
+                        "ok": True, "thought": "出库前校验「%s」当前库存" % nm,
+                        "observation": sdata,
+                    })
+                    tot = sdata.get("total")
+                    qty_f = float(it.get("qty") or 0)
+                    if sdata.get("found") is False:
+                        pre_risks.append("「%s」在系统中暂无唯一档案" % nm)
+                    elif tot is not None and float(tot) < qty_f:
+                        pre_risks.append("「%s」库存仅 %g，低于本次出库 %g" % (nm, float(tot), qty_f))
+                except Exception:
+                    pass
+    return needs_llm, pre_steps, "；".join(pre_risks), pre_patches
+
+
+# --------------------------------------------------------------------------
+# 编排：parse → check → grounded suggestions → clarify 决策（三入口与评测共用）
+# --------------------------------------------------------------------------
+def run_check(drafts, erp, operator="", on_event=None, meta=None):
+    """只读校验 loop。返回 {ok, patches, clarify, risks, steps, grounded, tokens, observations}。"""
     prof = cfgmod.agent_profile()
     empty = {"ok": False, "patches": [], "clarify": None, "risks": "",
-             "steps": [], "grounded": None, "tokens": {}}
+             "steps": [], "grounded": None, "tokens": {}, "observations": []}
     if not prof:
         return empty
+    needs_llm, pre_steps, pre_risks, pre_patches = _needs_agent_check(
+        drafts, erp, operator=operator, meta=meta)
+    if not needs_llm:
+        for st in pre_steps:
+            agentmod._emit(on_event, {"type": "step", "step": st})
+        obs = [st["observation"] for st in pre_steps if st.get("observation") is not None]
+        return {
+            "ok": True, "patches": pre_patches, "clarify": None, "risks": pre_risks,
+            "steps": pre_steps, "grounded": True, "tokens": {}, "observations": obs,
+            "meta": {"steps_used": len(pre_steps), "fast_path": True},
+            "prompt_version": BILL_CHECK_PROMPT_VERSION,
+        }
     goal = json.dumps([{"biz": d.get("biz"), "party": d.get("party"), "depot": d.get("depot"),
                         "items": d.get("items")} for d in drafts], ensure_ascii=False)
-    # {n}（草稿数）是本提示词私有的占位符，先落地；四个标准占位符交给循环引擎 format
-    template = BILL_CHECK_PROMPT.replace("{n}", "%d" % len(drafts))
+    template = BILL_CHECK_PROMPT
     try:
         tools, verdict_box = _tools(erp, operator, drafts)
         out = agentmod.run_agent(
-            goal, tools, max_steps=3,
+            goal, tools, max_steps=4,
             context_block="操作员：%s" % (operator or "（未登录）"),
             on_event=on_event, prompt_template=template)
     except Exception as e:
         return dict(empty, error=str(e)[:120])
-    # 结论优先取 submit_verdict 工具的 args 通道（键存在即已收口——空 patches 是
-    # 合法结论「宁缺勿错」）；模型忘了收口时退回解析 final 文本
+    # 只把非 submit_verdict 工具的真实 ERP/习惯观察作为接地池（防自证其词）
+    real_obs = [s["observation"] for s in (out.get("steps") or [])
+                if s.get("tool") and s.get("tool") != "submit_verdict"
+                and s.get("ok") and s.get("observation") is not None]
     verdict = dict(verdict_box) if "patches" in verdict_box else _parse_verdict(out.get("answer"))
     if verdict is None:
         return dict(empty, error="verdict_unparsable", answer_raw=str(out.get("answer"))[:200],
-                    steps=out.get("steps") or [], tokens=out.get("tokens") or {})
+                    steps=out.get("steps") or [], tokens=out.get("tokens") or {},
+                    observations=real_obs)
     return dict(verdict, ok=True, grounded=out.get("grounded"),
                 steps=out.get("steps") or [], tokens=out.get("tokens") or {},
+                observations=real_obs,
                 meta=out.get("meta") or {}, prompt_version=BILL_CHECK_PROMPT_VERSION)
 
 
-def check_and_patch(drafts, erp, operator="", on_event=None):
-    """run_check + 确定性 patch 应用，返回可直接放进响应的 check 摘要。
+def check_and_patch(drafts, erp, operator="", on_event=None, meta=None, auto_apply=False):
+    """run_check + 确定性校验（接地 + 白名单 + 阈值）。
+
+    默认 auto_apply=False（事实与建议分离）：绝不静默篡改用户抽取出的草稿（价格/仓库），
+    所有通过接地校验的高置信补丁存入 patches_suggested，供前端确认卡一键采纳；
     校验失败/未配置模型时降级为 skipped——解析结果照常交付（校验是增益不是闸门）。"""
     check = {"ok": False, "patches": [], "clarify": None, "risks": "", "steps": [],
              "grounded": None, "tokens": {}, "skipped": True,
-             "patches_applied": [], "patches_rejected": [], "prompt_version": None}
+             "patches_applied": [], "patches_suggested": [], "patches_rejected": [],
+             "prompt_version": None}
     if not drafts or not cfgmod.agent_profile():
         return check
     try:
-        chk = run_check(drafts, erp, operator=operator, on_event=on_event)
+        chk = run_check(drafts, erp, operator=operator, on_event=on_event, meta=meta)
     except Exception as e:
         check["error"] = str(e)[:120]
         return check
-    applied, rejected = apply_patches(drafts, chk.get("patches"))
-    chk["patches_applied"] = applied
+    obs = chk.get("observations")
+    valid, rejected = apply_patches(
+        drafts, chk.get("patches"), observations=obs, apply_to_draft=bool(auto_apply))
+    if auto_apply:
+        chk["patches_applied"] = valid
+        chk["patches_suggested"] = []
+    else:
+        chk["patches_applied"] = []
+        chk["patches_suggested"] = valid
     chk["patches_rejected"] = rejected
     return chk
 
 
 def parse_and_check(text, erp, operator="", prev_draft=None, skip_clarify=False, on_event=None):
-    """llm.parse → run_check → apply_patches → 澄清决策。返回：
+    """llm.parse → run_check → 接地建议归集 → 澄清决策。返回：
     {drafts, meta, check, clarify:{question}|None, clarify_all:str|None}
 
-    clarify 只在单张且未跳过时给出（need_clarification 语义与旧版一致）；
-    多单的追问以 clarify_all 返回，由前端以提醒条展示（跨单追问禁用是 multi-entry
-    的设计决策，这里不推翻）。"""
+    不变量：草稿字段忠实还原用户原话，校验 Agent 的历史价/习惯仓通过接地核验后放入
+    check.patches_suggested（前端确认卡可一键采纳），绝不静默覆盖用户草稿。"""
     from . import llm as llmmod
     drafts, meta = llmmod.parse(text, erp, prev_draft=prev_draft)
-    cl_rule = meta.get("clarify") if isinstance(meta.get("clarify"), dict) else None
 
-    check = check_and_patch(drafts, erp, operator=operator, on_event=on_event)
+    check = check_and_patch(drafts, erp, operator=operator, on_event=on_event, meta=meta,
+                            auto_apply=False)
     check["skipped"] = bool(check.get("skipped"))
 
+    # 规则追问优先沿用 meta.clarify，若校验 Agent 查到了历史参考价则自然融入追问文案
+    cl_rule = meta.get("clarify") if isinstance(meta, dict) else None
+    if cl_rule is None and len(drafts) == 1:
+        c = llmmod._clarify_question(drafts[0])
+        if c:
+            cl_rule = {"question": c[0], "missing": c[1]}
     clarify_text = check.get("clarify")
     clarify_source = "agent" if clarify_text else None
     if not clarify_text and cl_rule:
-        clarify_text = cl_rule.get("question") or ""
+        q = cl_rule.get("question") or ""
+        if cl_rule.get("missing") == "price":
+            price_sugg = [p for p in (check.get("patches_suggested") or []) if p.get("field") == "price"]
+            if price_sugg:
+                hints = "、".join("%g元（%s）" % (p["value"], p.get("reason") or "历史参考价")
+                                  for p in price_sugg[:2])
+                q = q + "（系统查到参考价：" + hints + "）"
+        clarify_text = q
         clarify_source = "rule"
     need_clarify = bool(clarify_text) and not skip_clarify and len(drafts) == 1
-    check_out = {k: check.get(k) for k in ("ok", "steps", "patches_applied", "patches_rejected",
-                                           "risks", "grounded", "tokens", "skipped", "prompt_version",
-                                           "error", "answer_raw")}
+    check_out = {k: check.get(k) for k in ("ok", "steps", "patches_applied", "patches_suggested",
+                                           "patches_rejected", "risks", "grounded", "tokens",
+                                           "skipped", "prompt_version", "error", "answer_raw", "meta")}
     check_out["clarify_source"] = clarify_source
     return {
         "drafts": drafts,

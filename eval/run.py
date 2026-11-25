@@ -214,6 +214,8 @@ def main():
     ap.add_argument("--profile", default="", help="临时切换模型档案 key（不改配置文件）")
     ap.add_argument("--tag", default="")
     ap.add_argument("--sleep", type=float, default=0.0)
+    ap.add_argument("--full-chain", action="store_true",
+                    help="走完整产品链路（抽取 + 校验 agent 补价/补仓），与线上 /api/parse 同路径")
     args = ap.parse_args()
 
     cases = [json.loads(l) for l in open(CASES_PATH, encoding="utf-8") if l.strip()]
@@ -248,11 +250,23 @@ def main():
     for i, c in enumerate(cases, 1):
         t0 = time.time()
         err = ""
+        def _parse_once():
+            if args.full_chain:
+                from core import billcheck as bcmod
+                out = bcmod.parse_and_check(c["text"], erp, operator="管理员")
+                return out.get("drafts") or [], out.get("meta") or {}
+            return llmmod.parse(c["text"], erp)
+
         try:
-            draft, meta = llmmod.parse(c["text"], erp)
+            drafts, meta = _parse_once()
+            # 多单契约：parse 返回草稿数组；语料全是单意图，取第一张评分并记录张数
+            draft = (drafts or [{}])[0] if isinstance(drafts, list) else drafts
+            meta = dict(meta or {}, bills_returned=len(drafts) if isinstance(drafts, list) else 1)
         except Exception as e:
             try:  # 瞬时网络错误重试一次
-                draft, meta = llmmod.parse(c["text"], erp)
+                drafts, meta = _parse_once()
+                draft = (drafts or [{}])[0] if isinstance(drafts, list) else drafts
+                meta = dict(meta or {}, bills_returned=len(drafts) if isinstance(drafts, list) else 1)
             except Exception as e2:
                 err = str(e2)[:200]
                 draft, meta = {"biz": "", "party": "", "items": []}, {}

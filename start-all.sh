@@ -22,7 +22,7 @@ docker compose ps
 # 3) Talk2Stock 智能体服务（纯标准库，8090）
 echo "[3/3] 启动 Talk2Stock 智能体服务 ..."
 cd "$ROOT"
-if curl -sf -m 3 -o /dev/null http://localhost:8090/ai 2>/dev/null; then
+if curl -sf -m 3 -o /dev/null http://localhost:8090/ask 2>/dev/null; then
   echo "  已在运行"
 else
   # 8090 可能被僵死进程占着（能 listen 却不响应），先清理再起
@@ -36,7 +36,7 @@ else
   nohup python3 app/server.py >>/tmp/t2s-app.log 2>&1 &
   disown 2>/dev/null || true
   sleep 2
-  if curl -sf -m 3 -o /dev/null http://localhost:8090/ai; then
+  if curl -sf -m 3 -o /dev/null http://localhost:8090/ask; then
     echo "  已启动，日志 /tmp/t2s-app.log"
   else
     echo "  启动失败，请查 /tmp/t2s-app.log" >&2

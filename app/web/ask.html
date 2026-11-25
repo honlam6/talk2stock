@@ -117,12 +117,13 @@ function titleOf() {
 }
 function leanTurns() {
   return turns.slice(-30).map(t => {
-    if (t.kind === 'user') { const o = {kind: 'user', text: t.text}; if (t.files) o.files = t.files.map(f => ({name: f.name})); return o; }
+    if (t.kind === 'user') { const o = {kind: 'user', text: t.text}; if (t.files) o.files = t.files.map(f => ({name: f.name, type: f.type || ''})); return o; }
     const o = {kind: 'answer', answer: t.answer, steps: t.steps || []};
     ['error', 'tokens', 'elapsed', 'route', 'grounded'].forEach(k => { if (t[k] != null) o[k] = t[k]; });
     if (t.meta && t.meta.model) o.meta = {model: t.meta.model};
     o.drafts = (t.drafts || []).map(p => ({batch_id: p.batch_id, raw_text: p.raw_text, meta: p.meta,
       bills: (p.bills || []).map(b => ({draft: b.draft, preview: b.preview, attach: b.attach || []})),
+      check: p.check ? {patches_suggested: p.check.patches_suggested || [], patches_applied: p.check.patches_applied || [], risks: p.check.risks || ''} : null,
       attachments: p.attachments || [], clarify: p.clarify || null}));
     return o;
   });
@@ -149,7 +150,12 @@ async function openConv(id) {
   } catch (e) { toast(e.message, 'bad'); }
 }
 async function deleteConv(it) {
-  if (!window.confirm('删除「' + (it.title || '未命名对话') + '」？此操作不可恢复。')) return;
+  const ok = await askInline({
+    title: '删除「' + (it.title || '未命名对话') + '」？',
+    hint: '此操作不可恢复，不会影响已写入 ERP 的单据。',
+    okText: '删除',
+  }).then(v => v !== null).catch(() => false);
+  if (!ok) return;
   try {
     const r = await api('/api/conversations', {method: 'POST', body: {action: 'delete', id: it.id}});
     if (!r.ok) throw new Error(r.message || '删除失败');
@@ -159,7 +165,13 @@ async function deleteConv(it) {
   } catch (e) { toast(e.message, 'bad'); }
 }
 async function renameConv(it) {
-  const v = window.prompt('重命名对话', it.title || '');
+  const v = await askInline({
+    title: '重命名对话',
+    input: true,
+    value: it.title || '',
+    placeholder: '输入新的会话标题',
+    okText: '保存',
+  }).catch(() => null);
   if (v == null) return;
   try {
     const r = await api('/api/conversations', {method: 'POST', body: {action: 'rename', id: it.id, title: v}});
@@ -366,6 +378,9 @@ function answerView(t) {
   const cp = document.createElement('button'); cp.type = 'button'; cp.className = 'agent-msg-act'; cp.textContent = '复制';
   cp.onclick = () => copyText(t.answer || '', cp);
   tools.appendChild(cp);
+  if (t.grounded === true && allSteps.some(s => s.tool && s.ok)) {
+    tools.appendChild(node('agent-grounded-badge', '✓ 数字已核对'));
+  }
   const meta = runMeta(t);
   if (meta) tools.appendChild(node('agent-run-meta', meta));
   body.appendChild(tools);
@@ -379,16 +394,25 @@ function draftView(payload,parent) {
   const wrap = node('agent-draft-card'), bills = payload.bills || [];
   const head = node('agent-draft-head'); head.innerHTML = '<span class="agent-draft-icon">▤</span><strong>单据草稿</strong><span>' + bills.length + ' 张</span>'; wrap.appendChild(head);
   bills.forEach(b => { const d = b.draft || {}, p = b.preview || {}, row = node('agent-draft-row'); const items = (d.items || []).map(i => esc(i.name || '待补商品') + ' × ' + esc(i.qty) + esc(i.unit || '')).join(' · '); const files = (b.attach || payload.attachments || []).map(a => esc(a.name || a)).join('、'); row.innerHTML = '<div><b>' + esc((BIZ[d.biz] || {}).label || '业务单据') + '</b><span>' + esc(d.party || '待补往来单位') + '</span><small>' + items + '</small>' + (files ? '<small class="agent-draft-file">▧ ' + files + '</small>' : '') + '</div><strong>￥' + money(p.total || 0) + '</strong>'; wrap.appendChild(row); });
+  const ck = payload.check || {};
+  const suggs = ck.patches_suggested || [];
+  if (suggs.length) {
+    const txt = suggs.map(s => (s.field === 'price' ? '单价建议 ￥' + s.value : '仓库建议 ' + s.value) + (s.reason ? '（' + s.reason + '）' : '')).join('；');
+    wrap.appendChild(node('agent-sugg-note', '💡 校验参考建议：' + txt + '（打开确认卡可一键采纳）'));
+  }
+  if ((ck.risks || '').trim()) {
+    wrap.appendChild(node('agent-risk-note', '⚠ 校验提醒：' + ck.risks));
+  }
   const problems = bills.reduce((n,b) => n + ((b.preview || {}).errors || []).length,0); if (problems) wrap.appendChild(node('agent-notice','有 ' + problems + ' 项待补，打开草稿即可修改。'));
   const foot = node('agent-draft-foot'), btn = document.createElement('button'); btn.className = 'btn btn-primary';
-  const stored = parent && parent.draftCommitted && parent.draftCommitted.batch_id === payload.batch_id;
+  const stored = parent && parent.draftCommitted && parent.draftCommitted.batch_id === payload.batch_id && !parent.draftCommitted.hasOpen;
   btn.textContent = stored ? '已写入 ERP':'核对草稿'; btn.disabled = !!stored;
   btn.onclick = () => openDrafts(payload,parent,btn); foot.appendChild(btn); foot.appendChild(node('agent-draft-status',stored ? '✓ 已确认写入':'确认后写入')); wrap.appendChild(foot); return wrap;
 }
 function openDrafts(payload,parent,btn) {
   activeDraft = payload; $id('draftState').textContent = '可继续用自然语言修改这张草稿';
-  const bills = (payload.bills || []).map(b => Object.assign({},b,{state:'open'})); if (!bills.length) { toast('草稿内容为空，请补充商品与数量','warn'); return; }
-  if (bills.some(b => !b.confirm_token)) {
+  const bills = (payload.bills || []).map(b => Object.assign({},b,{state:b.state || 'open'})); if (!bills.length) { toast('草稿内容为空，请补充商品与数量','warn'); return; }
+  if (bills.some(b => !b.confirm_token && b.state !== 'committed')) {
     // 刷新后的旧令牌不会进入会话存储；重新只读预览才能生成新的确认依据。
     api('/api/sheet/resolve',{method:'POST',body:{drafts:bills.map((b,i) => ({row_no:i + 1,draft:b.draft}))}})
       .then(r => { if (!r.ok) throw new Error(r.message || '重新预览失败'); payload.bills = r.bills || []; openDrafts(payload,parent,btn); })
@@ -396,12 +420,22 @@ function openDrafts(payload,parent,btn) {
     return;
   }
   btn.disabled = true; loadMaster().then(() => {
-    showMultiPreview(bills,{source:'ai',rawText:payload.raw_text || '',onClose:updated => {
-      btn.disabled = false; const committed = (updated || []).filter(b => b.state === 'committed');
+    showMultiPreview(bills,{source:'ai',rawText:payload.raw_text || '',check:payload.check || null,onClose:updated => {
+      btn.disabled = false;
+      const list = updated || [];
+      const committed = list.filter(b => b.state === 'committed');
+      const stillOpen = list.filter(b => b.state !== 'committed');
+      if (stillOpen.length) payload.bills = list;
       if (committed.length) {
-        if (parent) { parent.draftCommitted = {batch_id:payload.batch_id,count:committed.length}; }
-        btn.textContent = '已写入 ERP'; btn.disabled = true; const status = btn.parentElement.querySelector('.agent-draft-status'); if (status) status.textContent = '✓ ' + committed.length + ' 张已写入';
-        activeDraft = null; $id('draftState').textContent = '已写入 · 可以继续问经营';
+        if (parent) { parent.draftCommitted = {batch_id:payload.batch_id,count:committed.length,hasOpen:stillOpen.length > 0}; }
+        if (!stillOpen.length) {
+          btn.textContent = '已写入 ERP'; btn.disabled = true;
+          activeDraft = null; $id('draftState').textContent = '已写入 · 可以继续问经营';
+        } else {
+          btn.textContent = '继续核对（余 ' + stillOpen.length + ' 张）'; btn.disabled = false;
+        }
+        const status = btn.parentElement.querySelector('.agent-draft-status');
+        if (status) status.textContent = '✓ ' + committed.length + ' 张已写入' + (stillOpen.length ? ' · 余 ' + stillOpen.length + ' 张待确认' : '');
         turns.push({kind:'answer',answer:'已写入 ' + committed.length + ' 张单据，单据编号：' + committed.map(b => (b.res || {}).number || '已生成').join('、'),steps:[]}); save(); persist(); renderHistory();
       }
     }});
@@ -472,7 +506,7 @@ function setLive(text, step) {
   if (st) st.textContent = step ? '第 ' + step + ' 步' : '';
 }
 function eventStep(s) { if (!s.tool && !s.correction) return; currentBubble.steps.push(s); const v = stepView(s); v.open = s.ok === false; currentBubble.trace.appendChild(v); scrollEnd(); }
-function compactPayload(p) { return {batch_id:p.batch_id || '',raw_text:p.raw_text || '',meta:p.meta || {},bills:(p.bills || []).map(b => ({draft:b.draft,preview:b.preview,confirm_token:b.confirm_token,attach:b.attach || []})),attachments:p.attachments || [],clarify:p.clarify || null}; }
+function compactPayload(p) { return {batch_id:p.batch_id || '',raw_text:p.raw_text || '',meta:p.meta || {},bills:(p.bills || []).map(b => ({draft:b.draft,preview:b.preview,confirm_token:b.confirm_token,attach:b.attach || []})),check:p.check ? {patches_suggested:p.check.patches_suggested || [],patches_applied:p.check.patches_applied || [],risks:p.check.risks || ''} : null,attachments:p.attachments || [],clarify:p.clarify || null}; }
 function finishWorking(r,drafts) {
   if (!r || r.ok === false) throw new Error((r && r.message) || '这次请求没有完成');
   const elapsed = currentBubble ? Math.max(0.1, Math.round((Date.now() - currentBubble.started) / 100) / 10) : null;
@@ -519,7 +553,7 @@ async function doAskWithFiles(text) {
     const txt = await resp.text();
     let r;
     try { r = JSON.parse(txt); } catch (_) { throw new Error('服务返回异常：' + txt.slice(0,120)); }
-    if (resp.status === 401) throw new Error('登录已过期，请刷新后重新登录');
+    if (resp.status === 401) { if (typeof askLogin === 'function') await askLogin(); throw new Error('登录已过期，请登录后重试'); }
     if (!r.ok) throw new Error(r.message || '附件处理失败');
     finishWorking(r, r.drafts || []);
   } catch (e) {
@@ -545,6 +579,13 @@ async function doAsk(text) {
   try {
     const headers = {'Content-Type':'application/json'}, pass = localStorage.getItem('t2s_pass'); if (pass) headers['X-T2S-Pass'] = pass;
     const resp = await fetch('/api/ask/stream',{method:'POST',headers,body:JSON.stringify({text:text || '识别图片并生成单据草稿',images,history:historyPayload(),draft:currentDraftPayload()}),signal:controller.signal});
+    if (resp.status === 401) { if (typeof askLogin === 'function') await askLogin(); throw new Error('登录已过期，请登录后重试'); }
+    const ctype = (resp.headers.get('content-type') || '').toLowerCase();
+    if (ctype.includes('application/json')) {
+      const jr = await resp.json();
+      if (!jr.ok) throw new Error(jr.message || '请求未完成');
+      finishWorking(jr, jr.drafts || []); completed = true;
+    } else {
     if (!resp.ok || !resp.body) throw new Error('连接未完成（HTTP ' + resp.status + '）');
     const reader = resp.body.getReader(), decoder = new TextDecoder(); let buffer = '';
     while (true) {
@@ -561,15 +602,20 @@ async function doAsk(text) {
       }
     }
     if (!completed) throw new Error('连接中断，这次没有写入数据');
+    }
   } catch (e) {
     if (currentBubble && currentBubble.tick) clearInterval(currentBubble.tick);
     if (currentBubble) currentBubble.article.remove(); currentBubble = null;
     const stopped = controller && controller._stopped;
     const msg = stopped ? '已停止。已生成的内容不会自动写入。' : e.name === 'AbortError' ? '等待超时。可重试，或缩小这次任务。' : e.message;
     turns.push({kind:'answer',answer:msg,error:true,steps:[]}); save(); persist();
-    if (!gotAny && !stopped && e.name !== 'AbortError' && !images.length) {
+    if (!gotAny && !stopped && e.name !== 'AbortError' && !images.length && !/登录|未配置 AI 模型/.test(msg || '')) {
       try { const r = await api('/api/ask',{method:'POST',body:{text,images,history:historyPayload(),draft:currentDraftPayload()}}); turns.pop(); currentBubble = workingView(); finishWorking(r,r.drafts || []); }
-      catch (fallback) { turns.push({kind:'answer',answer:fallback.message,error:true,steps:[]}); persist(); renderHistory(); }
+      catch (fallback) {
+        if (currentBubble && currentBubble.tick) clearInterval(currentBubble.tick);
+        if (currentBubble) currentBubble.article.remove(); currentBubble = null;
+        turns.push({kind:'answer',answer:fallback.message,error:true,steps:[]}); persist(); renderHistory();
+      }
     } else renderHistory();
   } finally { clearTimeout(watchdog); controller = null; setBusy(false); q.focus({preventScroll:true}); }
 }
@@ -603,6 +649,7 @@ function attachmentMenu() {
 }
 function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); suggestions.hidden = true; return; } turns.forEach((t, i) => t.kind === 'user' ? userView(t, i) : t.kind === 'answer' ? answerView(t, i) : null); suggestions.hidden = true; scrollEnd(false); }
 function newChat() {
+  clearTimeout(saveTimer);
   if (busy && controller) { controller._stopped = true; controller.abort(); }
   turns = []; currentId = ''; activeDraft = null; pendingImages = []; heroRect = null;
   renderThumbs(); try { sessionStorage.removeItem(KEY); } catch (_) {}

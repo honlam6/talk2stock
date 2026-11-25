@@ -46,6 +46,9 @@ class _StubErp(object):
     def depots(self):
         return []
 
+    def accounts(self):
+        return []
+
 
 def _patch_profile():
     return mock.patch.object(cfgmod, "active_profile", lambda: {"model": "mock"})
@@ -179,6 +182,23 @@ class TestDraftOrder(unittest.TestCase):
         step = next(s for s in out["steps"] if s.get("tool") == "draft_order")
         self.assertEqual(step["observation"]["refused"], "modification_not_supported")
         self.assertEqual(out["drafts"], [])
+
+    def test_compound_hints_splits_true_compound_not_haiyou_duoshao(self):
+        """「可乐还有多少库存」绝不能被当成复合问题拆解；真正两件事要拆出子问题提示。"""
+        self.assertEqual(askmod._compound_hints("可乐还有多少库存？"), "")
+        self.assertEqual(askmod._compound_hints("纸箱还有几箱"), "")
+        hint = askmod._compound_hints("今天卖了多少？另外库存值多少钱？")
+        self.assertIn("子问题", hint)
+        self.assertIn("今天卖了多少", hint)
+        self.assertIn("库存值多少钱", hint)
+
+    def test_master_count_tool_registered(self):
+        """master_count 必须注册在 ask._tools 中，供「有多少个客户/商品」类查询使用。"""
+        tools = askmod._tools(_StubErp(), on_event=None)
+        self.assertIn("master_count", tools)
+        data, note = tools["master_count"]["run"]({"entity": "客户"})
+        self.assertEqual(data["entity"], "客户")
+        self.assertEqual(data["count"], 0)
 
     def test_empty_text_and_oversize(self):
         data, note = askmod._draft_order({}, _StubErp())

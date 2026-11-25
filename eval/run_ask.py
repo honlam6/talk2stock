@@ -31,7 +31,7 @@ from core.erp import get_client      # noqa: E402
 
 CASES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ask_cases.jsonl")
 RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
-CORPUS_VERSION = "ask-v1-20261109"   # --corpus 指定其他语料时按文件名口径
+CORPUS_VERSION = "ask-v2-20261124"   # v2：统一 Agent 口径，路由类型不再计分；0 值允许自然语言表达
 
 
 def _is_comment(obj):
@@ -49,6 +49,13 @@ def _numbers(text):
     return out
 
 
+def _num_hit(g, ans, got):
+    """数字命中：容差匹配；0 允许用自然语言表达（「没有采购」「不欠钱」）。"""
+    if any(abs(g - x) <= 0.01 for x in got):
+        return True
+    return g == 0 and bool(re.search(r"没有|无|不欠|为零|零", ans))
+
+
 def score_case(case, r):
     """返回 (all_ok, 检查明细 dict)。数字判定：gold ⊆ 答案数字集合（容差匹配）。"""
     e = case.get("expect") or {}
@@ -61,7 +68,7 @@ def score_case(case, r):
         checks["route"] = r.get("route") == e["route"]
     if e.get("numbers"):
         got = _numbers(ans)
-        checks["numbers"] = all(any(abs(g - x) <= 0.01 for x in got) for g in e["numbers"])
+        checks["numbers"] = all(_num_hit(g, ans, got) for g in e["numbers"])
     if e.get("contains"):
         v = e["contains"]
         checks["contains"] = all(p in ans for p in (v if isinstance(v, list) else [v]))

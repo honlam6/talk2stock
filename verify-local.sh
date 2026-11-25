@@ -46,7 +46,7 @@ check_url(){
 }
 check_url "ERP 前端(8080)"   "http://localhost:8080/"
 check_url "ERP 后端文档(9999)" "http://localhost:9999/jshERP-boot/doc.html"
-check_url "Talk2Stock(8090)"  "http://localhost:8090/"
+check_url "Talk2Stock(8090)"  "http://localhost:8090/ask"
 
 # ── 4) ERP 登录（密码 MD5） ─────────────────────────────
 echo; echo "[4/6] ERP 登录链路"

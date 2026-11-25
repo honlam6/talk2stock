@@ -240,11 +240,14 @@ def api_llm_save(key, body):
     effort, xbody, err = _effort_xbody(prof)
     if err:
         return {"ok": False, "message": err}
-    cfgmod.upsert_profile(key, {
+    save_prof = {
         "name": name or key, "base_url": base_url, "api_key": api_key,
         "model": model, "temperature": temp,
         "reasoning_effort": effort, "extra_body": xbody,
-    })
+    }
+    if "vision" in prof:
+        save_prof["vision"] = bool(prof.get("vision"))
+    cfgmod.upsert_profile(key, save_prof)
     if body.get("activate"):
         cfgmod.set_active(key)
     return {"ok": True, "message": "模型档案已保存", **api_llm_get(None, None)}
@@ -367,11 +370,14 @@ def api_my_model_post(_q, body):
         old = (authmod.user_profiles(login).get("profiles") or {}).get(key) or {}
         if not api_key and not old.get("api_key"):
             return {"ok": False, "message": "请填写 API Key（编辑时留空表示不修改）"}
-        ok, msg = authmod.save_user_profile(login, key, {
+        save_prof = {
             "name": name or key, "base_url": base_url, "api_key": api_key,
             "model": model, "temperature": temp,
             "reasoning_effort": effort, "extra_body": xbody,
-        })
+        }
+        if "vision" in prof:
+            save_prof["vision"] = bool(prof.get("vision"))
+        ok, msg = authmod.save_user_profile(login, key, save_prof)
         if not ok:
             return {"ok": False, "message": msg or "保存失败"}
         if body.get("activate"):
@@ -401,6 +407,12 @@ def api_my_model_post(_q, body):
             "api_key": api_key,
             "temperature": prof.get("temperature", stored.get("temperature", 0)),
         }
+        eff = str(prof.get("reasoning_effort") or stored.get("reasoning_effort") or "").strip()
+        if eff:
+            merged["reasoning_effort"] = eff
+        eb = prof.get("extra_body") if isinstance(prof.get("extra_body"), dict) else stored.get("extra_body")
+        if isinstance(eb, dict) and eb:
+            merged["extra_body"] = eb
         if not merged["base_url"] or not merged["model"]:
             return {"ok": False, "message": "请先填写 Base URL 和模型名"}
         if not merged["api_key"]:
@@ -554,11 +566,14 @@ def api_parse_image(_q, body):
         return {"ok": False, "message": "图片识别失败：%s" % friendly(e)}
     # 拍照识别的草稿同样过校验 agent（习惯补默认仓/历史价）——三入口同一确认契约
     from core import billcheck as bcmod
-    check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username() or "")
+    check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username() or "", meta=meta)
     batch_id = uuid.uuid4().hex[:12]
     bills = _parse_to_bills(drafts, meta, erp, "ai_image", text or "（图片录入）", batch_id)
-    return {"ok": True, "count": len(bills), "bills": bills,
+    resp = {"ok": True, "count": len(bills), "bills": bills,
             "batch_id": batch_id, "meta": _bill_meta_public(meta), "check": check}
+    if bills:
+        resp["draft"], resp["preview"] = bills[0]["draft"], bills[0]["preview"]
+    return resp
 
 
 BATCH_MAX = 500
@@ -606,6 +621,11 @@ def api_commit_batch(_q, body):
                               raw_text=(it.get("raw_text") or raw_text or ""),
                               operator=operator)
             try:
+                from core import habits as habitsmod
+                habitsmod.record(operator, d, res)
+            except Exception:
+                pass
+            try:
                 _erp_operator_log(erp, operator, d, res)
             except Exception:
                 pass
@@ -621,9 +641,20 @@ def api_commit_batch(_q, body):
                         "biz_label": res.get("biz_label", ""),
                         "created": res.get("created", []),
                         "message": res.get("message", "")})
+    if ok_count > 0:
+        try:
+            from core import daily as dailymod
+            dailymod.invalidate()
+        except Exception:
+            pass
     try:
         from core import report as reportmod
         reportmod.invalidate()
+    except Exception:
+        pass
+    try:
+        from core import procurement as pmod
+        pmod.invalidate()
     except Exception:
         pass
     try:
@@ -745,10 +776,11 @@ def api_sheet_map(_q, body):
     if body.get("repair", True) and cfgmod.agent_profile():
         try:
             from core import repair as repairmod
+            erp = _erp()
             tr, repair = repairmod.repair_transform_result(
                 tr, erp, operator=cfgmod.current_username() or "")
-        except Exception:
-            pass   # 修复 agent 失败不致命：行级 problems 照样交付
+        except Exception as e:
+            repair = {"skipped": True, "error": str(e)[:120]}
     return {"ok": True, "ref": ref, "sheet": sheet["name"], "mapping": mapping,
             "result": tr, "repair": repair}
 
@@ -922,15 +954,15 @@ def api_commit(_q, body):
         reportmod.invalidate()
     except Exception:
         pass
-        try:
-            from core import procurement as pmod
-            pmod.invalidate()
-        except Exception:
-            pass
-        try:
-            dedupemod.invalidate()   # 刚写入的单不能在下一次出卡时被当成历史重复
-        except Exception:
-            pass
+    try:
+        from core import procurement as pmod
+        pmod.invalidate()
+    except Exception:
+        pass
+    try:
+        dedupemod.invalidate()   # 刚写入的单不能在下一次出卡时被当成历史重复
+    except Exception:
+        pass
     return res
 
 
@@ -1185,16 +1217,19 @@ def api_history(q, _body):
             size = f.tell()
             pos = size
             buf = b""
-            while pos > 0 and len(recs) <= limit:
+            while pos > 0 and len(recs) < limit:
                 step = min(CHUNK, pos)
                 pos -= step
                 f.seek(pos)
                 buf = f.read(step) + buf
-                # 只按完整行解析；最前面的残行留给下一轮拼接
-                nl = buf.rfind(b"\n")
-                if nl < 0:
-                    continue
-                block, buf = buf[:nl], buf[nl + 1:]
+                # 反向块读：还没到文件头时，块首可能是截断的残行，按首个换行符拆开留给下一轮拼接
+                if pos > 0:
+                    nl = buf.find(b"\n")
+                    if nl < 0:
+                        continue
+                    buf, block = buf[:nl], buf[nl + 1:]
+                else:
+                    block, buf = buf, b""
                 for line in reversed(block.decode("utf-8", "replace").splitlines()):
                     line = line.strip()
                     if not line:
@@ -1205,7 +1240,7 @@ def api_history(q, _body):
                         continue
                     if rec.get("event") == "commit_ok":
                         recs.append(rec)
-                        if len(recs) > limit:
+                        if len(recs) >= limit:
                             break
     except Exception as e:
         return {"ok": False, "message": friendly(e)}
@@ -1361,7 +1396,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-T2S-Pass, X-Operator")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-T2S-Pass, X-Operator")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
@@ -1552,6 +1587,10 @@ class Handler(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(parsed.query)
 
         if path.startswith("/api"):
+            # 健康探针（无敏感信息，不要求登录）
+            if method == "GET" and path == "/api/health":
+                self._json({"ok": True, "service": "talk2stock"})
+                return
             # 登录接口自身不需要凭证（拿到会话之前唯一可用的入口），必须最先放行
             if method == "POST" and path == "/api/auth/login":
                 try:

@@ -96,17 +96,18 @@ def _tool_find_party(args, erp):
     return {"results": out}, note
 
 
-def _tool_search_history(args, erp, _seen=set()):
+def _tool_search_history(args, erp, _seen=None):
     from . import retrieve as rmod
     query = str(args.get("query") or "").strip()
     if not query:
         return ({"error": "query 必填"}, "search_history 需要 query 参数。")
-    if query in _seen:
+    if _seen is not None and query in _seen:
         # 同样的关键词重复查是空烧步数（实测模型会连发相同查询）——观察里直接纠正
         return ({"error": "duplicate_query", "query": query},
                 "这个关键词刚才已经查过一次，结果不会变——换一个关键词（如另一行的商品名+单价），"
                 "或直接 submit_verdict 收尾。")
-    _seen.add(query)
+    if _seen is not None:
+        _seen.add(query)
     return rmod.search_history(query)
 
 
@@ -155,7 +156,8 @@ def run_repair(rows, erp, operator="", on_event=None):
                            "run": _search},
         "submit_verdict": {"desc": "提交修复结论（结束取证，恰好调用一次）",
                            "args_hint": '{"fixes":[{"row_index":0,"item_index":0,"field":"item_name|party","value":"..","material_id":可选,"confidence":0.0-1.0,"reason":".."}]}',
-                           "run": _submit},
+                           "run": _submit,
+                           "terminal": True},
     }
     template = REPAIR_PROMPT.replace("{n}", "%d" % len(targets))
     try:
@@ -167,6 +169,15 @@ def run_repair(rows, erp, operator="", on_event=None):
     except Exception as e:
         return dict(empty, error=str(e)[:120])
     fixes = verdict_box.get("fixes")
+    if fixes is None:
+        # 模型忘了调 submit_verdict 而把 JSON 写在 final 里时的兜底解析
+        ans = str(out.get("answer") or "").strip()
+        try:
+            v = json.loads(ans)
+            if isinstance(v, dict) and isinstance(v.get("fixes"), list):
+                fixes = v["fixes"]
+        except Exception:
+            fixes = None
     if fixes is None:
         fixes = []
     return {"ok": True, "fixes": fixes, "steps": out.get("steps") or [],

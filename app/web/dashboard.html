@@ -291,7 +291,7 @@ function renderKPI() {
         `${t.sell_n || 0} 张单 · 今日 ￥${money(t.sell)}`) +
     kpi(m.profit >= 0 ? 'b' : 'r', '本月毛利（销售 − 采购）', '￥' + money(m.profit), '') +
     kpi('o', '库存货值（成本价）', '￥' + money(sm.total_value),
-        `${sm.total_stock || 0} 件 · ${D.stock.kinds || 0} 种商品`);
+        `${sm.total_stock || 0} 件 · ${(D.stock || {}).kinds || 0} 种商品`);
 
   // 环比 chip 塞进 KPI（销售/毛利着色，采购中性）
   const cards = $('#kpiRow').children;
@@ -299,7 +299,7 @@ function renderKPI() {
   sub(cards[0], `${cards[0].querySelector('.sub').textContent}　${deltaChip(m.buy, prevBuy, 'neutral')}`);
   sub(cards[1], `${cards[1].querySelector('.sub').textContent}　${deltaChip(m.sell, prevSell, 'up-good')}`);
   sub(cards[2], deltaChip(m.profit, prevProfit, 'up-good'));
-  if ((D.stock.negative || 0) > 0)
+  if (((D.stock || {}).negative || 0) > 0)
     sub(cards[3], `${cards[3].querySelector('.sub').textContent} · <span style="color:#b5532f;font-weight:600">负库存 ${D.stock.negative} 种</span>`);
 
   renderMarquee(m, sm, t);
@@ -317,7 +317,7 @@ function renderMarquee(m, sm, t) {
     ['', `库存货值 <b>￥${money(sm.total_value)}</b>`],
     [recv > 0 ? 'down' : 'up', `应收 <b>￥${money(recv)}</b>`],
     [pay > 0 ? 'down' : 'up', `应付 <b>￥${money(pay)}</b>`],
-    [(D.stock.negative || 0) > 0 ? 'down' : 'up', `库存预警 <b>${(D.stock.negative || 0) + (D.stock.low || 0)}</b> 种`],
+    [((D.stock || {}).negative || 0) > 0 ? 'down' : 'up', `库存预警 <b>${((D.stock || {}).negative || 0) + ((D.stock || {}).low || 0)}</b> 种`],
     ['', `待审核 <b>${O.wait_bills != null ? O.wait_bills : 0}</b> 张`],
     ['up', '本页只读 · 数字实时取自 ERP 官方统计接口'],
   ];
@@ -405,11 +405,13 @@ function renderGoods() {
       <div class="db-chip db-c-green"><b>${g.total_out || 0}</b><span>累计出货量</span></div>
       <div class="db-chip db-c-orange"><b>￥${money(g.total_value)}</b><span>库存货值</span></div>
     </div>
-    <div class="tbl-wrap"><table class="dtable" style="min-width:520px">
+    <div class="tbl-wrap" tabindex="0" role="region" aria-label="商品进销榜"><table class="dtable" style="min-width:520px">
       <thead><tr><th>商品</th><th class="num">累计进货</th><th class="num">累计出货</th><th class="num">现存</th><th style="width:34%">库存货值</th></tr></thead>
-      <tbody>${rows.map(r => `
+      <tbody>${rows.map(r => {
+        const u = String(r.unit || '').replace(/^(.)\1+(?=\[|$)/, '$1');
+        return `
         <tr>
-          <td title="${esc(r.name)}">${esc(r.name)}${r.unit ? `<span class="muted" style="font-size:12px"> / ${esc(r.unit)}</span>` : ''}</td>
+          <td title="${esc(r.name)}">${esc(r.name)}${u ? `<span class="muted" style="font-size:12px"> / ${esc(u)}</span>` : ''}</td>
           <td class="num">${r.in_qty || '—'}</td>
           <td class="num">${r.out_qty || '—'}</td>
           <td class="num" style="color:${r.stock <= 0 ? '#a87f26' : 'inherit'};font-weight:600">${r.stock}</td>
@@ -417,7 +419,8 @@ function renderGoods() {
             <span class="track" style="height:10px"><span class="fill" style="width:${(r.value / maxV * 100).toFixed(1)}%;background:linear-gradient(90deg,var(--gold-soft),var(--gold-strong))"></span></span>
             <span class="amt" style="width:auto">${r.value > 0 ? '￥' + money(r.value) : '—'}</span>
           </div></td>
-        </tr>`).join('')}
+        </tr>`;
+      }).join('')}
       </tbody>
     </table></div>`;
 }
@@ -492,14 +495,15 @@ function renderDebt() {
         <span class="amount" style="font-size:19px">${total > 0 ? '￥' + money(total) : '—'}</span>
       </div>
       ${stacked}
-      ${topList.length ? `<table class="dtable" style="font-size:14px">
+      ${topList.length ? `<div class="tbl-wrap" tabindex="0" role="region" aria-label="${esc(title)}"><table class="dtable" style="font-size:14px">
         ${topList.map(x => `<tr><td>${esc(x.name)}</td><td class="num" style="font-weight:600">￥${money(x.amount)}</td></tr>`).join('')}
-      </table>` : `<div class="muted" style="font-size:13.5px">${emptyTip}</div>`}
+      </table></div>` : `<div class="muted" style="font-size:13.5px">${emptyTip}</div>`}
     </div>`;
   };
+  const aging = D.aging || {};
   box.innerHTML =
-    sec('客户欠我（应收）', D.aging.recv || [], D.debt_recv_total, D.debt_recv || [], AGING_COLORS, '没有未结清的应收款 🎉') +
-    sec('我欠供应商（应付）', D.aging.pay || [], D.debt_pay_total, D.debt_pay || [], AGING_COLORS2, '没有未结清的应付款 🎉');
+    sec('客户欠我（应收）', aging.recv || [], D.debt_recv_total, D.debt_recv || [], AGING_COLORS, '没有未结清的应收款 🎉') +
+    sec('我欠供应商（应付）', aging.pay || [], D.debt_pay_total, D.debt_pay || [], AGING_COLORS2, '没有未结清的应付款 🎉');
 }
 
 /* ---------- 最近单据（可排序 + 点击表头切换升降序） ---------- */
@@ -532,7 +536,7 @@ function renderRecent() {
   const narrow = window.matchMedia('(max-width: 640px)').matches;
   recentNarrow = narrow;
   $('#recentCnt').textContent = rows.length
-    ? `（最近 ${rows.length} 张 / 共 ${D.bill_total || D.bill_count || rows.length} 张${D.bill_total ? '' : '（REST 样本）'}${narrow ? '' : ' · 点表头排序'}）`
+    ? `（最近 ${rows.length} 张 / 共 ${D.bill_total != null ? D.bill_total : (D.bill_count || rows.length)} 张${D.bill_total != null ? '' : '（REST 样本）'}${narrow ? '' : ' · 点表头排序'}）`
     : '';
   const c = RECENT_COLS[recentSort.col];
   rows = rows.slice().sort((a, b) => {
@@ -706,7 +710,7 @@ function showBillDetail(row) {
     .filter(([k, , get]) =>
       (BILL_DETAIL_OPTIONAL.has(k) ? (row[k] !== '' && row[k] != null && row[k] !== 0) : true) &&
       (!BILL_DETAIL_HIDE_WHEN[k] || !BILL_DETAIL_HIDE_WHEN[k]()))
-    .map(([, label, , wide]) =>
+    .map(([, label, get, wide]) =>
       `<div class="bd-row${wide ? ' wide' : ''}"><span class="bd-k">${esc(label)}</span><span class="bd-v">${esc(get(row))}</span></div>`)
     .join('');
 
@@ -716,7 +720,7 @@ function showBillDetail(row) {
   mask.setAttribute('role', 'dialog');
   mask.setAttribute('aria-modal', 'true');
   mask.innerHTML = `
-    <div class="modal" style="max-width:520px">
+    <div class="modal" style="max-width:580px">
       <button class="modal-x" aria-label="关闭">×</button>
       <h3 style="margin-bottom:2px">${esc(row.type)} <span class="bd-no">${esc(row.number)}</span></h3>
       <div class="bd-sub">${row.status === '已审核' ? '<span class="typ-pill t-green">已审核</span>' : '<span class="typ-pill t-orange">草稿</span>'}
@@ -929,7 +933,18 @@ async function genDiag() {
       headers: Object.assign({ 'Content-Type': 'application/json' }, pass ? { 'X-T2S-Pass': pass } : {}),
       body: '{}'
     });
+    if (resp.status === 401) {
+      if (typeof askLogin === 'function') await askLogin();
+      throw new Error('请重新登录后再试');
+    }
     if (resp.status === 403) throw new Error('该功能仅管理员可用');
+    const ctype = (resp.headers.get('content-type') || '').toLowerCase();
+    if (ctype.includes('application/json')) {
+      const j = await resp.json();
+      if (!j.ok) throw new Error(j.message || '诊断不可用');
+      renderDiag(j);
+      return;
+    }
     if (!resp.ok || !resp.body) throw new Error('连接未完成（HTTP ' + resp.status + '）');
     const reader = resp.body.getReader(), decoder = new TextDecoder();
     let buffer = '', result = null;

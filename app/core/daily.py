@@ -109,6 +109,7 @@ def _tools(erp):
                       '"suggest_drafts":[{"biz":"purchase_in","party":"供应商",'
                       '"items":[{"name":"..","qty":建议量,"unit":".."}]}]}'),
         "run": _submit,
+        "terminal": True,
     }
     return tools, verdict_box
 
@@ -284,7 +285,8 @@ def morning_report(erp, operator="", on_event=None, force=False):
         out = agentmod.run_agent(
             goal, tools, max_steps=MAX_STEPS,
             context_block="操作员：%s" % (operator or "（未登录）"),
-            on_event=on_event, prompt_template=DAILY_PROMPT)
+            on_event=on_event, prompt_template=DAILY_PROMPT,
+            decision_max_tokens=2600)
     except Exception as e:
         out = {"ok": False, "error": str(e)[:120], "steps": [], "tokens": {},
                "observations": []}

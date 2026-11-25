@@ -83,7 +83,6 @@ def _replies(points, drafts):
         _resp({"thought": "查今日经营", "tool": "today_stats", "args": {}}),
         _resp({"thought": "结论", "tool": "submit_verdict",
                "args": {"points": points, "suggest_drafts": drafts}}),
-        _resp({"thought": "收工", "final": "早报已生成。"}),
     ]
 
 
@@ -123,9 +122,9 @@ class TestMorningReport(unittest.TestCase):
         self.assertEqual(out["points"][1]["title"], "库存预警")
         self.assertEqual(out["suggest_drafts"][0]["party"], "美宜佳")
         self.assertIn("今日销售", out["report_md"])
-        # 3 轮工具调用 + 1 轮 final
+        # 3 轮工具调用（submit_verdict 为 terminal，省掉多余第 4 轮 final）
         self.assertEqual(len([s for s in out["steps"] if s.get("tool")]), 3)
-        self.assertEqual(chat.call_count, 4)
+        self.assertEqual(chat.call_count, 3)
 
     def test_cache_and_invalidate(self):
         """当日缓存：第二次调用 cached=True 且不再打 LLM；invalidate() 后真重跑。"""
@@ -134,15 +133,15 @@ class TestMorningReport(unittest.TestCase):
              mock.patch.object(llmmod, "_chat", side_effect=replies) as chat:
             first = dmod.morning_report(erp=object())
             self.assertFalse(first["cached"])
-            self.assertEqual(chat.call_count, 4)
+            self.assertEqual(chat.call_count, 3)
             second = dmod.morning_report(erp=object())
             self.assertTrue(second["cached"])
-            self.assertEqual(chat.call_count, 4)             # 缓存命中：LLM 零调用
+            self.assertEqual(chat.call_count, 3)             # 缓存命中：LLM 零调用
             self.assertEqual(second["points"], first["points"])
             dmod.invalidate()
             third = dmod.morning_report(erp=object())
             self.assertFalse(third["cached"])
-            self.assertEqual(chat.call_count, 8)             # 失效后重新取证
+            self.assertEqual(chat.call_count, 6)             # 失效后重新取证
 
     def test_no_profile_returns_error(self):
         """未配置模型 → ok False + 提示语，绝不碰 LLM。"""

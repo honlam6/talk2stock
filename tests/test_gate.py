@@ -99,6 +99,28 @@ class TestGateToken(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("改动", r)
 
+    def test_concurrent_replay_only_allows_one(self):
+        """高并发重放同一令牌：原子校验+标记，严格只放行 1 次，防重复写账。"""
+        import threading
+        t = self.gate.issue(self.DRAFT)
+        barrier = threading.Barrier(8)
+        results = []
+        lock = threading.Lock()
+
+        def worker():
+            barrier.wait()
+            ok, _, _ = self.gate.check(t, self.DRAFT)
+            with lock:
+                results.append(ok)
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertEqual(results.count(True), 1)
+        self.assertEqual(results.count(False), 7)
+
 
 if __name__ == "__main__":
     unittest.main()

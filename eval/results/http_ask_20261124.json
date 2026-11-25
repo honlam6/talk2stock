@@ -1,0 +1,420 @@
+{
+  "base": "http://111.91.30.23:8090",
+  "model": "deepseek/deepseek-v4.1-flash-1017 (OpenRouter)",
+  "note": "deployed-data scoring: no gold numbers",
+  "cases": [
+    {
+      "id": "r1",
+      "type": "rule",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "today_stats"
+      ],
+      "latency_s": 2.3,
+      "answer": "今天没有采购，也没有销售记录：采购金额 0 元、共 0 单，销售金额 0 元、共 0 单。"
+    },
+    {
+      "id": "r2",
+      "type": "rule",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "month_stats"
+      ],
+      "latency_s": 2.28,
+      "answer": "本月采购金额 80545 元，共 10 笔；销售金额 1062 元，共 4 笔。本月进销差额为 -79483 元。"
+    },
+    {
+      "id": "r3",
+      "type": "rule",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "debts"
+      ],
+      "latency_s": 4.55,
+      "answer": "永辉超市欠你 100.0 元，应收合计 100.0 元；目前没有你欠别人的应付记录。"
+    },
+    {
+      "id": "r4",
+      "type": "rule",
+      "ok": false,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "recent_bills"
+      ],
+      "latency_s": 12.19,
+      "answer": "最近录了 6 张单，全部是「入库·采购」：00000000758 美宜佳 可乐 数量30 金额105；00000000756 美宜佳 可乐、纸箱 数量230 金额1105；00000000755 京东企业ts1 打印机ts1 数量10 金额15000；00000000754 老张ts1 苹果ts1 数量2 金额180；CGRK00000000753 京东企业ts1 打印机ts1 数量10 金额15000（草稿）；00000000752 农夫山泉 矿泉水 数量100 金额200"
+    },
+    {
+      "id": "r5",
+      "type": "rule",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "low_stock"
+      ],
+      "latency_s": 2.31,
+      "answer": "目前有9个商品库存偏低（低于10的预警线）：6号电池、PPR管（两个档案）、螺丝（两个档案）库存都是0，苹果ts1剩4箱、苹果剩8箱，牛皮纸和方便面各剩10箱，都到了预警线。建议尽快补货，尤其是库存为0的几款。"
+    },
+    {
+      "id": "r6",
+      "type": "rule",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_value"
+      ],
+      "latency_s": 2.46,
+      "answer": "库存里的货总共值 81172 元，共 1344 件。"
+    },
+    {
+      "id": "r7",
+      "type": "rule",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "sql_query"
+      ],
+      "latency_s": 4.59,
+      "answer": "系统里共有 10 个供应商（另有 3 个客户档案）。"
+    },
+    {
+      "id": "r8",
+      "type": "rule",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "sql_query"
+      ],
+      "latency_s": 3.97,
+      "answer": "系统里共有 16 种有效商品档案。"
+    },
+    {
+      "id": "r9",
+      "type": "rule",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "debts"
+      ],
+      "latency_s": 5.33,
+      "answer": "您目前没有欠款，应付账款合计 0 元。系统里记录的应收为 100 元（永辉超市欠您 100 元）。"
+    },
+    {
+      "id": "a1",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 8.6,
+      "answer": "可乐目前总库存 322 瓶，其中原料仓 270 瓶、成品仓 52 瓶，仓库1、仓库2、仓库3 均为 0 瓶。"
+    },
+    {
+      "id": "a2",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 15.47,
+      "answer": "可乐在成品仓还剩 52 瓶。"
+    },
+    {
+      "id": "a3",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 7.43,
+      "answer": "矿泉水在原料仓还有 200 瓶。"
+    },
+    {
+      "id": "a4",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 2.83,
+      "answer": "牛皮纸目前还有 10 卷，全部在原料仓，成品仓、仓库1、仓库2、仓库3均为 0 卷。"
+    },
+    {
+      "id": "a5",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 2.74,
+      "answer": "方便面目前还剩 10 箱，全部在成品仓；原料仓、仓库1、仓库2、仓库3 均为 0 箱。"
+    },
+    {
+      "id": "a6",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 3.49,
+      "answer": "系统里「螺丝」有两个规格档案：M10×30 和 M8×20（单位都是盒）。请告诉我具体是哪个规格，我再查它的库存。"
+    },
+    {
+      "id": "a7",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "low_stock"
+      ],
+      "latency_s": 16.16,
+      "answer": "当前有 9 条库存预警（阈值 10）：6号电池 0 节、PPR管 0 根（两个档案）、螺丝 0 盒（两个档案）、苹果ts1 4 箱、苹果 8 箱、牛皮纸 10 卷、方便面 10 箱。其中 6号电池、PPR管、螺丝已完全缺货，建议优先补货；PPR管和螺丝各有两条同名档案，需要确认具体规格。系统共统计 16 种商品，无负库存。"
+    },
+    {
+      "id": "a8",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "debts"
+      ],
+      "latency_s": 4.04,
+      "answer": "欠款最多的客户是永辉超市，应收欠款 100 元。目前应收欠款合计 100 元，应付欠款为 0 元。"
+    },
+    {
+      "id": "a9",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "search_history"
+      ],
+      "latency_s": 12.85,
+      "answer": "上次可乐是跟美宜佳买的。最近一次是 2026-11-05 的采购入库，可乐 30 瓶、单价 3 元 5 角、合计 105.0 元，入原料仓；更早 2026-10-19 也向美宜佳进过 2 箱可乐，合计 54.24 元。"
+    },
+    {
+      "id": "a10",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "search_docs"
+      ],
+      "latency_s": 5.97,
+      "answer": "在本系统里录单遵循「每笔业务一张单」的原则，单据分「保存」和「审核」两步。最快的做法是直接在这里用口语说明要录什么（比如向哪家进什么货），我会匹配主数据并生成带标注的草稿预览，你核对确认后才会写入系统。"
+    },
+    {
+      "id": "a11",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "sql_query"
+      ],
+      "latency_s": 6.35,
+      "answer": "系统里一共录了 33 张单据（不含已删除的）。"
+    },
+    {
+      "id": "a12",
+      "type": "agent",
+      "ok": false,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "db_schema",
+        "sql_query",
+        "db_schema",
+        "sql_query",
+        "sql_query"
+      ],
+      "latency_s": 21.72,
+      "answer": "今天系统里没有采购入库记录，也就是没有查到今天买进的商品。如果你刚录完单还没审核，或单据日期不是今天，可以告诉我单号或日期，我再帮你查。"
+    },
+    {
+      "id": "a13",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "query_bills",
+        "query_bills"
+      ],
+      "latency_s": 8.47,
+      "answer": "今天系统里没有任何销售单据，所以电池今天卖出 0。若你确认今天确实开过单，可能是单据还没录入系统，可以告诉我单号或客户名，我再帮你核对。"
+    },
+    {
+      "id": "a14",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 3.85,
+      "answer": "螺丝目前各仓库存都是 0 盒：原料仓、成品仓、仓库1、仓库2、仓库3 均为 0，合计 0 盒。需要的话我可以帮你起草一张采购单。"
+    },
+    {
+      "id": "a15",
+      "type": "agent",
+      "ok": false,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "recent_bills"
+      ],
+      "latency_s": 4.12,
+      "answer": "最近一张单是 2026-11-18 的采购入库单 00000000758：供应商美宜佳，商品可乐 30，金额 105 元，现付已结清，状态已审核。"
+    },
+    {
+      "id": "a16",
+      "type": "agent",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 2.37,
+      "answer": "可乐主要在原料仓，有 270 瓶；成品仓还有 52 瓶；仓库1、仓库2、仓库3 都是 0。建议先去原料仓找。"
+    },
+    {
+      "id": "c1",
+      "type": "compound",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "today_stats",
+        "stock_value"
+      ],
+      "latency_s": 4.33,
+      "answer": "今天还没有销售记录，共 0 笔，卖出金额为 0 元。目前库存合计 1344 件，库存总值为 81172 元。"
+    },
+    {
+      "id": "c2",
+      "type": "compound",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query",
+        "stock_query"
+      ],
+      "latency_s": 4.09,
+      "answer": "可乐共剩 322 瓶，其中原料仓 270 瓶、成品仓 52 瓶；方便面共剩 10 箱，全部在成品仓。"
+    },
+    {
+      "id": "c3",
+      "type": "compound",
+      "ok": false,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "query_bills",
+        "recent_bills",
+        "sql_query",
+        "sql_query",
+        "db_schema",
+        "sql_query",
+        "sql_query"
+      ],
+      "latency_s": 20.39,
+      "answer": "昨天（2026-11-23）系统里没有销售单据，因此没有人买东西的记录。最近一次销售是 2026-11-03 的单号 00000000720，金额 230 元；再往前是 11-02 的两张单，金额分别为 400 元和 440 元。"
+    },
+    {
+      "id": "d1",
+      "type": "boundary",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 4.71,
+      "answer": "系统里没有查到「雪碧」的库存记录，也没有相近的商品档案。请确认商品名称是否录成了其他叫法，或该商品尚未建档。"
+    },
+    {
+      "id": "d2",
+      "type": "boundary",
+      "ok": false,
+      "fallback": false,
+      "grounded": true,
+      "tools": [
+        "stock_query"
+      ],
+      "latency_s": 3.69,
+      "answer": "可乐在二号仓库当前库存为 0 瓶，已无货。"
+    },
+    {
+      "id": "d3",
+      "type": "boundary",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [],
+      "latency_s": 1.92,
+      "answer": "我只能查本系统的进销存数据，比如『可乐还有多少库存』『本月卖了多少』『谁欠我钱』。天气这类问题我帮不上忙。"
+    },
+    {
+      "id": "d4",
+      "type": "boundary",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [],
+      "latency_s": 1.5,
+      "answer": "我只能查本系统的进销存数据，比如『可乐还有多少库存』『本月卖了多少』『谁欠我钱』，写诗这类创作不在我的能力范围内。"
+    },
+    {
+      "id": "d5",
+      "type": "boundary",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [],
+      "latency_s": 3.91,
+      "answer": "智能助手只能查询数据和起草新单据，不能修改或删除系统里已有的库存、单据等数据。如需了解可乐当前库存，可以问我「可乐还有多少库存」；如需入库，我可以帮你起草一张新的入库单。"
+    },
+    {
+      "id": "d6",
+      "type": "boundary",
+      "ok": true,
+      "fallback": false,
+      "grounded": true,
+      "tools": [],
+      "latency_s": 2.0,
+      "answer": "我是 Talk2Stock 的进销存业务助手，可以帮你查库存、查采购销售统计、查应收应付、搜历史单据，也能按你的描述起草进货/销售等新单据（只出草稿预览，不写入系统）。比如你可以问「可乐还有多少库存」「本月卖了多少」「谁欠我钱」。注意我只能查询和起草新单，不能修改或删除已有数据。"
+    }
+  ]
+}

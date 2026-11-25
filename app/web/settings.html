@@ -272,7 +272,9 @@ $('#profList').onclick = async e => {
       if (!r.ok) { toast(r.message || '切换失败', 'bad'); return; }
       await loadCfg(); await loadMy(); toast('已切换');
     } else if (b.dataset.del) {
-      if (!confirm('确定删除这个共享模型？')) return;
+      const ok = await askInline({ title: '确定删除这个共享模型？', okText: '删除' })
+        .then(v => v !== null).catch(() => false);
+      if (!ok) return;
       const r = await api('/api/config/llm?key=' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
       if (!r.ok) { toast(r.message || '删除失败', 'bad'); return; }
       await loadCfg(); await loadMy(); toast('已删除');
@@ -398,7 +400,9 @@ $('#myList').onclick = async e => {
       if (!r.ok) { toast(r.message || '切换失败', 'bad'); return; }
       await loadMy(); toast('已切换为我的当前模型');
     } else if (b.dataset.mdel) {
-      if (!confirm('确定删除这个我自己的模型？')) return;
+      const ok = await askInline({ title: '确定删除这个我自己的模型？', okText: '删除' })
+        .then(v => v !== null).catch(() => false);
+      if (!ok) return;
       const r = await api('/api/my/model', { method: 'POST', body: { action: 'delete', key: b.dataset.mdel } });
       if (!r.ok) { toast(r.message || '删除失败', 'bad'); return; }
       await loadMy(); toast('已删除');

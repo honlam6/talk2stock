@@ -258,6 +258,11 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         steps.append(rec)
         _emit(on_event, {"type": "step", "step": rec})
         history_lines.append(_hist(i, thought, name, args, data))
+        # 终结型工具（submit_verdict / submit_diagnosis 等）：成功提交结构化结论后
+        # 立即结束循环，不再多浪费一轮 LLM 调用（或触发无意义的预算耗尽 forced_final）
+        if ok and tool.get("terminal"):
+            return _finish(goal, str(note or ""), steps, tokens, started,
+                           observations, notes, prof, terminal=True)
 
     # ---- 预算耗尽（步数 / token）：只准作答的收尾机会，不再执行任何工具 ----
     try:
@@ -292,7 +297,7 @@ def _emit(on_event, evt):
         pass
 
 
-def _finish(goal, final, steps, tokens, started, observations, notes, prof, forced=False):
+def _finish(goal, final, steps, tokens, started, observations, notes, prof, forced=False, terminal=False):
     """数字接地校验 + 汇总。final 不可信时退回模板句拼接（保留原 final 供审计）。
 
     没有任何观察（越界出口 / 只读拒绝等无工具 final）时跳过数字接地：
@@ -315,5 +320,6 @@ def _finish(goal, final, steps, tokens, started, observations, notes, prof, forc
             "steps_used": len([s for s in steps if s.get("tool")]),
             "latency_ms": int((time.time() - started) * 1000),
             "forced": forced,
+            "terminal": terminal,
         },
     }

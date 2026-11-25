@@ -286,8 +286,11 @@ function renderDaily(r) {
     '<div class="hist-sub" style="white-space:normal">' +
     esc((d.items || []).map(it => `${it.name}×${it.qty}${it.unit || ''}`).join('、')) +
     '</div></div>').join('');
-  const degradedHint = r.degraded ? '<div class="hint mt-1">AI 模型暂不可用，以下为规则统计兜底。</div>' : '';
-  $('#dailyPoints').insertAdjacentHTML('beforebegin', degradedHint);
+  const oldDeg = $('#dailyDegradedHint');
+  if (oldDeg) oldDeg.remove();
+  if (r.degraded) {
+    $('#dailyPoints').insertAdjacentHTML('beforebegin', '<div id="dailyDegradedHint" class="hint mt-1">AI 模型暂不可用，以下为规则统计兜底。</div>');
+  }
   // 补货建议 → /api/resolve 换预览+确认令牌 → showPreview 确认卡；真正写入由
   // common.js 的确认卡走 /api/commit（与录单同一条闸门），成功后重拉日报
   $$('#dailyDrafts [data-draft]').forEach(btn => {
@@ -301,7 +304,8 @@ function renderDaily(r) {
                    items: (d.items || []).map(it => ({ name: it.name, qty: num(it.qty), unit: it.unit || '个' })) },
           source: 'ai',
         } });
-        if (!res.ok) { toast(res.message || '生成预览失败', 'bad'); btn.disabled = false; btn.textContent = '生成采购草稿'; return; }
+        btn.disabled = false; btn.textContent = '生成采购草稿';
+        if (!res.ok) { toast(res.message || '生成预览失败', 'bad'); return; }
         showPreview(res.preview, res.draft, (res2) => {
           if (res2 && res2.ok) { toast('✓ ' + (res2.message || '补货单已写入')); loadDaily(); }
           else toast((res2 && res2.message) || '写入失败', 'bad');
@@ -376,7 +380,7 @@ $('#dailyRerun').onclick = async () => {
       `商品 <b>${c.materials || 0}</b>　仓库 <b>${c.depots || 0}</b>　账户 <b>${c.accounts || 0}</b>`;
   } catch (e) {
     $('#stat').innerHTML = `<span class="tag t-red">ERP 连不上</span>　${esc(e.message)}
-      <div class="hint">到「设置」检查连接，或启动：cd ~/Desktop/jshERP-suite/jshERP-latest/deploy && docker compose up -d --no-build</div>`;
+      <div class="hint">请到「设置」检查 ERP 服务连接，或确认后台 ERP 容器已启动。</div>`;
     renderKPI(null);
   }
 })();

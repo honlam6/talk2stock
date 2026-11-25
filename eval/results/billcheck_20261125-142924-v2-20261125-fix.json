@@ -1,0 +1,129 @@
+{
+ "summary": {
+  "corpus_version": "billcheck-v1-20261116",
+  "model": "hy4",
+  "n": 4,
+  "acc": 1.0,
+  "latency_avg_s": 12.5,
+  "tokens_avg": 4762
+ },
+ "results": [
+  {
+   "id": "b1",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 16.54,
+   "tokens": 5347,
+   "applied": [],
+   "suggested": [
+    {
+     "bill_index": 0,
+     "field": "depot",
+     "value": "成品仓",
+     "reason": "操作员习惯记录 depot=成品仓，且该仓可乐库存52瓶满足50瓶需求",
+     "confidence": 0.95
+    },
+    {
+     "bill_index": 0,
+     "field": "price",
+     "value": 4.0,
+     "reason": "永辉超市最近卖价记录 4.0 元/瓶，单位一致（瓶）",
+     "confidence": 0.95,
+     "item_index": 0
+    }
+   ],
+   "rejected": [],
+   "clarify": "「可乐」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」（系统查到参考价：4元（永辉超市最近卖价记录 4.0 元/瓶，单位一致（瓶）））",
+   "error": ""
+  },
+  {
+   "id": "b2",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 8.13,
+   "tokens": 3627,
+   "applied": [],
+   "suggested": [
+    {
+     "bill_index": 0,
+     "field": "price",
+     "value": 3.5,
+     "reason": "last_price 查得美宜佳/可乐/瓶 最近进价 3.5 元（2026-11-22，qty 100，单位瓶一致），草稿单价为 0",
+     "confidence": 0.92,
+     "item_index": 0
+    }
+   ],
+   "rejected": [],
+   "clarify": "「可乐」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」（系统查到参考价：3.5元（last_price 查得美宜佳/可乐/瓶 最近进价 3.5 元（2026-11-22，qty 100，单位瓶一致），草稿单价为 0））",
+   "error": ""
+  },
+  {
+   "id": "b3",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 11.69,
+   "tokens": 5167,
+   "applied": [],
+   "suggested": [
+    {
+     "bill_index": 0,
+     "field": "depot",
+     "value": "成品仓",
+     "reason": "habit_defaults 显示操作员 evalbot 对张记便利店 sale_out 的常用仓库为成品仓",
+     "confidence": 0.95
+    },
+    {
+     "bill_index": 0,
+     "field": "price",
+     "value": 44.0,
+     "reason": "last_price 显示张记便利店最近成交方便面 44.0 元/箱，单位一致为箱；habit_defaults 亦记录 44.0",
+     "confidence": 0.95,
+     "item_index": 0
+    }
+   ],
+   "rejected": [],
+   "clarify": "「方便面」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」（系统查到参考价：44元（last_price 显示张记便利店最近成交方便面 44.0 元/箱，单位一致为箱；habit_defaults 亦记录 44.0））",
+   "error": ""
+  },
+  {
+   "id": "b4",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "no_applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 13.64,
+   "tokens": 4907,
+   "applied": [],
+   "suggested": [
+    {
+     "bill_index": 0,
+     "field": "depot",
+     "value": "成品仓",
+     "reason": "habit_defaults 显示操作员 evalbot 对校园超市 sale_out 的常用仓库为成品仓",
+     "confidence": 0.95
+    }
+   ],
+   "rejected": [],
+   "clarify": "「牛皮纸」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  }
+ ]
+}

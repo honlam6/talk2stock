@@ -47,4 +47,5 @@ archive/
 jshERP-deploy/
 .workbuddy-ai/
 .workbuddy/
+.zcode/
 backups/

@@ -87,6 +87,53 @@ class TestApplyPatches(unittest.TestCase):
         self.assertEqual(applied, [])
         self.assertIn("正数", rejected[0]["why"])
 
+    def test_observation_grounding_rejects_hallucinated_price_and_depot(self):
+        """传入 observations 时，未在工具观察里出现过的价格和仓库必须被接地拦截。"""
+        obs = [{"depot": "成品仓", "prices": {"可乐": {"price": 4.0}}}]
+        patches = [
+            {"bill_index": 0, "field": "depot", "value": "虚构仓", "confidence": 0.99},
+            {"bill_index": 0, "item_index": 0, "field": "price", "value": 9.9, "confidence": 0.99},
+            {"bill_index": 0, "field": "depot", "value": "成品仓", "confidence": 0.95},
+            {"bill_index": 0, "item_index": 0, "field": "price", "value": 4.0, "confidence": 0.95},
+        ]
+        sugg, rej = bc.apply_patches(self.drafts, patches, observations=obs, apply_to_draft=False)
+        self.assertEqual(len(sugg), 2)
+        self.assertEqual(len(rej), 2)
+        self.assertTrue(all("接地拦截" in r["why"] for r in rej))
+        # apply_to_draft=False 绝不篡改原始草稿
+        self.assertEqual(self.drafts[0]["depot"], "")
+        self.assertIsNone(self.drafts[0]["items"][0]["price"])
+
+
+class TestFastPathAndLastPrice(unittest.TestCase):
+    def test_fast_path_skips_llm_on_complete_bill(self):
+        """要素齐全且非低置信的出库单走确定性快路径：0 次 LLM 调用，仍做真实库存校验。"""
+        draft = {"biz": "sale_out", "party": "永辉超市", "depot": "成品仓",
+                 "items": [{"name": "可乐", "qty": 10, "unit": "瓶", "price": 4.0}]}
+        fake_erp = mock.MagicMock()
+        with _patch_profile(), \
+             mock.patch.object(llmmod, "_chat", side_effect=AssertionError("完整单不应调 LLM")), \
+             mock.patch.object(bc, "_tool_stock_check",
+                               return_value=({"material": "可乐", "found": True, "total": 5}, "库存 5")):
+            chk = bc.run_check([draft], erp=fake_erp, operator="测试员",
+                               meta={"bills": [{"confidence": "high", "problems": []}]})
+        self.assertTrue(chk["ok"])
+        self.assertTrue(chk["meta"]["fast_path"])
+        self.assertIn("低于本次出库", chk["risks"])
+        self.assertEqual(chk["steps"][0]["tool"], "stock_check")
+
+    def test_last_price_unit_mismatch_flagged(self):
+        """历史成交按瓶计价，草稿按箱入账 → 标记 unit_mismatch，防止拿瓶价填箱价。"""
+        from core import dbread as dbmod
+        with mock.patch.object(dbmod, "sql_query",
+                               return_value=({"rows": [
+                                   {"time": "2026-11-20", "price": 3.5, "qty": 10, "unit": "瓶"}
+                               ]}, "ok")):
+            data, note = bc._tool_last_price(
+                {"party": "美宜佳", "material": "可乐", "direction": "in", "unit": "箱"}, erp=None)
+        self.assertTrue(data["unit_mismatch"])
+        self.assertIn("不一致", note)
+
 
 class TestParseVerdict(unittest.TestCase):
     def test_json_string(self):
@@ -151,10 +198,14 @@ class TestParseAndCheck(unittest.TestCase):
         meta = {"clarify": {"question": "规则追问", "missing": "price"}}
         verdict = {"patches": [{"bill_index": 0, "item_index": 0, "field": "price",
                                 "value": 4.0, "confidence": 0.95}],
+                   "observations": [{"prices": {"可乐": {"price": 4.0}}}],
                    "clarify": "请问这批可乐是按上次的 4 元结算吗？", "risks": ""}
         out = self._run("卖50瓶可乐", [d], meta, verdict)
-        self.assertEqual(out["drafts"][0]["items"][0]["price"], 4.0)     # 补丁写回草稿
-        self.assertEqual(len(out["check"]["patches_applied"]), 1)
+        # 事实与建议分离：草稿原值不被静默覆写，接地后的建议进入 patches_suggested
+        self.assertIsNone(out["drafts"][0]["items"][0]["price"])
+        self.assertEqual(out["check"]["patches_applied"], [])
+        self.assertEqual(len(out["check"]["patches_suggested"]), 1)
+        self.assertEqual(out["check"]["patches_suggested"][0]["value"], 4.0)
         # agent 追问优先于规则追问
         self.assertEqual(out["clarify"]["question"], "请问这批可乐是按上次的 4 元结算吗？")
         self.assertEqual(out["check"]["clarify_source"], "agent")

@@ -73,14 +73,13 @@ def _patch_sql(rows=None):
 
 
 def _replies(issues, overview="本月销售 15,000.00 元，应收账款集中在永辉超市。"):
-    """标准四轮：today_stats → sql_query（下钻）→ submit_diagnosis → final。"""
+    """标准三轮：today_stats → sql_query（下钻）→ submit_diagnosis（终结型工具）。"""
     return [
         _resp({"thought": "先看今日", "tool": "today_stats", "args": {}}),
         _resp({"thought": "追一下欠款来源", "tool": "sql_query",
                "args": {"sql": "SELECT organ_name, debt FROM jsh_depot_head"}}),
         _resp({"thought": "结论", "tool": "submit_diagnosis",
                "args": {"overview": overview, "issues": issues}}),
-        _resp({"thought": "收工", "final": "诊断完成。"}),
     ]
 
 
@@ -105,9 +104,20 @@ class TestDiagnose(unittest.TestCase):
         self.assertEqual(issue["evidence_steps"], [2])
         self.assertEqual(issue["severity"], "warn")
         self.assertIn("应收集中", out["report_md"])
-        # 3 轮工具 + 1 轮 final
+        # 3 轮工具（submit_diagnosis 为 terminal，省掉多余第 4 轮 final）
         self.assertEqual(len([s for s in out["steps"] if s.get("tool")]), 3)
-        self.assertEqual(chat.call_count, 4)
+        self.assertEqual(chat.call_count, 3)
+
+    def test_ungrounded_overview_falls_back_to_count(self):
+        """overview 含观察外编造数字时必须被接地校验拦截，改用确定性计数句。"""
+        replies = _replies([_GOOD_ISSUE], overview="本月销售暴涨 888888 元，利润翻倍。")
+        with _patch_profile(), _patch_ask_stats(), _patch_sql(), \
+             mock.patch.object(llmmod, "_chat", side_effect=replies):
+            out = dmod.diagnose(erp=object())
+        self.assertTrue(out["ok"])
+        self.assertFalse(out["degraded"])
+        self.assertNotIn("888888", out["overview"])
+        self.assertIn("1 个", out["overview"])
 
     def test_fabricated_numbers_dropped_and_degraded(self):
         """证据含观察外数字 → issue 被丢；全丢 → 降级规则洞察（degraded）。"""

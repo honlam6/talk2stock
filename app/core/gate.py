@@ -62,25 +62,35 @@ def digest_of(draft):
 # 无状态确认令牌：base64(payload).HMAC——服务重启不失效、多进程部署可用。
 # 「一次性」由 nonce 黑名单（data/used_tokens.jsonl 持久化）保证，重启不丢。
 # --------------------------------------------------------------------------
+_KEY_LOCK = threading.Lock()
+_KEY_CACHE = {}   # {path: bytes}，避免每次签/验都读磁盘，同时尊重 data_dir 切换
+
+
 def _hmac_key():
     """签名密钥：首次生成存 data/.gatekey（0600），此后复用。"""
     path = os.path.join(cfgmod.data_dir(), ".gatekey")
-    try:
-        with open(path, encoding="utf-8") as f:
-            k = f.read().strip()
-            if len(k) >= 32:
-                return k.encode()
-    except OSError:
-        pass
-    k = secrets.token_hex(32)
-    try:
-        os.makedirs(cfgmod.data_dir(), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(k)
-        os.chmod(path, 0o600)
-    except OSError:
-        pass   # 写不进（只读卷）则退化为进程级随机密钥——重启失效但不阻断业务
-    return k.encode()
+    with _KEY_LOCK:
+        cached = _KEY_CACHE.get(path)
+        if cached and os.path.isfile(path):
+            return cached
+        try:
+            with open(path, encoding="utf-8") as f:
+                k = f.read().strip()
+                if len(k) >= 32:
+                    _KEY_CACHE[path] = k.encode()
+                    return _KEY_CACHE[path]
+        except OSError:
+            pass
+        k = secrets.token_hex(32)
+        try:
+            os.makedirs(cfgmod.data_dir(), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(k)
+            os.chmod(path, 0o600)
+        except OSError:
+            pass   # 写不进（只读卷）则退化为进程级随机密钥——重启失效但不阻断业务
+        _KEY_CACHE[path] = k.encode()
+        return _KEY_CACHE[path]
 
 
 _USED_LOCK = threading.Lock()
@@ -93,13 +103,17 @@ def _used_path():
 def _mark_used(nonce, exp):
     """nonce 进黑名单（持久化），顺带清理已过期行，文件不无限增长。"""
     with _USED_LOCK:
-        try:
-            os.makedirs(cfgmod.data_dir(), exist_ok=True)
-            with open(_used_path(), "a", encoding="utf-8") as f:
-                f.write("%s %d\n" % (nonce, exp))
-            _sweep_used()
-        except OSError:
-            pass
+        _mark_used_locked(nonce, exp)
+
+
+def _mark_used_locked(nonce, exp):
+    try:
+        os.makedirs(cfgmod.data_dir(), exist_ok=True)
+        with open(_used_path(), "a", encoding="utf-8") as f:
+            f.write("%s %d\n" % (nonce, exp))
+        _sweep_used()
+    except OSError:
+        pass
 
 
 def _sweep_used():
@@ -124,7 +138,7 @@ def _sweep_used():
         pass
 
 
-def _is_used(nonce):
+def _is_used_locked(nonce):
     try:
         with open(_used_path(), encoding="utf-8") as f:
             for l in f:
@@ -134,6 +148,20 @@ def _is_used(nonce):
     except OSError:
         pass
     return False
+
+
+def _is_used(nonce):
+    with _USED_LOCK:
+        return _is_used_locked(nonce)
+
+
+def _consume_nonce(nonce, exp):
+    """原子检查并消费 nonce（防并发重放竞态 TOCTOU）。返回 True 表示首次消费成功。"""
+    with _USED_LOCK:
+        if _is_used_locked(nonce):
+            return False
+        _mark_used_locked(nonce, exp)
+        return True
 
 
 def issue(draft, meta=None):
@@ -174,9 +202,8 @@ def check(token, draft):
     if payload.get("d") != digest_of(draft):
         return False, payload.get("m") or {}, "草稿在确认后被改动，请重新预览确认"
     nonce = str(payload.get("n") or "")
-    if not nonce or _is_used(nonce):
+    if not nonce or not _consume_nonce(nonce, int(payload.get("e") or 0)):
         return False, payload.get("m") or {}, "该确认令牌已被使用，请重新预览确认"
-    _mark_used(nonce, int(payload.get("e") or 0))
     return True, payload.get("m") or {}, ""
 
 

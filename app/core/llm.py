@@ -39,7 +39,11 @@ TIMEOUT = 120
 #   v5-20261109  多单契约：输出 {"bills": [...]}——一句话多笔业务（分号分段/又买又卖/
 #                多个往来单位）拆成多张草稿，每单独立 confidence/note，字段绝不跨单搬用；
 #                normalize 兼容旧版单对象/裸数组回退。图片与表格入口共用本契约。
-PROMPT_VERSION = "v5-20261109"
+#   v7-20261124  「早上/下午/晚上」按当日时段填今天（录单当场语义）
+#   v8-20261125  修复评测真实抽取失分：带数字编号的商品名（商品17/商品200）严禁拆成单价；
+#                模糊量词（一批/一点/一些/几箱）qty 必须为 0 不得猜 1；未提单价/往来单位
+#                严禁从示例（如美宜佳/3.5）照抄；明确「客户X那里拿点…」按销售出库低置信标出
+PROMPT_VERSION = "v8-20261125"
 
 BIZ_ENUM = list(BILL_TYPES.keys())
 
@@ -57,11 +61,11 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 
 # 业务类型判断（biz 字段，只能取这些值）
 - purchase_in     采购入库：从别人那里买进来。关键词：买、采购、进货、进了、购入
-- sale_out        销售出库：卖给别人。关键词：卖、销售、出货、发货给
+- sale_out        销售出库：卖给别人。关键词：卖、销售、出货、发货给（注意：往来单位明确是「客户X」且无「退货/退回」字样，如「客户1那里拿点衣服」，归为 sale_out 并把 confidence 标为 low）
 - purchase_return 采购退货：把买来的货退回给供应商。关键词：退给供应商、退货给X（X是卖家）
 - sale_return     销售退货：客户把货退回给我。关键词：客户退回、X退货回来
-- other_in        其他入库：无供应商的入库，如盘盈、领用退回
-- other_out       其他出库：无客户的出库，如报损、领用
+- other_in        其他入库：无供应商的入库，如盘盈、领用退回、自制入库
+- other_out       其他出库：无客户的出库，如报损、盘亏/盘点少了、领用
 
 # 多笔业务拆分（本版本核心规则）
 输入里含多笔不同业务时（分号「；」分段、句号分成几段、又买又卖、不同往来单位的几段话、
@@ -88,18 +92,20 @@ SYSTEM_PROMPT = """你是 jshERP 进销存系统的单据录入助理。把用�
 }
 
 # 字段规则
-- party：只写单位名称本身，不要带"供应商"、"客户"、"从"、"给"等字。
-- items[].name：只写商品名本身，不要把数量/单价混进名字（"3瓶可乐"→name是"可乐"，qty是3，unit是"瓶"）。但商品名自带的型号、规格必须完整保留——型号里的数字是名字的一部分："M8螺丝"→"M8螺丝"、"6号电池"→"6号电池"、"2.5平方电线"→"2.5平方电线"、"304不锈钢管"→"304不锈钢管"，绝不能缩成"螺丝/电池/电线/钢管"。主数据名单里怎么写（含型号）就照抄。
+- party：只写单位名称本身，不要带"供应商"、"客户"、"从"、"给"等字（但「供应商1」「客户1」这类编号本身就是完整名称，原样保留）。如果用户输入根本没提往来单位，填 "" 并标 low，**绝不从下方示例里照抄供应商名**。
+- items[].name：只写商品名本身，不要把数量/单价混进名字（"3瓶可乐"→name是"可乐"，qty是3，unit是"瓶"）。但商品名自带的型号、规格必须完整保留（含数字编号）——数字是名字的一部分："M8螺丝"→"M8螺丝"、"6号电池"→"6号电池"、"2.5平方电线"→"2.5平方电线"、"304不锈钢管"→"304不锈钢管"、"商品17"→"商品17"、"商品200"→"商品200"，绝不能缩成"螺丝/电池/商品"，也绝不能把"商品17"里的 17 拆成单价！主数据名单里怎么写（含型号）就照抄。
 - 同一笔业务里同一商品多个规格各来N个（"4分和6分的PPR管各20根"）→ items 拆成多行，每行一个完整规格名，qty 各自 N，单价对应各自的。
 - qty / price：纯数字，不带单位不带"元"。price 是单价不是总价；若用户只说了总价，用 总价÷数量 算单价。
+  - **数量缺失规则**：用户没说具体数字（如"一批"、"一点"、"拿点"、"一些"、"几箱"）时，qty 必须填 0（绝不能猜成 1），并设 confidence="low"；但"十来个"这类带明确基准数的约数可按 10 填并设 confidence="low"。
+  - **单价缺失规则**：用户没提单价也没提总价时，price 必须填 0（绝不能凭常识或下方示例猜价），并设 confidence="low"。
 - unit：中文量词，如 个/瓶/箱/kg/卷/台。没说就填"个"。箱/盒这类副单位要原样保留，系统会按单位组自动折算基本数量。
 - items[].tax_rate：税率百分比数字。"含税13%"→13，"13个点"→13，"不含税"或没提→0。不要自己算税额。
 - depot：用户明确说了仓库才填，否则留空字符串（系统会用默认仓）。
-- oper_time：用户明确说了日期才填，格式 "YYYY-MM-DD HH:MM:SS"，否则留空。
+- oper_time：用户明确说了日期才填（「昨天/前天/X号/上周五」等），格式 "YYYY-MM-DD HH:MM:SS"，否则留空。只说「早上/下午/晚上」等当日时段时填今天（录单是当场行为，「早上进了货」即今天早上），例如今天 2026-11-24 早上 → "2026-11-24 08:00:00" 左右即可。
 - pay_amount：用户明确提到"只付了X"、"付一半"、"欠款"时填实付数字；全款或没提就填 null。
 - confidence：high/medium/low。信息不全或语义模糊时填 low，并在 note 里用中文说明缺什么。
 
-# 示例
+# 示例（仅用于展示 JSON 格式，绝不是对话历史；未提及的字段严禁从示例复制）
 输入：从美宜佳买了3瓶可乐，单价3块5
 输出：{"bills":[{"biz":"purchase_in","party":"美宜佳","items":[{"name":"可乐","qty":3,"unit":"瓶","price":3.5}],"depot":"","oper_time":"","remark":"","pay_amount":null,"confidence":"high","note":""}]}
 
@@ -270,8 +276,26 @@ def _post_retry(url, payload, api_key, stream=False, ssl_context=None, retries=2
             raise
 
 
-# 网关能力记忆：不认 stream_options 的端点 400 一次后记住，后续请求不再带
+# 网关能力记忆：按 (base_url, model) 隔离，避免单个端点的 400 污染全部模型档案。
+# 兼容老单测直接对 _quirks.clear() / `in _quirks` 操作时，用统一辅助读写。
 _quirks = set()
+_quirks_lock = threading.Lock()
+
+
+def _quirk_key(prof, flag):
+    base = str((prof or {}).get("base_url") or "").rstrip("/")
+    model = str((prof or {}).get("model") or "")
+    return (base, model, flag)
+
+
+def _has_quirk(prof, flag):
+    with _quirks_lock:
+        return flag in _quirks or _quirk_key(prof, flag) in _quirks
+
+
+def _add_quirk(prof, flag):
+    with _quirks_lock:
+        _quirks.add(_quirk_key(prof, flag))
 
 
 def _norm_usage(u):
@@ -425,9 +449,9 @@ def _base_payload(prof, messages, force_json=True, purpose="", extra_effort=None
                                     or prof.get("agent_max_tokens")
                                     or _agentmod.DEFAULT_AGENT_MAX_TOKENS)
     eff = str(prof.get("reasoning_effort") or "").strip() or extra_effort
-    if eff and "no_reasoning_effort" not in _quirks:
+    if eff and not _has_quirk(prof, "no_reasoning_effort"):
         payload["reasoning_effort"] = str(eff)
-    if "no_extra_body" not in _quirks:
+    if not _has_quirk(prof, "no_extra_body"):
         for k, v in (prof.get("extra_body") or {}).items():
             if k not in _RESERVED_BODY_KEYS and v is not None:
                 payload.setdefault(k, v)
@@ -454,18 +478,18 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_e
                          decision_max_tokens=decision_max_tokens)
     try:
         payload = dict(base, stream=True)
-        if "no_stream_options" not in _quirks:
+        if not _has_quirk(prof, "no_stream_options"):
             payload["stream_options"] = {"include_usage": True}
         text, usage = _post_retry(url, payload, prof["api_key"], stream=True, ssl_context=ctx, extra_headers=extra_headers)
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
         if "stream_options" in detail:
-            _quirks.add("no_stream_options")   # 该端点不认此参数，记住并立即降级
+            _add_quirk(prof, "no_stream_options")   # 该端点不认此参数，记住并立即降级
         if "reasoning" in detail.lower():
-            _quirks.add("no_reasoning_effort")   # 端点不认推理强度参数：记下自动摘除
+            _add_quirk(prof, "no_reasoning_effort")   # 端点不认推理强度参数：记下自动摘除
         for k in (prof.get("extra_body") or {}):
             if k and str(k) in detail:
-                _quirks.add("no_extra_body")
+                _add_quirk(prof, "no_extra_body")
                 break
         last_err = "HTTP %s %s" % (e.code, detail)
     except Exception as e:
@@ -486,7 +510,8 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_e
     # 3) 非流式兜底
     if not (text and text.strip()):
         base = _base_payload(prof, messages, force_json=force_json, purpose=purpose,
-                             extra_effort=reasoning_effort)
+                             extra_effort=reasoning_effort,
+                             decision_max_tokens=decision_max_tokens)
         try:
             payload = {k: v for k, v in base.items() if k != "response_format"}
             text, usage = _post_retry(url, payload, prof["api_key"], stream=False, ssl_context=ctx, extra_headers=extra_headers)
@@ -517,10 +542,20 @@ def _extract_json(text):
         return json.loads(text)
     except Exception:
         pass
-    # 从文本里抠第一个平衡的大括号块
-    depth, start = 0, -1
+    # 从文本里抠第一个平衡的大括号块（忽略 JSON 字符串字面量内部的括号）
+    depth, start, in_str, esc = 0, -1, False, False
     for i, ch in enumerate(text):
-        if ch == "{":
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
             if depth == 0:
                 start = i
             depth += 1

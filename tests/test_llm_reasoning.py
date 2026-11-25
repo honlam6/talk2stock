@@ -84,6 +84,41 @@ class TestBasePayload(unittest.TestCase):
         p2 = self._payload(force_json=False)
         self.assertNotIn("response_format", p2)
 
+    def test_quirks_scoped_per_profile(self):
+        """某端点不认 reasoning_effort 不应污染另一个端点/模型。"""
+        prof_a = {"base_url": "https://a.example/v1", "model": "m1", "temperature": 0, "reasoning_effort": "low"}
+        prof_b = {"base_url": "https://b.example/v1", "model": "m2", "temperature": 0, "reasoning_effort": "low"}
+        llmmod._add_quirk(prof_a, "no_reasoning_effort")
+        pa = llmmod._base_payload(prof_a, MSG)
+        pb = llmmod._base_payload(prof_b, MSG)
+        self.assertNotIn("reasoning_effort", pa)
+        self.assertEqual(pb.get("reasoning_effort"), "low")
+
+    def test_extract_json_with_braces_in_string(self):
+        """JSON 字符串字面量里含花括号 { } 时，括号扫描不能提前截断。"""
+        raw = '前置说明 {"thought": "备注含 {测试} 括号", "final": "答案是 {A}"} 尾部'
+        obj = llmmod._extract_json(raw)
+        self.assertEqual(obj["thought"], "备注含 {测试} 括号")
+        self.assertEqual(obj["final"], "答案是 {A}")
+
+    def test_fallback3_preserves_decision_max_tokens(self):
+        """_chat 降级分支 #3（撤掉 response_format）仍必须透传 decision_max_tokens。"""
+        from unittest import mock
+        import urllib.error
+        seen = []
+
+        def fake_post(url, payload, api_key, **kw):
+            seen.append(dict(payload))
+            if payload.get("response_format"):
+                raise urllib.error.HTTPError(url, 400, "bad", {}, None)
+            return '{"ok":1}', {"prompt_tokens": 10, "completion_tokens": 5}
+
+        prof = {"base_url": "https://x.example/v1", "model": "mx", "api_key": "k", "temperature": 0}
+        with mock.patch.object(llmmod, "_post_retry", side_effect=fake_post):
+            llmmod._chat(prof, MSG, purpose="agent", decision_max_tokens=2600)
+        self.assertGreaterEqual(len(seen), 2)
+        self.assertEqual(seen[-1]["max_tokens"], 2600)
+
 
 if __name__ == "__main__":
     unittest.main()

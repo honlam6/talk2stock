@@ -17,8 +17,16 @@ import time
 from . import config as cfgmod
 from .draft import BILL_TYPES
 
-_PATH = os.path.join(cfgmod.DATA_DIR, "habits.jsonl")
+_DEFAULT_PATH = os.path.join(cfgmod.DATA_DIR, "habits.jsonl")
+_PATH = _DEFAULT_PATH
 _LOCK = threading.Lock()
+
+
+def _habits_path():
+    # 若测试 patch 了 _PATH 则优先用 _PATH；否则动态跟随 cfgmod.data_dir()
+    if _PATH != _DEFAULT_PATH:
+        return _PATH
+    return os.path.join(cfgmod.data_dir(), "habits.jsonl")
 
 
 def _norm(s):
@@ -39,7 +47,7 @@ def record(operator, draft, res):
             "number": res.get("number") or "",
         }
         with _LOCK:
-            with open(_PATH, "a", encoding="utf8") as f:
+            with open(_habits_path(), "a", encoding="utf8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
         pass
@@ -47,10 +55,11 @@ def record(operator, draft, res):
 
 def _load():
     recs = []
-    if not os.path.isfile(_PATH):
+    path = _habits_path()
+    if not os.path.isfile(path):
         return recs
     try:
-        with open(_PATH, encoding="utf8") as f:
+        with open(path, encoding="utf8") as f:
             for line in f:
                 try:
                     r = json.loads(line)

@@ -150,6 +150,29 @@ class TestFlow(TestLoop):
         self.assertEqual(out["answer"], "库存 102 瓶")
         self.assertTrue(out["meta"]["forced"])
 
+    def test_terminal_tool_exits_without_extra_llm_call(self):
+        """terminal=True 的工具成功返回后立刻结束循环，不再多调一次 LLM。"""
+        box = {}
+        tools = {
+            "echo": TOOLS["echo"],
+            "submit": {
+                "desc": "提交结论", "args_hint": "{}", "terminal": True,
+                "run": lambda a: (box.update(a) or {"accepted": True}, "已收"),
+            },
+        }
+        replies = [
+            _resp({"thought": "先查", "tool": "echo", "args": {}}),
+            _resp({"thought": "交卷", "tool": "submit", "args": {"verdict": "ok"}}),
+            AssertionError("terminal 工具返回后不应再调用 LLM"),
+        ]
+        with mock.patch.object(cfgmod_holder(), "active_profile", lambda: {"model": "mock"}), \
+             mock.patch.object(llmmod, "_chat", side_effect=replies) as chat:
+            out = agent.run_agent("测试", tools, max_steps=4)
+        self.assertTrue(out["ok"])
+        self.assertEqual(chat.call_count, 2)
+        self.assertEqual(box["verdict"], "ok")
+        self.assertTrue(out["meta"]["terminal"])
+
 
 if __name__ == "__main__":
     unittest.main()

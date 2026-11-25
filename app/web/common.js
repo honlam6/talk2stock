@@ -559,6 +559,8 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
     preview: preview || {},
     draft: JSON.parse(JSON.stringify(draft || {})),
     attach: (attachPaths || []).slice(),
+    suggestions: (((extra.check || {}).patches_suggested) || [])
+      .filter(s => (s.bill_index || 0) === 0).map(s => Object.assign({}, s)),
     dirty: false,
     done: false,               // 确认流程已走完，关闭时不再触发 onCancel
   };
@@ -664,6 +666,13 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
           ${(ai.problems || []).length ? '<br>解析问题：' + ai.problems.map(esc).join('；') : ''}
         </div>` : ''}
 
+        ${(p.duplicate && p.duplicate.hit) ? `
+        <div class="alert alert-warn">
+          <b>⚠ 疑似重复录入：</b><br>
+          ${(p.duplicate.matches || []).map(m => `近 ${p.duplicate.window_minutes} 分钟已有 <b>${esc(m.number)}</b>（${esc(m.time)}，${esc(m.party)}，${(m.hits || []).map(h => esc(h.name) + '×' + h.qty).join('、')}）`).join('<br>')}
+          <br>若这是同一笔业务，请先核对上面的单号，避免重复入库/出库。
+        </div>` : ''}
+
         ${toCreate.length ? `
         <div class="alert alert-warn">
           <b>⚠ 以下资料系统里还没有，写入时会自动帮你建好：</b>
@@ -672,6 +681,17 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
         </div>` : ''}
 
         ${warns.length ? `<div class="alert alert-info"><b>提醒：</b><br>${warns.map(esc).join('<br>')}</div>` : ''}
+
+        ${(st.suggestions && st.suggestions.length) ? `
+        <div class="sugg-bar">
+          <span class="sugg-label">💡 校验建议（来自历史证据，点击采纳）：</span>
+          ${st.suggestions.map((sg, si) => {
+            const label = sg.field === 'depot'
+              ? `仓库 → ${sg.value}`
+              : `第${(sg.item_index || 0) + 1}行单价 → ￥${sg.value}`;
+            return `<button type="button" class="sugg-chip" data-pv-sugg="${si}" title="${esc(sg.reason || '')}">✓ ${esc(label)}${sg.reason ? ' · ' + esc(sg.reason) : ''}</button>`;
+          }).join('')}
+        </div>` : ''}
 
         <div class="pv-form">
           <div class="pv-line">
@@ -695,7 +715,7 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
           </div>
         </div>
 
-        <div class="tbl-wrap mt-3">
+        <div class="tbl-wrap mt-3" tabindex="0" role="region" aria-label="单据商品明细">
           <table class="xtable">
             <thead><tr><th>商品</th><th class="num" style="width:86px">数量</th><th style="width:76px">单位</th><th class="num" style="width:110px">单价</th><th class="num" style="width:100px">金额</th><th style="width:40px"></th></tr></thead>
             <tbody id="__pvBody">${rows || '<tr><td colspan="6" class="muted center">没有明细</td></tr>'}</tbody>
@@ -813,6 +833,25 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
     // 焦点陷阱：Tab 只在弹层内循环；Esc 复用 close
     if (detachTrap) detachTrap();
     detachTrap = trapFocus(mask, close);
+
+    // 校验建议一键采纳（采纳后写回草稿并标记需刷新预览重签令牌）
+    $$('[data-pv-sugg]', mask).forEach(btn => {
+      btn.onclick = () => {
+        const si = +btn.dataset.pvSugg;
+        const sg = st.suggestions[si];
+        if (!sg) return;
+        if (sg.field === 'depot') st.draft.depot = String(sg.value || '');
+        else if (sg.field === 'price' && st.draft.items && st.draft.items[sg.item_index || 0]) {
+          st.draft.items[sg.item_index || 0].price = Number(sg.value);
+        }
+        st.suggestions.splice(si, 1);
+        st.dirty = true;
+        render();
+        setDirty();
+        refreshOkState();
+        toast('已采纳建议，请点「刷新预览 ↻」后确认写入', 'ok');
+      };
+    });
 
     // 就地编辑：字段输入 → 写回草稿（先改数，提交前统一刷新预览重签令牌）
     $('#__pvBody').addEventListener('input', e => {
@@ -1037,6 +1076,7 @@ function showMultiPreview(bills, extra) {
     purchase_return: '采购入库单', sale_return: '销售出库单',
   };
 
+  const suggAll = (extra.check && extra.check.patches_suggested) || [];
   const st = {
     source: extra.source || 'ai',
     rawText: extra.rawText || '',
@@ -1048,6 +1088,7 @@ function showMultiPreview(bills, extra) {
       confirm_token: b.confirm_token || '',
       ai: b.ai || (b.preview && b.preview.ai) || {},
       attach: (b.attach || []).slice(),
+      suggestions: (b.suggestions || suggAll.filter(p => Number(p.bill_index || 0) === i)).slice(),
       collapsed: i > 0,
       dirty: false,
       state: 'open',        // open | committed | failed
@@ -1124,9 +1165,20 @@ function showMultiPreview(bills, extra) {
       return findExact(partyPool(d.biz), d.party)
         ? '<span class="tag tag-ok">已有</span>' : '<span class="tag tag-new">将新建</span>';
     };
+    const suggs = b.suggestions || [];
+    const suggHtml = suggs.length ? `
+      <div class="sugg-bar">
+        <b>💡 校验参考建议（未自动改草稿，点选后套用）：</b>
+        <div class="sugg-list">${suggs.map((s, si) => {
+          const fl = s.field === 'price' ? '单价' : (s.field === 'depot' ? '仓库' : s.field);
+          const val = s.field === 'price' ? '￥' + s.value : s.value;
+          return `<button type="button" class="sugg-chip" data-applysugg="${b.idx}:${si}">${esc(fl)}建议 ${esc(String(val))}${s.reason ? ' · ' + esc(s.reason) : ''} <b>一键采纳</b></button>`;
+        }).join('')}</div>
+      </div>` : '';
     return `
       <div data-errs="${b.idx}">${errs.length ? `<div class="alert alert-error"><b>无法提交：</b><br>${errs.map(esc).join('<br>')}</div>` : ''}</div>
       ${aiFlag ? `<div class="alert ${ai.confidence === 'low' ? 'alert-warn' : 'alert-info'}"><b>AI 提示（置信度：${esc(ai.confidence || '—')}）：</b>${esc(ai.note || '')}${(ai.problems || []).length ? '<br>解析问题：' + ai.problems.map(esc).join('；') : ''}</div>` : ''}
+      ${suggHtml}
       ${(p.duplicate && p.duplicate.hit) ? `<div class="alert alert-warn"><b>⚠ 疑似重复录入：</b><br>${(p.duplicate.matches || []).map(m => `近 ${p.duplicate.window_minutes} 分钟已有 <b>${esc(m.number)}</b>（${esc(m.time)}，${esc(m.party)}，${(m.hits || []).map(h => esc(h.name) + '×' + h.qty).join('、')}）`).join('<br>')}<br>若这是同一笔业务，请先核对上面的单号，避免重复入库/出库。</div>` : ''}
       ${toCreate.length ? `<div class="alert alert-warn"><b>⚠ 将自动新建：</b>${toCreate.map(esc).join('；')}</div>` : ''}
       ${warns.length ? `<div class="alert alert-info"><b>提醒：</b><br>${warns.map(esc).join('<br>')}</div>` : ''}
@@ -1191,11 +1243,10 @@ function showMultiPreview(bills, extra) {
     const one = (b.preview.errors || [])[0];
     const sel = $(`.m-sel[data-sel="${i}"]`);
     const lockSel = stat === 'blocked' || stat === 'committed';
+    const isChecked = lockSel ? (stat === 'committed') : (sel ? sel.checked : true);
     el.innerHTML = `
       <div class="m-card-hd" data-toggle="${i}">
-        <input class="m-sel" data-sel="${i}" type="checkbox" ${lockSel ? 'disabled' : ''}
-          ${sel && sel.checked !== undefined ? (sel.checked && !lockSel ? 'checked' : '') : (!lockSel ? 'checked' : '')}
-          ${lockSel ? (stat === 'committed' ? 'checked' : '') : 'checked'}>
+        <input class="m-sel" data-sel="${i}" type="checkbox" ${lockSel ? 'disabled' : ''} ${isChecked ? 'checked' : ''}>
         <span class="m-idx">#${i + 1}</span>
         <span class="m-title">${esc((BIZ[b.draft.biz] || {}).label || b.draft.biz || '')} · ${esc(b.draft.party || '？')} · ${(b.draft.items || []).length} 行</span>
         <span class="m-status ${stat}">${STATUS_ZH[stat]}${stat === 'blocked' && one ? '：' + esc(one) : ''}</span>
@@ -1350,6 +1401,24 @@ function showMultiPreview(bills, extra) {
 
     $(`[data-refresh="${i}"]`, el).onclick = () => refreshBill(i);
     $(`[data-commitone="${i}"]`, el).onclick = () => commitOne(i);
+    $$(`[data-applysugg]`, el).forEach(btn => {
+      btn.onclick = () => {
+        const parts = (btn.dataset.applysugg || '').split(':');
+        const bi = +parts[0], si = +parts[1];
+        const sb = st.bills[bi];
+        const sg = sb && sb.suggestions && sb.suggestions[si];
+        if (!sg) return;
+        if (sg.field === 'depot') {
+          sb.draft.depot = String(sg.value || '');
+        } else if (sg.field === 'price') {
+          const ii = Number(sg.item_index || 0);
+          if (sb.draft.items && sb.draft.items[ii]) sb.draft.items[ii].price = num(sg.value);
+        }
+        sb.suggestions.splice(si, 1);
+        sb.dirty = true;
+        refreshBill(bi, true);
+      };
+    });
     const rv = $(`[data-reverse="${i}"]`, el);
     if (rv) rv.onclick = () => reverseBill(i);
     const rt = $(`[data-retry="${i}"]`, el);

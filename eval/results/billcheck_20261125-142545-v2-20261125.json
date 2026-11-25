@@ -1,0 +1,76 @@
+{
+ "summary": {
+  "corpus_version": "billcheck-v1-20261116",
+  "model": "hy4",
+  "n": 4,
+  "acc": 0.75,
+  "latency_avg_s": 15.07,
+  "tokens_avg": 4336
+ },
+ "results": [
+  {
+   "id": "b1",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 14.84,
+   "tokens": 4025,
+   "applied": [],
+   "rejected": [],
+   "clarify": "「可乐」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」（系统查到参考价：4元（habit_defaults 历史单价可乐 4.0 元/瓶，与本单单位瓶一致））",
+   "error": ""
+  },
+  {
+   "id": "b2",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 9.12,
+   "tokens": 3386,
+   "applied": [],
+   "rejected": [],
+   "clarify": "「可乐」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」（系统查到参考价：3.5元（last_price 查得美宜佳该商品最近进价 3.5 元/瓶（2026-11-22，100 瓶），单位与本单一致））",
+   "error": ""
+  },
+  {
+   "id": "b3",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "applied_min": false,
+    "applied:price": false,
+    "steps_min": true
+   },
+   "latency_s": 22.36,
+   "tokens": 5072,
+   "applied": [],
+   "rejected": [],
+   "clarify": "「方便面」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  },
+  {
+   "id": "b4",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "applied_min": true,
+    "no_applied:price": true,
+    "steps_min": true
+   },
+   "latency_s": 13.98,
+   "tokens": 4861,
+   "applied": [],
+   "rejected": [],
+   "clarify": "「牛皮纸」的单价没提到——是赠品按 0 元入账，还是补充单价？可直接回复如「3块5一瓶」",
+   "error": ""
+  }
+ ]
+}

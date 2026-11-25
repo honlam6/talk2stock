@@ -18,87 +18,12 @@ from .erp import get_client, parallel
 PROMPT_VERSION = "unified-v1-20261119"
 
 # --------------------------------------------------------------------------
-# 第 1 层：规则直答（0 token）。只收录无参数的统计意图，带参数的查询
-# （如商品库存，需要抽商品名）一律走 agent loop。
+# 复合问题拆解提示：只拆分真正并列的多个子问题（避免把「可乐还有多少库存」里的「还有」误拆）
 # --------------------------------------------------------------------------
-_RULES = [
-    (r"今天.*(买|卖|采购|销售|进货|出货|营收|流水).*(多少|几)", "today_stats"),
-    (r"(本月|这个月|当月).*(买|卖|采购|销售|营收|流水).*(多少|几)", "month_stats"),
-    (r"谁欠我|我欠谁|应收应付|欠款情况|欠了多少", "debts"),
-    (r"(最近|最新).{0,4}(的单|单据|录了哪些|账单|流水)", "recent_bills"),
-    (r"(什么|哪些)(货|商品|东西).{0,6}(快没|缺|不够|要补)", "low_stock"),
-    (r"(库存|货).{0,8}(值多少钱|总值|货值|价值多少)", "stock_value"),
-]
-
-
-def _master_names(erp):
-    """主数据名集合（归一化，len>=2），供规则路由的实体护栏。读缓存列表，成本可忽略。"""
-    names = set()
-    try:
-        for row in (erp.materials() or []):
-            n = str(row.get("name") or "").strip()
-            if len(n) >= 2:
-                names.add(erp._norm(n))
-        for ptype in ("供应商", "客户"):
-            for row in (erp.suppliers(ptype) or []):
-                n = str(row.get("supplier") or "").strip()
-                if len(n) >= 2:
-                    names.add(erp._norm(n))
-    except Exception:
-        pass
-    return names
-
-
-def _rule_route(text, erp=None):
-    """命中返回 (tool, {})，未命中返回 None。
-
-    三道护栏：长句（>24 字）、复合意图（含「另外/还有/顺便」等连接词）、
-    实体参数（文本含主数据名——「电池今天卖了多少」today_stats 答不了「电池」，
-    v1 评测实测截胡：参数化问题一律交 agent loop 抽参）。
-    规则直答只服务无参数的整句统计问句，宁缺勿滥。
-    """
-    t = (text or "").strip()
-    if not t or len(t) > 24:
-        return None
-    if re.search(r"另外|还有|以及|顺便|然后|同时|再问|还想知道", t):
-        return None
-    if erp is not None:
-        tn = erp._norm(t)
-        for name in _master_names(erp):
-            if name and name in tn:
-                return None
-    for pat, tool in _RULES:
-        if re.search(pat, t):
-            return tool, {}
-    ent = _master_entity(t)
-    if ent:
-        return "master_count", {"entity": ent}
-    return None
-
-
-# 主数据计数问句（「有多少个供应商」）——必须保守：带买卖/金额/欠/库存等
-# 动词的一律不截胡，交给 agent loop（「这个月卖了多少商品」问的是销量不是商品总数）。
-_MASTER_ENTITIES = "供应商|客户|商品|产品|仓库|账户|单位|收支项目|分类"
-_MASTER_EXCLUDE = re.compile(r"买|卖|采购|销售|进货|出货|营收|流水|钱|元|金额|欠|库存|值|录|单")
-
-
-def _master_entity(t):
-    if not re.search(r"(多少|几)", t):
-        return None
-    if _MASTER_EXCLUDE.search(t):
-        return None
-    hits = re.findall(_MASTER_ENTITIES, t)
-    # 复合问题（「供应商和客户各有几家」）一律交给 agent loop 用 SQL 一次查全——
-    # 规则直答只服务单一实体，宁缺勿滥（历史教训：复合问句被截胡只答一半）。
-    if len(set(hits)) != 1:
-        return None
-    return hits[0]
-
-
 def _compound_hints(text):
     """复合问题：把子问题显式列成清单注入 goal——实测仅靠规则约束模型仍会
     只查一半就作答（"库存总值未取到"式偷懒），显式清单是最可靠的干预。"""
-    parts = re.split(r"另外|还有|以及|顺便|然后|同时", text)
+    parts = re.split(r"另外|以及|顺便|然后|同时|还有(?!(?:多少|几|吗|没有|剩))", text or "")
     parts = [p.strip(" ？?，。,") for p in parts if p.strip(" ？?，。,")]
     if len(parts) > 1:
         return ("\n\n# 该问题包含 %d 个子问题，每个都必须先用工具取证、全部查完才能作答：\n"
@@ -250,16 +175,19 @@ def _procurement_suggest(args, erp):
 
 def _master_count(args, erp):
     """主数据计数（走 ERP REST 业务口径：自动排除软删除/停用档案）。"""
-    ent = str(args.get("entity") or "").strip()
+    raw = str(args.get("entity") or args.get("kind") or "").strip()
+    alias = {"supplier": "供应商", "customer": "客户", "material": "商品", "product": "商品",
+             "depot": "仓库", "warehouse": "仓库", "account": "账户", "unit": "单位", "category": "分类"}
+    ent = alias.get(raw.lower(), raw) or "商品"
     fetch = {
         "供应商": lambda: erp.suppliers("供应商"),
         "客户": lambda: erp.suppliers("客户"),
-        "商品": erp.materials, "产品": erp.materials,
-        "仓库": erp.depots, "账户": erp.accounts,
-        "单位": erp.units, "分类": erp.categories,
-        "收支项目": erp.in_out_items,
+        "商品": lambda: erp.materials(), "产品": lambda: erp.materials(),
+        "仓库": lambda: erp.depots(), "账户": lambda: erp.accounts(),
+        "单位": lambda: erp.units(), "分类": lambda: erp.categories(),
+        "收支项目": lambda: erp.in_out_items(),
     }
-    rows = (fetch.get(ent) or erp.materials)() or []
+    rows = (fetch.get(ent) or fetch["商品"])() or []
     unit = {"供应商": "家", "客户": "家", "商品": "种", "产品": "种",
             "分类": "类"}.get(ent, "个")
     def label(r):
@@ -336,32 +264,25 @@ def _query_bills(args, erp):
     return data, "查到 %d 张：%s。" % (len(rows), lines)
 
 
-# 规则直答层允许的工具
-_RULE_TOOLS = {
-    "today_stats": _today_stats, "month_stats": _month_stats, "debts": _debts,
-    "recent_bills": _recent_bills, "low_stock": _low_stock, "stock_value": _stock_value,
-    "master_count": _master_count,
-}
-
-
 # --------------------------------------------------------------------------
 # supervisor 写路由（ADR-10）：录单/下单需求 → 起草单据草稿。
 # 写权限边界在这里划死：本函数绝不写库，只产出「预览 + 逐单确认令牌」；
 # 令牌与对话录单共用同一闸门（gate.issue，与草稿内容哈希绑定），真正写入
 # 必须由用户在确认卡上确认（/api/commit 校验令牌）——agent 自主性到草稿为止。
 # --------------------------------------------------------------------------
-DRAFT_TEXT_MAX = 1000   # 与多单解析口径一致（「；」分段一段话多单）
-# 草稿工具只管「新建」：改/删/调整类请求即使模型误路由也在这里拦下（防把
-# 「把可乐库存改成999」解析成一张出货 999 的单——工具层护栏，不信任 prompt 单层约束）
+DRAFT_TEXT_MAX = 1000   # 用户消息上限（与多单解析口径一致）
+DRAFT_ATTACH_TEXT_MAX = 6000   # 带文本附件（PDF/DOCX/TXT）时的合并上限
 # 草稿工具只管「新建」：改/删/调整已有数据在这里拦下；修订尚未写入的草稿例外。
 _DRAFT_DENY = re.compile(r"(已有|现存|库存|单据|记录|档案).{0,6}(改|删|修改|更新|作废|冲销|调整|撤销|红冲)|(改|删|修改|更新|作废|冲销|调整|撤销|红冲).{0,6}(已有|现存|库存|单据|记录|档案)")
 
 
 def _draft_order(args, erp, on_event=None, images=None, previous_draft=None, attachments=None):
-    text = str(args.get("text") or "").strip()
+    raw_user_text = str(args.get("text") or "").strip()
+    text = raw_user_text
     images = [str(x) for x in (args.get("images") or images or [])[:4]]
     attachments = [x for x in (attachments or []) if isinstance(x, dict)]
     selected = None
+    has_text_attach = False
     if attachments:
         from . import attachments as attachmod
         selector = args.get("attachment") or args.get("attachment_id") or ""
@@ -379,17 +300,18 @@ def _draft_order(args, erp, on_event=None, images=None, previous_draft=None, att
         if selected.get("kind") == "image" and selected.get("data_url"):
             images = [selected["data_url"]]
         if selected.get("kind") == "text" and selected.get("text"):
+            has_text_attach = True
             text = (text + "\n\n【附件「%s」的内容】\n%s" % (
-                selected.get("name"), selected.get("text")))[:DRAFT_TEXT_MAX]
+                selected.get("name"), selected.get("text")))[:DRAFT_ATTACH_TEXT_MAX]
     if not text and images:
         text = "请把图片中的业务内容整理成单据草稿。"
     if not text:
         return ({"error": "缺少 text 参数（用户的录单原话）"},
                 "draft_order 需要 text 参数：把用户的录单需求原话传进来。")
-    if _DRAFT_DENY.search(text):
-        return ({"refused": "modification_not_supported", "text": text},
+    if _DRAFT_DENY.search(raw_user_text or text):
+        return ({"refused": "modification_not_supported", "text": raw_user_text or text},
                 "起草工具只能新建单据，不能修改或删除已有数据——请向用户说明。")
-    if len(text) > DRAFT_TEXT_MAX:
+    if not has_text_attach and len(text) > DRAFT_TEXT_MAX:
         return ({"error": "内容过长（%d 字，上限 %d）" % (len(text), DRAFT_TEXT_MAX)},
                 "录单内容太长（上限 %d 字），请让用户分次录入。" % DRAFT_TEXT_MAX)
     from . import billcheck as bcmod
@@ -407,10 +329,12 @@ def _draft_order(args, erp, on_event=None, images=None, previous_draft=None, att
                     "bills": [{"confidence": "medium", "note": "", "problems": d.get("problems") or []}
                               for d in tr.get("drafts") or []],
                     "clarify": None, "count": len(drafts)}
-            check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username())
+            check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username(),
+                                          on_event=on_event, meta=meta)
         elif images:
             drafts, meta = llmmod.parse_images(images, text, erp)
-            check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username())
+            check = bcmod.check_and_patch(drafts, erp, operator=cfgmod.current_username(),
+                                          on_event=on_event, meta=meta)
         else:
             parsed = bcmod.parse_and_check(
                 text, erp, operator=cfgmod.current_username(), prev_draft=previous_draft,
@@ -492,6 +416,9 @@ def _tools(erp, on_event=None, images=None, previous_draft=None, attachments=Non
                          "run": bind(_recent_bills)},
         "stock_value": {"desc": "库存里的货总共值多少钱", "args_hint": "{}",
                         "run": bind(_stock_value)},
+        "master_count": {"desc": "查系统里有多少个供应商/客户/商品/仓库/账户/单位/分类（一步出准确数，排除停用和软删除）",
+                         "args_hint": '{"entity":"供应商|客户|商品|仓库|账户|单位|分类|收支项目"}',
+                         "run": bind(_master_count)},
         "search_docs": {"desc": "查操作文档（怎么录单/什么字段必填/术语解释等概念问题）",
                         "args_hint": '{"query":"检索词"}',
                         "run": lambda a: rmod.search_docs(str(a.get("query") or ""))},
@@ -518,7 +445,7 @@ def _tools(erp, on_event=None, images=None, previous_draft=None, attachments=Non
 
 
 # --------------------------------------------------------------------------
-# 入口：三层递进
+# 入口：统一业务 Agent 循环
 # --------------------------------------------------------------------------
 def _conversation_context(history):
     """有界会话记忆：保留意图与草稿状态，不回放确认令牌或大载荷。"""
@@ -566,7 +493,8 @@ def ask(text, erp=None, on_event=None, history=None, images=None, previous_draft
         attach_note = attachmod.context_digest(attachments)
     image_note = "# 本次输入附有单据图片\ndraft_order 工具已能读取本次图片；若用户要录入图片中的业务，直接调用该工具。" if images and not attachments else ""
     context = "\n\n".join(x for x in (_context(erp), _conversation_context(history), attach_note, image_note) if x)
-    out = agentmod.run_agent(text, _tools(erp, on_event=_emit, images=images,
+    goal = text + _compound_hints(text)
+    out = agentmod.run_agent(goal, _tools(erp, on_event=_emit, images=images,
                                          previous_draft=previous_draft,
                                          attachments=attachments), max_steps=8,
                              context_block=context, on_event=_emit)

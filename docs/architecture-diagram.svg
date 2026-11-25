@@ -76,7 +76,7 @@
     <rect x="588" y="410" width="34" height="7" rx="3.5" fill="#059669"/>
     <text x="588" y="446" font-size="16.5" font-weight="700" fill="#065F46">ask.py</text>
     <text x="588" y="467" font-size="12.5" fill="#64748B">三层问答路由</text>
-    <text x="588" y="494" font-size="12.8" fill="#334155">· 规则直答 0 token 秒回</text>
+    <text x="588" y="494" font-size="12.8" fill="#334155">· 确定性统计工具 · 一步直答</text>
     <text x="588" y="513.5" font-size="12.8" fill="#334155">· 复合问题多步链式取证</text>
     <text x="588" y="533" font-size="12.8" fill="#334155">· 数字接地 · 模板句兜底</text>
     <text x="588" y="552.5" font-size="12.8" fill="#334155">· 绝不空手而归</text>

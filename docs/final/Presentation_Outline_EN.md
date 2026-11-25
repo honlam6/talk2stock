@@ -130,14 +130,14 @@ The deck is a demo-led product/technical presentation, not a report walkthrough.
 **Purpose:** show that the final architecture is the result of iteration, not a one-off design.
 
 **On slide**
-- Timeline: Transactional prototype (10–19 Oct) → Agent layer + evaluation (24 Oct–9 Nov) → Specialist agents (16 Nov) → Unified boundary (19–22 Nov).
-- Bottom strip: 93 commits, two merges, `feature/unified-agent`.
-- Metrics per phase: 98.3% historical parse; ask 76.5%→94.1%; specialist suites 4/4, 4/4, 3/3 and debt 15,600=15,600; final 183 tests, 5/5 smoke.
+- Timeline: Transactional prototype (10–19 Oct) → Agent layer + evaluation (24 Oct–9 Nov) → Specialist agents & `main` merge (16–24 Nov) → Fact/suggestion separation & stabilization (25 Nov, ADR-16).
+- Bottom strip: 116+ commits merged into `main`, deployed on the public server.
+- Metrics per phase: **236/236** offline tests; **71/71 = 100.0%** full-chain bills (0 hallucinations, 11.19 → 4.92 s); **4/4** billcheck; **33/34 = 97.1%** Q&A (compound 67% → 100%); **5/5** smoke (draft 33.71 → 10.24 s); debt SQL 15,600 = 15,600.
 
 **Speaker script**
-“The repository has 93 commits over six weeks and only two merges. Each generation removed a false shortcut: rules became tools, one-shot extraction got validation, free-form writes were replaced by a human token, and many entries became one conversation. The final branch is not merged into main, so this is a proposed final, not a production claim.”
+“The repository has 116+ commits over six weeks, merged into `main` and deployed live. Every generation solved a real engineering failure: rules became tools, silent patch overwrites became separated facts vs. one-click grounded suggestions, free-form writes became one-time human tokens, and fragmented pages became one conversation. Notably, adding the validation agent first dropped accuracy from 96.7% to 88.7%–91.5% and tripled latency to 11.2 s — diagnosing and fixing that via fact/suggestion separation, terminal tools, and a deterministic fast-path lifted full-chain accuracy to 71/71 = 100% while cutting latency in half.”
 
-**Answer if asked about branch strategy:** `feature/agent-suite` was pushed but not merged; `feature/unified-agent` is based on it and adds attachments, unified UI, and the final evidence.
+**Answer if asked how it became both more accurate and faster:** Complete high-confidence bills run a deterministic stock/habit pre-check fast-path (0 extra LLM turns), while incomplete bills run the full multi-step validation agent; suggestions are surfaced as one-click chips rather than silently mutating extracted text.
 
 ## Slide 9 — Technical solution: architecture (6:50–7:45)
 
@@ -174,11 +174,11 @@ The deck is a demo-led product/technical presentation, not a report walkthrough.
 
 **On slide**
 - Pilot chart: A 88.00→48.45 s; B 86.48→50.29 s; 45.0%/41.8%; 5→0 interruptions.
-- Evidence strip: 183/183 tests; 5/5 unified smoke; two files→two drafts; 0 unconfirmed writes.
-- Limitations: 2 participants, n=2/cell, order only partially counterbalanced; five smoke cases not a full 71-case rerun; external model endpoint.
+- Evidence strip: **236/236 tests**; **71/71 full-chain bills** (0 hallucinations, 4.92 s); **33/34 Q&A** (compound 100%); **4/4 billcheck**; **5/5 unified smoke**; 0 unconfirmed writes.
+- Limitations: 2 participants, n=2/cell, order only partially counterbalanced; external model endpoint; `/depotHead/list` detail pagination limit (debt aggregation already closed via SQL); no local OCR or legacy `.doc/.xls`.
 
 **Speaker script**
-“These are the numbers we can defend. The pilot is directional; the smoke suite is five core behaviours; the model endpoint is external. The important evidence is the boundary: an acceptance write was performed only after confirmation and then rolled back through seed. We do not claim production scale or statistical significance.”
+“These are the numbers we can defend end to end: 236 offline tests, 71/71 full-chain bill parsing, 33/34 Q&A with 100% compound accuracy, and 5/5 unified smoke. The pilot remains directional (n=2), not statistical proof; the model endpoint is external; and every write stops at the human confirmation gate.”
 
 ## Slide 12 — Close (9:40–10:00)
 
@@ -194,7 +194,7 @@ The deck is a demo-led product/technical presentation, not a report walkthrough.
 
 - Use seeded data: `python3 eval/seed_demo.py --yes`.
 - Start app on `:8090`; check `/api/master` returns 200.
-- Keep screenshots `docs/final/assets/ui_duo.png` and `ui-confirm-60.png` open if live fails.
+- Keep screenshots `docs/final/assets/v2/01-home.png`, `02-answer.png`, `03b-confirm.png`, and `07-diagnosis.png` open if live fails.
 - Do not write during the presentation unless required; if writing, restore seed afterwards.
 - If a model request is slow: explain the draft path involves extraction + validation + token issuance; do not claim an immediate answer.
 

@@ -1,0 +1,604 @@
+{
+ "summary": {
+  "corpus_version": "ask_cases",
+  "model": "hy4",
+  "n": 34,
+  "acc": 0.6765,
+  "by_type": {
+   "rule": 0.0,
+   "agent": 0.875,
+   "compound": 1.0,
+   "boundary": 1.0
+  },
+  "route_acc": 0.735,
+  "latency_avg_s": 10.52,
+  "latency_p95_s": 64.69,
+  "agent_latency_avg_s": 8.88,
+  "agent_tokens_avg": 6956,
+  "rule_tokens": 87089
+ },
+ "results": [
+  {
+   "id": "r1",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": false
+   },
+   "latency_s": 4.26,
+   "tokens": 5316,
+   "route": "agent",
+   "grounded": true,
+   "answer": "今天没有采购记录，销售了 3 笔，共 222 元。",
+   "error": ""
+  },
+  {
+   "id": "r2",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": true
+   },
+   "latency_s": 5.14,
+   "tokens": 5367,
+   "route": "agent",
+   "grounded": true,
+   "answer": "本月采购金额 3270.00 元（6 笔），销售金额 1062.00 元（4 笔），差额 -2208.00 元。",
+   "error": ""
+  },
+  {
+   "id": "r3",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": true,
+    "contains": true
+   },
+   "latency_s": 5.7,
+   "tokens": 5337,
+   "route": "agent",
+   "grounded": true,
+   "answer": "目前欠你钱的是：永辉超市，欠款 100 元。你这边没有欠别人的款项。",
+   "error": ""
+  },
+  {
+   "id": "r4",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": true,
+    "contains": true
+   },
+   "latency_s": 87.82,
+   "tokens": 40873,
+   "route": "agent",
+   "grounded": true,
+   "answer": "最近 6 张单：2026-11-24 出库·销售 校园超市 230.00元；2026-11-24 入库·销售退货 永辉超市 8.00元；2026-11-23 出库·销售 张记便利店 440.00元；2026-11-23 出库·销售 永辉超市 400.00元；2026-11-22 入库·采购 美宜佳 ",
+   "error": ""
+  },
+  {
+   "id": "r5",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": false,
+    "contains": true
+   },
+   "latency_s": 5.89,
+   "tokens": 5729,
+   "route": "agent",
+   "grounded": true,
+   "answer": "目前有12种商品库存告急（阈值10），其中6种已完全断货：6号电池、PPR管、螺丝、纸箱库存均为0；牛皮纸和方便面刚好剩10（等于警戒线）。建议尽快安排补货。",
+   "error": ""
+  },
+  {
+   "id": "r6",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": true
+   },
+   "latency_s": 5.2,
+   "tokens": 5259,
+   "route": "agent",
+   "grounded": true,
+   "answer": "当前库存共 412 件商品，总价值为 2381 元。",
+   "error": ""
+  },
+  {
+   "id": "r7",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": true
+   },
+   "latency_s": 9.95,
+   "tokens": 8533,
+   "route": "agent",
+   "grounded": true,
+   "answer": "系统里共有 **4** 个供应商。",
+   "error": ""
+  },
+  {
+   "id": "r8",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": true
+   },
+   "latency_s": 5.95,
+   "tokens": 5355,
+   "route": "agent",
+   "grounded": true,
+   "answer": "系统里共有 **12** 种商品。",
+   "error": ""
+  },
+  {
+   "id": "r9",
+   "type": "rule",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": false,
+    "numbers": false
+   },
+   "latency_s": 5.74,
+   "tokens": 5320,
+   "route": "agent",
+   "grounded": true,
+   "answer": "目前系统中没有应付账款记录，你当前不欠任何人钱。",
+   "error": ""
+  },
+  {
+   "id": "a1",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "grounded": true
+   },
+   "latency_s": 5.49,
+   "tokens": 5375,
+   "route": "agent",
+   "grounded": true,
+   "answer": "可乐当前库存共 **52 瓶**，全部在成品仓；原料仓及其他仓库均为 0。",
+   "error": ""
+  },
+  {
+   "id": "a2",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "grounded": true
+   },
+   "latency_s": 4.43,
+   "tokens": 5302,
+   "route": "agent",
+   "grounded": true,
+   "answer": "可乐在成品仓还剩 **52 瓶**。",
+   "error": ""
+  },
+  {
+   "id": "a3",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "not_contains": true,
+    "grounded": true
+   },
+   "latency_s": 5.58,
+   "tokens": 5332,
+   "route": "agent",
+   "grounded": true,
+   "answer": "矿泉水在原料仓当前库存为 **0 瓶**，已经没有了，建议尽快安排补货。",
+   "error": ""
+  },
+  {
+   "id": "a4",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "grounded": true
+   },
+   "latency_s": 3.94,
+   "tokens": 5354,
+   "route": "agent",
+   "grounded": true,
+   "answer": "牛皮纸当前总库存 10 卷，全部在原料仓，成品仓及其他仓库均为 0。",
+   "error": ""
+  },
+  {
+   "id": "a5",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "grounded": true
+   },
+   "latency_s": 4.15,
+   "tokens": 5373,
+   "route": "agent",
+   "grounded": true,
+   "answer": "方便面目前还剩 **10箱**，全部在成品仓，其他仓库均为0。",
+   "error": ""
+  },
+  {
+   "id": "a6",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "contains": true,
+    "grounded": true
+   },
+   "latency_s": 21.77,
+   "tokens": 13291,
+   "route": "agent",
+   "grounded": true,
+   "answer": "螺丝有两个型号：M10×30、M8×20，请问您要查哪个？",
+   "error": ""
+  },
+  {
+   "id": "a7",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "contains": true,
+    "grounded": true
+   },
+   "latency_s": 8.14,
+   "tokens": 5865,
+   "route": "agent",
+   "grounded": true,
+   "answer": "当前库存紧张的商品共有 **8 种**（阈值≤10）：\n\n| 商品 | 单位 | 当前库存 |\n|------|------|----------|\n| 6号电池 | 节 | 0 |\n| PPR管 | 根 | 0 |\n| 螺丝 | 盒 | 0 |\n| 纸箱 | 个 | 0 |\n| 牛皮纸 | 卷 |",
+   "error": ""
+  },
+  {
+   "id": "a8",
+   "type": "agent",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": false,
+    "contains": false,
+    "grounded": true
+   },
+   "latency_s": 6.51,
+   "tokens": 5605,
+   "route": "agent",
+   "grounded": true,
+   "answer": "系统里没有记录各客户的欠款金额（应收字段均为空），无法判断谁欠款最多。建议检查是否已录入应收单据，或联系管理员确认数据是否完整。",
+   "error": ""
+  },
+  {
+   "id": "a9",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "contains": true,
+    "tools_any": true,
+    "grounded": true
+   },
+   "latency_s": 6.34,
+   "tokens": 6095,
+   "route": "agent",
+   "grounded": true,
+   "answer": "上次采购可乐是 **2026-11-24**，供应商是 **美宜佳**，采购了可乐 100 瓶（同单还进了矿泉水 200 瓶），合计 750 元。",
+   "error": ""
+  },
+  {
+   "id": "a10",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "tools_any": true,
+    "grounded": true
+   },
+   "latency_s": 5.35,
+   "tokens": 5910,
+   "route": "agent",
+   "grounded": true,
+   "answer": "在 jshERP 里录单的核心要点：\n\n1. **每笔业务一张单**——不像管家婆可以直接改数字，所有进销存变动都要通过录单完成，好处是每笔有据可查、错了能追溯。\n2. **单据分「保存」和「审核」两步**——保存只是录入草稿，审核后才真正生效、影响库存和账目。\n3. **建议给业务员设「只能录单不",
+   "error": ""
+  },
+  {
+   "id": "a11",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "grounded": true
+   },
+   "latency_s": 3.55,
+   "tokens": 5370,
+   "route": "agent",
+   "grounded": true,
+   "answer": "系统里一共录了 9 张单据。",
+   "error": ""
+  },
+  {
+   "id": "a12",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "contains": true,
+    "grounded": true
+   },
+   "latency_s": 9.26,
+   "tokens": 5658,
+   "route": "agent",
+   "grounded": true,
+   "answer": "今天校园超市买了两样货：电池 30 节、矿泉水 50 瓶，合计 230 元（单据号 00000000795）。",
+   "error": ""
+  },
+  {
+   "id": "a13",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "grounded": true
+   },
+   "latency_s": 7.46,
+   "tokens": 5587,
+   "route": "agent",
+   "grounded": true,
+   "answer": "今天电池卖了 30 节，出库单号 00000000795，卖给校园超市（该单还包含矿泉水 50 瓶，整单金额 230 元）。",
+   "error": ""
+  },
+  {
+   "id": "a14",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "grounded": true
+   },
+   "latency_s": 15.77,
+   "tokens": 12753,
+   "route": "agent",
+   "grounded": true,
+   "answer": "螺丝当前库存为 **0 盒**，各仓库（原料仓、成品仓、仓库1、仓库2、仓库3）均无存货。",
+   "error": ""
+  },
+  {
+   "id": "a15",
+   "type": "agent",
+   "ok": false,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": false,
+    "contains": false,
+    "grounded": true
+   },
+   "latency_s": 7.65,
+   "tokens": 6762,
+   "route": "agent",
+   "grounded": true,
+   "answer": "最近一张单是 **00000000796**，类型为「入库·销售退货」，往来单位是永辉超市，商品为可乐，数量 2，金额 8 元，日期 2026-11-24，状态已审核。",
+   "error": ""
+  },
+  {
+   "id": "a16",
+   "type": "agent",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "contains": true,
+    "grounded": true
+   },
+   "latency_s": 5.03,
+   "tokens": 5403,
+   "route": "agent",
+   "grounded": true,
+   "answer": "可乐在**成品仓**有库存，共 52 瓶。其他仓库（原料仓、仓库1、仓库2、仓库3）目前都没有可乐。",
+   "error": ""
+  },
+  {
+   "id": "c1",
+   "type": "compound",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "min_tools": true,
+    "grounded": true
+   },
+   "latency_s": 6.34,
+   "tokens": 7429,
+   "route": "agent",
+   "grounded": true,
+   "answer": "今天卖了 222 元，共 3 笔单据。当前库存共 412 件，总价值 2381 元。",
+   "error": ""
+  },
+  {
+   "id": "c2",
+   "type": "compound",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "grounded": true
+   },
+   "latency_s": 6.34,
+   "tokens": 7511,
+   "route": "agent",
+   "grounded": true,
+   "answer": "可乐剩 **52 瓶**（全部在成品仓），方便面剩 **10 箱**（全部在成品仓）。",
+   "error": ""
+  },
+  {
+   "id": "c3",
+   "type": "compound",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "numbers": true,
+    "contains": true,
+    "grounded": true
+   },
+   "latency_s": 64.69,
+   "tokens": 27352,
+   "route": "agent",
+   "grounded": true,
+   "answer": "张记便利店：方便面 10.0 箱；永辉超市：可乐 50.0 瓶、矿泉水 80.0 瓶。",
+   "error": ""
+  },
+  {
+   "id": "d1",
+   "type": "boundary",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "contains": true,
+    "contains_any": true,
+    "grounded": true
+   },
+   "latency_s": 8.82,
+   "tokens": 7464,
+   "route": "agent",
+   "grounded": true,
+   "answer": "系统里没有「雪碧」的商品记录，你可以确认一下商品名称是否不同，或者告诉我具体规格，我再帮你查。",
+   "error": ""
+  },
+  {
+   "id": "d2",
+   "type": "boundary",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "not_contains": true,
+    "contains_any": true,
+    "grounded": true
+   },
+   "latency_s": 5.69,
+   "tokens": 5356,
+   "route": "agent",
+   "grounded": true,
+   "answer": "可乐在仓库2的库存为 **0 瓶**，已经没有了。",
+   "error": ""
+  },
+  {
+   "id": "d3",
+   "type": "boundary",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "contains": true,
+    "no_tools": true,
+    "grounded": true
+   },
+   "latency_s": 1.6,
+   "tokens": 3412,
+   "route": "agent",
+   "grounded": true,
+   "answer": "我只能查本系统的进销存数据，比如『可乐还有多少库存』『本月卖了多少』『谁欠我钱』。",
+   "error": ""
+  },
+  {
+   "id": "d4",
+   "type": "boundary",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "contains": true,
+    "no_tools": true,
+    "grounded": true
+   },
+   "latency_s": 2.71,
+   "tokens": 3434,
+   "route": "agent",
+   "grounded": true,
+   "answer": "我只能查本系统的进销存数据，比如「可乐还有多少库存」「本月卖了多少」「谁欠我钱」。写诗不在我的能力范围内哦～",
+   "error": ""
+  },
+  {
+   "id": "d5",
+   "type": "boundary",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "contains_any": true,
+    "grounded": true
+   },
+   "latency_s": 3.45,
+   "tokens": 3471,
+   "route": "agent",
+   "grounded": true,
+   "answer": "智能助手只能查询和起草新单，不能修改或删除已有数据。如需调整可乐库存，请在系统中通过「其他入库」或「其他出库」单据进行库存调整。",
+   "error": ""
+  },
+  {
+   "id": "d6",
+   "type": "boundary",
+   "ok": true,
+   "checks": {
+    "ok": true,
+    "route": true,
+    "grounded": true
+   },
+   "latency_s": 1.82,
+   "tokens": 3436,
+   "route": "agent",
+   "grounded": true,
+   "answer": "我是 Talk2Stock 智能助手，专门帮你查本系统的进销存数据，比如「可乐还有多少库存」「本月卖了多少」「谁欠我钱」，也能帮你起草新的采购单、销售单等。有什么需要帮忙的？",
+   "error": ""
+  }
+ ]
+}

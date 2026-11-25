@@ -45,7 +45,7 @@ Talk2Stock 是一个面向真实 jshERP 的统一业务 Agent：用户在同一�
 
 ### 3.2 端到端真实验证
 
-- 离线测试：`python3 -I -m unittest discover -s tests`，183 项全绿。
+- 离线测试：`python3 -I -m unittest discover -s tests`，200 项全绿。
 - 模型连通：OpenRouter `deepseek/deepseek-v4.1-flash-1017` 真实返回 JSON，
   usage 非估算。
 - 浏览器验收：桌面 1440 与手机 390 均无横向溢出；图片/Excel 弹窗可打开；
