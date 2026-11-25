@@ -408,7 +408,7 @@ def official_stats(erp=None):
 
     # 金额与笔数：DB 可达时统一与 summary() 同源（含 year 笔数与退货拆分），
     # 彻底消除 buyIn/saleOut `total` 为商品种数以及 admin 下 trend 为空的问题。
-    stx = _stat_sql(today, m0, time.strftime("%Y"))
+    stx = _stat_sql(today, time.strftime("%Y-%m"), time.strftime("%Y"))
     if stx:
         for scope, src_key in (("today", "today"), ("month", "month_stat"), ("year", "year")):
             src = stx.get(src_key) or {}

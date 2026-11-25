@@ -168,6 +168,21 @@ class TestLedgerCalculations(unittest.TestCase):
             self.assertIn("status IN ('1','2','3')", w)
         ledgermod._FORCE_CACHE.update({"at": 0.0, "val": None})
 
+    def test_official_stats_passes_yyyy_mm_not_yyyy_mm_01(self):
+        seen = []
+        fake_erp = mock.MagicMock()
+        fake_erp._req.return_value = {"code": 200, "data": {}}
+        with mock.patch.object(rptmod, "_ops_sql", return_value={"wait": 0, "recv": 0, "pay": 0, "acc": 0, "acc_month": 0}), \
+             mock.patch.object(rptmod, "_stat_sql", side_effect=lambda t, m, y=None: seen.append((t, m, y)) or {
+                 "today": {"buy": 0, "sell": 0, "buy_n": 0, "sell_n": 0, "return_n": 0, "return_amt": 0, "profit": 0},
+                 "month_stat": {"buy": 100, "sell": 200, "buy_n": 1, "sell_n": 2, "return_n": 0, "return_amt": 0, "profit": 100},
+                 "year": {"buy": 100, "sell": 200, "buy_n": 1, "sell_n": 2, "return_n": 0, "return_amt": 0, "profit": 100},
+             }), \
+             mock.patch("core.ledger.monthly_trend", return_value={"buy": [], "sell": []}):
+            res = rptmod.official_stats(fake_erp)
+        self.assertEqual(len(seen[0][1]), 7)   # YYYY-MM
+        self.assertEqual(res["month"]["sell"], 200)
+
     def test_account_summary_ignores_stale_current_amount_and_avoids_double_count(self):
         def fake_q(sql, limit=5000):
             if "FROM jsh_account a" in sql or "FROM jsh_account WHERE" in sql:
