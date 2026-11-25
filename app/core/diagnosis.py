@@ -255,7 +255,9 @@ def diagnose(erp, operator="", on_event=None):
         tools, verdict_box = _tools(erp)
         out = agentmod.run_agent(
             goal, tools, max_steps=MAX_STEPS,
-            context_block="操作员：%s" % (operator or "（未登录）"),
+            context_block=("操作员：%s\n# SQL 口径：日期一律用 jsh_depot_head.oper_time（禁 create_time）；"
+                           "有效单据加 delete_flag='0' AND status IN ('1','2','3')；金额用 ABS() 并按 sub_type 分方向。"
+                           % (operator or "（未登录）")),
             on_event=on_event, prompt_template=DIAG_PROMPT,
             decision_max_tokens=DECISION_MAX_TOKENS)
     except Exception as e:

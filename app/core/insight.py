@@ -13,8 +13,7 @@ import time
 
 from . import config as cfgmod
 from . import llm as llmmod
-from .report import (summary, official_stats, stock_overview, recent_bills,
-                     day_stats, _safe_stock_map)
+from .report import summary, official_stats, stock_overview, recent_bills, _safe_stock_map
 from .erp import get_client
 
 PROMPT_VERSION = "insight-v1-20261024"
@@ -179,8 +178,8 @@ def _template_insights(f):
     st = f.get("stock") or {}
     if st.get("negative_kinds") or st.get("low_kinds"):
         out.append({"title": "库存风险",
-                    "detail": "%d 种负库存、%d 种低于安全库存 %s。" % (
-                        st.get("negative_kinds") or 0, st.get("low_kinds") or 0, st.get("threshold")),
+                    "detail": "%d 种负库存、%d 种低于安全库存。" % (
+                        st.get("negative_kinds") or 0, st.get("low_kinds") or 0),
                     "level": "warn"})
     return out[:4]
 

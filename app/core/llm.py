@@ -596,28 +596,38 @@ def _to_num(v, default=0.0):
     return float(m.group()) if m else default
 
 
-def _clean_name(name):
-    """把混进商品名的数量/单位剥掉。返回 (name, qty, unit)。
+def _clean_name_kind(name):
+    """把混进商品名的数量/单位剥掉。返回 (name, qty, unit, stripped_kind)。
 
-    只有「数字+量词」才算数量（3瓶可乐 / 可乐3瓶 / 电池100节）；
-    数字直接黏名词的是型号规格（6号电池 / 304不锈钢管 / 2.5平方电线 /
-    4分PPR管），一律保留——与 prompt v4 的规格保留规则同口径。"""
+    stripped_kind: "" | "prefix" | "suffix"。
+    注意：规格型号里常见的乘号/斜杠后尺寸（如「维达抽纸 3层*24包」「1.2m*100m」）
+    绝不能当成后缀数量剥掉。
+    """
     s = str(name or "").strip()
     qty = unit = None
+    kind = ""
     # 前缀式 "3瓶可乐" / "6 节 6号电池"：量词必选，剥掉的是数量
     m = re.match(rf"^({_NUM})\s*({'|'.join(UNITS)})\s*(.+)$", s)
     if m and m.group(3):
         qty = float(m.group(1))
         unit = m.group(2)
         s = m.group(3).strip()
-    # 后缀式 "可乐3瓶"
+        kind = "prefix"
+    # 后缀式 "可乐3瓶"——前面紧跟乘号/斜杠（3层*24包）或属于常见容量规格且前面非纯商品名时不剥
     m = re.match(rf"^(.+?)\s*({_NUM})\s*({'|'.join(UNITS)})$", s)
-    if m:
+    if m and not re.search(r"[*×✕xX/]$", m.group(1).strip()):
         s = m.group(1).strip()
         qty = qty or float(m.group(2))
         unit = unit or m.group(3)
+        kind = kind or "suffix"
     s = re.sub(r"[，,。.、]+$", "", s).strip()
     s = re.sub(r"^(的|了|个)+", "", s).strip()
+    return s, qty, unit, kind
+
+
+def _clean_name(name):
+    """把混进商品名的数量/单位剥掉。返回 (name, qty, unit)。"""
+    s, qty, unit, _ = _clean_name_kind(name)
     return s, qty, unit
 
 
@@ -650,9 +660,18 @@ def normalize(raw):
     for it in (raw.get("items") or []):
         if not isinstance(it, dict):
             continue
-        name, qty_in_name, unit_in_name = _clean_name(it.get("name"))
-        qty = _to_num(it.get("qty"), 0) or qty_in_name or 0
-        unit = str(it.get("unit") or unit_in_name or "个").strip() or "个"
+        raw_name = str(it.get("name") or "").strip()
+        raw_qty = _to_num(it.get("qty"), 0)
+        raw_unit = str(it.get("unit") or "").strip()
+        name, qty_in_name, unit_in_name, kind = _clean_name_kind(raw_name)
+        # 若 LLM 已给出明确数量，且仅触发了后缀剥离但后缀数字/单位与 qty/unit 不一致
+        # （例如「牛皮纸 80g」配 qty=10 卷），说明后缀是商品名规格，保留原商品名。
+        if kind == "suffix" and raw_qty > 0:
+            if qty_in_name != raw_qty or (raw_unit and unit_in_name != raw_unit):
+                name = re.sub(r"[，,。.、]+$", "", raw_name).strip()
+                qty_in_name, unit_in_name = None, None
+        qty = raw_qty or qty_in_name or 0
+        unit = raw_unit or unit_in_name or "个"
         price = _to_num(it.get("price"), 0)
         # 只给了总价的情况
         if not price and it.get("amount") and qty:

@@ -35,174 +35,49 @@ def _day(bill):
 
 
 def _debt_sql():
-    """欠款聚合直查 DB（P4 修复 / ADR-13）。
-
-    为什么不用 REST 单据列表算：①自适应翻页对 /depotHead/list 仍间歇失效
-    （260 张真欠款实测漏 23%，page2 空/整页重复随机出现）；②beginTime/endTime
-    时间过滤语义不稳定（宽窗全量、窄窗全空，与 oper_time/create_time 都对不上，
-    11-09 时间窗二分 sweep 未收敛的根因）。聚合数字本来就该在 DB 算——
-    口径：欠款 = 表头 total_price − change_amount（与 eval/stress_scale.py
-    真路径 ground truth 同一公式），仅审计单（status='1'）计入。
-    dbread 不可达时返回 None，调用方退回 REST 口径（宁可老口径也不空手）。"""
-    from . import dbread as dbmod
-    from . import config as cfgmod
-    user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
-    tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
-              % user.replace("'", "''"))
-    base_where = ("h.delete_flag='0' AND h.status='1' AND h.tenant_id=%s" % tenant)
+    """欠款聚合直查 DB（统一委托 ledger.debt_summary，含符号兼容与收付款核销）。"""
     try:
-        def _total(subs):
-            sql = ("SELECT COALESCE(SUM(GREATEST(h.total_price - h.change_amount, 0)), 0) AS total "
-                   "FROM jsh_depot_head h WHERE " + base_where +
-                   " AND h.sub_type IN (%s) AND (h.total_price - h.change_amount) > 0"
-                   % ",".join("'%s'" % x for x in subs))
-            data, _ = dbmod.sql_query({"sql": sql})
-            rows = data.get("rows") or []
-            return float(rows[0].get("total") or 0) if rows else 0.0
+        from . import ledger as ledgermod
+        return ledgermod.debt_summary()
+    except Exception:
+        return None
 
-        def _top(subs, n=6):
-            sql = ("SELECT s.supplier AS name, SUM(GREATEST(h.total_price - h.change_amount, 0)) AS amount "
-                   "FROM jsh_depot_head h JOIN jsh_supplier s ON s.id = h.organ_id WHERE " + base_where +
-                   " AND h.sub_type IN (%s) AND (h.total_price - h.change_amount) > 0 "
-                   "AND s.delete_flag='0' "
-                   "GROUP BY h.organ_id, s.supplier ORDER BY amount DESC LIMIT %d"
-                   % (",".join("'%s'" % x for x in subs), n))
-            data, _ = dbmod.sql_query({"sql": sql})
-            rows = data.get("rows") or []
-            return [{"name": r.get("name") or "（未填单位）", "amount": round(float(r.get("amount") or 0), 2)}
-                    for r in rows]
+
+def _stat_sql(today, month, year=None):
+    """经营金额与单据笔数直查 DB（统一委托 ledger.period_stats）。"""
+    try:
+        from . import ledger as ledgermod
+        return ledgermod.period_stats(today, month, year)
+    except Exception:
+        return None
+
+
+def _ops_sql():
+    """待审核 / 待收付款 / 真实账户余额——统一委托 ledger 计算。"""
+    try:
+        from . import ledger as ledgermod
+        ops = ledgermod.ops_counts()
+        debt = ledgermod.debt_summary()
+        acc = ledgermod.account_summary()
+        if ops is None and debt is None and acc is None:
+            return None
         return {
-            "debt_pay_total": round(_total(("采购",)), 2),
-            "debt_recv_total": round(_total(("销售", "零售")), 2),
-            "debt_pay": _top(("采购",)),
-            "debt_recv": _top(("销售", "零售")),
+            "wait": (ops or {}).get("wait_bills", 0),
+            "bill_total": (ops or {}).get("bill_total"),
+            "recv": (debt or {}).get("need_recv", 0),
+            "pay": (debt or {}).get("need_pay", 0),
+            "acc": (acc or {}).get("current", 0.0),
+            "acc_month": (acc or {}).get("month", 0.0),
         }
     except Exception:
         return None
 
 
-def _stat_sql(today, month):
-    """经营金额直查 DB（P5 修复）。
-
-    为什么不再用 REST 单据列表算：① /depotHead/list 把负的 totalPrice 返回成
-    绝对值——红冲（负数单）被当成正常正单累加，2026-11-24 实测 8 张冲销单
-    虚增采购额 61940 元；② 待审核单（status='0'）未过账却照样计入经营额。
-    DB 口径与 sql_query 工具同源：delete_flag='0' AND status='1'，金额取库里
-    带符号的 total_price，答辩现场可复算对账。
-    dbread 不可达时返回 None，调用方退回 REST 口径（宁可老口径也不空手）。"""
-    from . import dbread as dbmod
-    from . import config as cfgmod
-    user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
-    tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
-              % user.replace("'", "''"))
-    sql = ("SELECT h.sub_type AS st, DATE_FORMAT(h.oper_time,'%Y-%m-%d') AS d, "
-           "SUM(h.total_price) AS amt, "
-           "SUM(CASE WHEN h.total_price >= 0 THEN 1 ELSE 0 END) AS n_pos, "
-           "COUNT(*) AS n "
-           "FROM jsh_depot_head h "
-           "WHERE h.delete_flag='0' AND h.status='1' AND h.tenant_id=" + tenant + " "
-           "GROUP BY h.sub_type, d")
-    try:
-        data, _ = dbmod.sql_query({"sql": sql})
-        rows = data.get("rows") or []
-    except Exception:
-        return None
-    if not rows:
-        return None
-    acc = {
-        "today": {"buy": 0.0, "sell": 0.0, "buy_n": 0, "sell_n": 0,
-                  "return_n": 0, "return_amt": 0.0},
-        "month": {"buy": 0.0, "sell": 0.0, "buy_n": 0, "sell_n": 0,
-                  "return_n": 0, "return_amt": 0.0},
-        "all": {"buy": 0.0, "sell": 0.0},
-    }
-    total_n = 0
-    for r in rows:
-        st = str(r.get("st") or "")
-        d = str(r.get("d") or "")
-        amt = _f(r.get("amt"))
-        n = int(_f(r.get("n")))
-        n_pos = int(_f(r.get("n_pos")))
-        total_n += n
-        sign_buy = 1 if st in BUY_SUBS else (-1 if st in BUY_BACK_SUBS else 0)
-        sign_sell = 1 if st in SELL_SUBS else (-1 if st in SELL_BACK_SUBS else 0)
-        for scope, hit in (("today", d == today), ("month", d.startswith(month)), ("all", True)):
-            if not hit:
-                continue
-            if sign_buy:
-                acc[scope]["buy"] += sign_buy * amt
-                if scope != "all" and sign_buy > 0:
-                    acc[scope]["buy_n"] += n_pos
-            if sign_sell:
-                acc[scope]["sell"] += sign_sell * amt
-                if scope != "all" and sign_sell > 0:
-                    acc[scope]["sell_n"] += n_pos
-            # 退货单独计数：模型常以「只查了销售单」为由断言「没有退货记录」
-            if scope != "all" and (st in BUY_BACK_SUBS or st in SELL_BACK_SUBS):
-                acc[scope]["return_n"] += n
-                acc[scope]["return_amt"] += amt
-    for k in ("today", "month", "all"):
-        acc[k]["buy"] = round(acc[k]["buy"], 2)
-        acc[k]["sell"] = round(acc[k]["sell"], 2)
-        acc[k]["profit"] = round(acc[k]["sell"] - acc[k]["buy"], 2)
-    return {"today": acc["today"], "month_stat": acc["month"],
-            "all": acc["all"], "bill_count": total_n}
-
-
-def _ops_sql():
-    """待审核 / 待收付款 / 账户余额——REST 接口在本环境语义不符，统一直查 DB。
-
-    三个坑（2026-11-25 实测，全部可复算）：
-    • /depotHead/waitBillCount 不传 status 返回全量单据数（518），被当成「待审核」；
-      真实待审核 = status='0'。
-    • /depotHead/getNeedCount 只认 type=vendor|customer，传「收款/付款」恒返回 0；
-      真实待收单 = 销售且 total-change>0（107 张）。
-    • /account/getStatistics 的 allCurrentAmount 在本库重复计数
-      （330958.1 = 2×165329.05+300），账户表实际只有 829 / -1681。
-    """
-    from . import dbread as dbmod
-    from . import config as cfgmod
-    user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
-    tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
-              % user.replace("'", "''"))
-    sql = ("SELECT 'wait' AS k, COUNT(*) AS v FROM jsh_depot_head h "
-           "WHERE h.delete_flag='0' AND h.status='0' AND h.tenant_id=%s "
-           "UNION ALL SELECT 'recv', COUNT(*) FROM jsh_depot_head h "
-           "WHERE h.delete_flag='0' AND h.status='1' AND h.tenant_id=%s "
-           "AND h.sub_type IN ('销售','零售') AND (h.total_price-h.change_amount)>0 "
-           "UNION ALL SELECT 'pay', COUNT(*) FROM jsh_depot_head h "
-           "WHERE h.delete_flag='0' AND h.status='1' AND h.tenant_id=%s "
-           "AND h.sub_type='采购' AND (h.total_price-h.change_amount)>0 "
-           "UNION ALL SELECT 'acc', COALESCE(SUM(a.current_amount),0) FROM jsh_account a "
-           "WHERE a.delete_flag='0' AND a.tenant_id=%s "
-           "UNION ALL SELECT 'acc_month', COALESCE(SUM(h.change_amount),0) FROM jsh_depot_head h "
-           "WHERE h.delete_flag='0' AND h.status='1' AND h.tenant_id=%s "
-           "AND h.oper_time >= DATE_FORMAT(CURDATE(),'%%Y-%%m-01')") % (tenant, tenant, tenant, tenant, tenant)
-    try:
-        data, _ = dbmod.sql_query({"sql": sql})
-        rows = (data.get("rows") if isinstance(data, dict) else None) or []
-    except Exception:
-        return None
-    out = {}
-    for r in rows:
-        k = str(r.get("k") or "")
-        try:
-            out[k] = float(r.get("v") or 0)
-        except (TypeError, ValueError):
-            continue
-    return out
-
-
 def day_stats(erp=None):
-    """今日/本月经营额与笔数（DB 带符号口径）。
-
-    笔数按 oper_time 统计真实单据张数：官方 buyIn/saleOut 的 `total` 是商品种数
-    （本月 14 种里 11 种有采购 → 会答成「11 笔采购单」，真实 15 张）。
-    DB 不可达返回 None，调用方决定回退。
-    """
+    """今日/本月/本年经营额与笔数（DB 带符号口径）。"""
     today = time.strftime("%Y-%m-%d")
     month = time.strftime("%Y-%m")
-    st = _stat_sql(today, month)
+    st = _stat_sql(today, month, time.strftime("%Y"))
     if not st:
         return None
     st["month"] = st.pop("month_stat")
@@ -210,47 +85,11 @@ def day_stats(erp=None):
 
 
 def material_flow(material_id, depot_id=None):
-    """某商品的期初 / 累计入库 / 累计出库 / 现库存（四元组，DB 直查）。
-
-    为什么必须给这一组：期初平账的商品（农夫山泉期初 540 瓶、从未采购）
-    只报「出入库明细」时会答成「没有进货记录、合计 415」，用户会误判为账目缺失。
-    口径：期初 = jsh_material_initial_stock.number；入/出 = 已审核单据的 oper_number 累计。
-    """
-    from . import dbread as dbmod
+    """某商品的期初 / 累计入库 / 累计出库 / 现库存（委托 ledger.material_flow）。"""
     try:
-        mid = int(material_id)
-    except (TypeError, ValueError):
-        return None
-    depot_eq = "" if depot_id in (None, "", 0) else " AND s.depot_id=%d" % int(depot_id)
-    depot_eq_i = "" if depot_id in (None, "", 0) else " AND i.depot_id=%d" % int(depot_id)
-    sql = ("SELECT "
-           "(SELECT COALESCE(SUM(s.number),0) FROM jsh_material_initial_stock s "
-           " WHERE s.material_id=%d AND s.delete_flag='0'%s) AS init_qty, "
-           "(SELECT COALESCE(SUM(CASE WHEN h.type='入库' THEN i.oper_number END),0) "
-           " FROM jsh_depot_item i JOIN jsh_depot_head h ON h.id=i.header_id "
-           " WHERE i.material_id=%d AND i.delete_flag='0' AND h.delete_flag='0' "
-           " AND h.status='1'%s) AS in_sum, "
-           "(SELECT COALESCE(SUM(CASE WHEN h.type='出库' THEN i.oper_number END),0) "
-           " FROM jsh_depot_item i JOIN jsh_depot_head h ON h.id=i.header_id "
-           " WHERE i.material_id=%d AND i.delete_flag='0' AND h.delete_flag='0' "
-           " AND h.status='1'%s) AS out_sum"
-           % (mid, depot_eq, mid, depot_eq_i, mid, depot_eq_i))
-    try:
-        data, _ = dbmod.sql_query({"sql": sql})
+        from . import ledger as ledgermod
+        return ledgermod.material_flow(material_id, depot_id=depot_id)
     except Exception:
-        return None
-    rows = (data.get("rows") if isinstance(data, dict) else None) or []
-    if not rows:
-        return None
-    r = rows[0]
-    if not isinstance(r, dict):
-        return None
-    r = dict(r)
-    try:
-        return {"initial": float(r.get("init_qty") or 0),
-                "in_sum": float(r.get("in_sum") or 0),
-                "out_sum": float(r.get("out_sum") or 0)}
-    except (TypeError, ValueError):
         return None
 
 
@@ -389,7 +228,7 @@ def recent_bills(erp=None, limit=12, bills=None):
             "total": _f(b.get("totalPrice")),
             "debt": _f(b.get("debt")),
             "time": _day(b),
-            "status": "已审核" if str(b.get("status")) == "1" else "草稿",
+            "status": "已审核" if str(b.get("status")) in ("1", "2", "3") else "草稿",
             # ---- 以下为详情弹层补充字段 ----
             "oper_time": (b.get("operTimeStr") or str(b.get("operTime") or ""))[:19].replace("T", " "),
             "create_time": (b.get("createTime") or "")[:19].replace("T", " "),
@@ -414,45 +253,12 @@ def recent_bills(erp=None, limit=12, bills=None):
 
 
 def low_stock_by_depot(erp=None):
-    """按仓比对安全库存：返回 {material_id: 缺口最大的那个仓}。
-
-    为什么必须按仓：安全线是按仓设的（jsh_material_initial_stock.depot_id），
-    而「合计库存 vs 合计阈值」会被退货仓/备用仓的存货填平。实测形态：
-    康师傅红烧牛肉面 总仓 59（线 60，已不足），退货仓还有 9，合计 68 看起来正常，
-    结果漏报；旧口径只报 3 个，真实是 4 个。
-    """
-    from . import dbread as dbmod
-    from . import config as cfgmod
-    user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
-    tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
-              % user.replace("'", "''"))
-    sql = ("SELECT c.material_id, IFNULL(d.name,'') AS depot, c.current_number, s.low_safe_stock "
-           "FROM jsh_material_current_stock c "
-           "JOIN jsh_material m ON m.id=c.material_id AND IFNULL(m.delete_flag,'0')!='1' "
-           "JOIN jsh_material_initial_stock s ON s.material_id=c.material_id "
-           "  AND s.depot_id=c.depot_id AND IFNULL(s.delete_flag,'0')!='1' "
-           "LEFT JOIN jsh_depot d ON d.id=c.depot_id "
-           "WHERE IFNULL(c.delete_flag,'0')!='1' AND m.tenant_id=%s "
-           "AND s.low_safe_stock IS NOT NULL AND c.current_number < s.low_safe_stock" % tenant)
+    """按仓比对安全库存：委托 ledger.low_stock_by_depot（零库存仓同样检出）。"""
     try:
-        data, _ = dbmod.sql_query({"sql": sql})
+        from . import ledger as ledgermod
+        return ledgermod.low_stock_by_depot()
     except Exception:
         return {}
-    rows = (data.get("rows") if isinstance(data, dict) else None) or []
-    out = {}
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        try:
-            mid = int(float(r.get("material_id") or 0))
-            cur = float(r.get("current_number") or 0)
-            low = float(r.get("low_safe_stock") or 0)
-        except (TypeError, ValueError):
-            continue
-        gap = low - cur
-        if mid not in out or gap > out[mid]["gap"]:
-            out[mid] = {"depot": r.get("depot") or "", "stock": cur, "low": low, "gap": gap}
-    return out
 
 
 def stock_overview(erp=None, low_threshold=10, limit=40, goods=None, safe_map=None):
@@ -589,8 +395,8 @@ def official_stats(erp=None):
     out["need_recv"] = int((d["need_recv"] or {}).get("needCount") or 0)
     out["need_pay"] = int((d["need_pay"] or {}).get("needCount") or 0)
 
-    # 上面三个 REST 口径在本环境全错（见 _ops_sql 文档串），DB 可读时一律覆盖：
-    # wait_bills 会被当成单据总数 518、need_* 恒 0、account.current 会翻倍。
+    # 上面三个 REST 口径在本环境全错，DB 可读时一律以 ledger 权威口径覆盖：
+    # wait_bills / need_* / account 余额与本月净发生额。
     ops = _ops_sql()
     if ops:
         out["wait_bills"] = int(ops.get("wait") or 0)
@@ -600,22 +406,24 @@ def official_stats(erp=None):
                               current=round(ops.get("acc") or 0.0, 2),
                               month=round(ops.get("acc_month") or 0.0, 2))
 
-    # 笔数：官方 buyIn/saleOut 的 total 是「商品种数」（本月 14 种里 11 种有采购），
-    # 拿来当单据笔数会把 15 张采购单答成 11 笔。金额仍用官方接口，笔数换 DB 真实张数。
-    stx = None
-    try:
-        stx = _stat_sql(time.strftime("%Y-%m-%d"), time.strftime("%Y-%m"))
-    except Exception:
-        stx = None
+    # 金额与笔数：DB 可达时统一与 summary() 同源（含 year 笔数与退货拆分），
+    # 彻底消除 buyIn/saleOut `total` 为商品种数以及 admin 下 trend 为空的问题。
+    stx = _stat_sql(today, m0, time.strftime("%Y"))
     if stx:
-        for scope, src_key in (("today", "today"), ("month", "month_stat")):
+        for scope, src_key in (("today", "today"), ("month", "month_stat"), ("year", "year")):
             src = stx.get(src_key) or {}
             if not isinstance(out.get(scope), dict) or not src:
                 continue
-            out[scope]["buy_n"] = src.get("buy_n", out[scope].get("buy_n"))
-            out[scope]["sell_n"] = src.get("sell_n", out[scope].get("sell_n"))
-            out[scope]["return_n"] = src.get("return_n", 0)
-            out[scope]["return_amt"] = src.get("return_amt", 0.0)
+            out[scope].update(src)
+
+    if not out["trend"]["buy"] and not out["trend"]["sell"]:
+        try:
+            from . import ledger as ledgermod
+            tr = ledgermod.monthly_trend(6)
+            if tr:
+                out["trend"] = tr
+        except Exception:
+            pass
 
     return out
 
@@ -756,26 +564,12 @@ def debt_aging(bills):
 
 
 def account_breakdown(erp=None):
-    """资金账户明细（每个账户的当前余额）。
-
-    优先直查 jsh_account.current_amount：ERP 的 /account/list 与
-    /account/getStatistics 在本库都会重复计数（账户1 实际 829，接口给 330758.1，
-    正好是流水两倍 + 期初），看板「账户总余额」曾因此显示 33 万。
-    """
-    from . import dbread as dbmod
-    from . import config as cfgmod
-    user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
-    tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
-              % user.replace("'", "''"))
+    """资金账户明细（优先按 ledger 从期初+全部已审核单据/财务流水计算真实余额）。"""
     try:
-        data, _ = dbmod.sql_query({"sql":
-            "SELECT name, current_amount FROM jsh_account WHERE delete_flag='0' "
-            "AND tenant_id=%s ORDER BY current_amount DESC" % tenant})
-        rows = (data.get("rows") if isinstance(data, dict) else None) or []
-        rows = [r for r in rows if isinstance(r, dict)]
-        if rows:
-            return [{"name": r.get("name") or "（未命名账户）",
-                     "amount": round(_f(r.get("current_amount")), 2)} for r in rows]
+        from . import ledger as ledgermod
+        acc = ledgermod.account_summary()
+        if acc and acc.get("accounts"):
+            return acc["accounts"]
     except Exception:
         pass
     erp = erp or get_client()
@@ -835,17 +629,29 @@ def _dashboard_full(erp):
     except Exception:
         s["stock"] = {"kinds": 0, "negative": 0, "low": 0, "warn_list": []}
     try:
-        s["daily"] = daily_trend(bills)
+        from . import ledger as ledgermod
+        s["daily"] = ledgermod.daily_trend() or daily_trend(bills)
     except Exception:
-        s["daily"] = []
+        try:
+            s["daily"] = daily_trend(bills)
+        except Exception:
+            s["daily"] = []
     try:
-        s["parties"] = top_parties(bills)
+        from . import ledger as ledgermod
+        s["parties"] = ledgermod.top_parties() or top_parties(bills)
     except Exception:
-        s["parties"] = {"suppliers": [], "customers": []}
+        try:
+            s["parties"] = top_parties(bills)
+        except Exception:
+            s["parties"] = {"suppliers": [], "customers": []}
     try:
-        s["aging"] = debt_aging(bills)
+        from . import ledger as ledgermod
+        s["aging"] = ledgermod.debt_aging() or debt_aging(bills)
     except Exception:
-        s["aging"] = {"recv": [], "pay": []}
+        try:
+            s["aging"] = debt_aging(bills)
+        except Exception:
+            s["aging"] = {"recv": [], "pay": []}
     try:
         s["accounts"] = account_breakdown(erp)
     except Exception:

@@ -61,43 +61,58 @@ patch 元素：{{"bill_index":0,"item_index":0,"field":"depot|price","value":值
 # 只读工具（返回 (data, note)——note 是模板句，数字接地兜底用）
 # --------------------------------------------------------------------------
 def _tool_stock_check(args, erp):
-    """出库前库存校验：args 没写仓库时补默认出库仓，按**该仓**库存判断。
-
-    旧实现查全仓合计，会出现「合计 60 够、目标仓成品仓 -5」也判通过——
-    提交后成品仓继续负数，而用户看到的是「库存充足」。
-    """
+    """出库前库存校验：args 没写仓库时补默认出库仓，按**该仓**库存判断。"""
     a = dict(args or {})
     if not a.get("depot"):
-        from . import config as cfgmod
-        ui = cfgmod.load().get("ui") or {}
-        d = ui.get("default_depot_out") or ui.get("default_depot_in") or ""
+        fn_dep = getattr(erp, "default_depot_name", None)
+        if callable(fn_dep):
+            d = fn_dep("out")
+        else:
+            from . import config as cfgmod
+            ui = cfgmod.load().get("ui") or {}
+            d = ui.get("default_depot_out") or ui.get("default_depot_in") or ""
         if d:
             a["depot"] = d
             data, note = askmod._stock_query(a, erp)
             note = "（按默认出库仓「%s」校验）%s" % (d, note)
-            return _judge(data, note, a)
+            return _judge(data, note, a, erp=erp)
     data, note = askmod._stock_query(a, erp)
-    return _judge(data, note, a)
+    return _judge(data, note, a, erp=erp)
 
 
-def _judge(data, note, args):
-    """把「要出多少 / 仓里有多少 / 够不够」算出来，不让模型自己比。
-
-    只报库存数时，30 箱的需求对上 17 箱的观察，模型仍可能出草稿；
-    缺口必须显式给成 shortfall。
-    """
+def _judge(data, note, args, erp=None):
+    """把「要出多少（含副单位折算） / 仓里有多少 / 够不够」算出来，不让模型自己比。"""
     try:
         need = float(args.get("qty") or 0)
     except (TypeError, ValueError):
         need = 0.0
     if not need or not isinstance(data, dict):
         return data, note
+    req_unit = str(args.get("unit") or "").strip()
+    basic_unit = str(data.get("unit") or "").strip()
+    need_basic = need
+    if req_unit and erp is not None and data.get("found") is not False:
+        try:
+            mrow, _ = erp.find_material(args.get("material") or data.get("material") or "")
+            if mrow:
+                grp = erp.unit_group_by_id(mrow.get("unitId") or mrow.get("unit_id"))
+                if grp and erp.unit_allowed(grp, req_unit):
+                    ratio = float(erp.unit_ratio(grp, req_unit) or 1.0)
+                    need_basic = round(need * ratio, 4)
+                    basic_unit = str(mrow.get("unit") or basic_unit)
+        except Exception:
+            pass
     have = float(data.get("total") or 0)
     data["need"] = need
-    data["enough"] = have >= need
-    data["shortfall"] = round(max(0.0, need - have), 2)
-    tail = "足够" if data["enough"] else "缺 %g" % data["shortfall"]
-    return data, "%s 需出 %g，仓内 %g，%s。" % (note.rstrip("。"), need, have, tail)
+    if req_unit:
+        data["need_unit"] = req_unit
+    data["need_basic"] = need_basic
+    data["enough"] = have >= need_basic
+    data["shortfall"] = round(max(0.0, need_basic - have), 2)
+    tail = "足够" if data["enough"] else "缺 %g%s" % (data["shortfall"], basic_unit)
+    need_desc = ("%g%s（折合 %g%s）" % (need, req_unit, need_basic, basic_unit)
+                 if need_basic != need and req_unit else "%g%s" % (need_basic, basic_unit))
+    return data, "%s 需出 %s，仓内 %g%s，%s。" % (note.rstrip("。"), need_desc, have, basic_unit, tail)
 
 
 def _sql_escape(s):
@@ -136,7 +151,8 @@ def _tool_last_price(args, erp):
             pass
     sql = ("SELECT dh.oper_time AS time, di.unit_price AS price, di.oper_number AS qty, di.material_unit AS unit "
            "FROM jsh_depot_item di JOIN jsh_depot_head dh ON di.header_id = dh.id "
-           "WHERE dh.delete_flag='0' AND di.delete_flag='0' AND dh.type='%s' AND di.unit_price > 0 "
+           "WHERE dh.delete_flag='0' AND di.delete_flag='0' AND dh.status IN ('1','2','3') "
+           "AND dh.type='%s' AND di.unit_price > 0 "
            "AND dh.tenant_id=%s "
            "AND dh.organ_id IN (SELECT id FROM jsh_supplier WHERE delete_flag='0' AND type='%s' AND supplier LIKE '%%%s%%') "
            "AND %s "
@@ -207,6 +223,17 @@ def _tool_party_history(args, erp):
     party = str(args.get("party") or "").strip()
     if not party:
         return ({"error": "party 必填"}, "party_history 需要 party 参数。")
+    try:
+        from . import ledger as ledgermod
+        sql_res = ledgermod.party_history_sql(party, limit=5)
+        if sql_res is not None:
+            if not sql_res["bills"]:
+                return sql_res, "系统历史单据里没有 %s 的记录（新往来单位）。" % party
+            note = "%s 共 %d 张单（最近 %d 张如下），未付/未收欠款合计 %g 元。" % (
+                party, sql_res["total_count"], sql_res["count"], sql_res["debt_total"])
+            return sql_res, note
+    except Exception:
+        pass
     rows, debt_total = [], 0.0
     for b in erp.bills(page_size=200):
         if str(b.get("deleteFlag")) == "1":
@@ -455,20 +482,21 @@ def _needs_agent_check(drafts, erp, operator="", meta=None):
                     continue
                 try:
                     _qty = it.get("qty")
+                    _unit = it.get("unit") or ""
                     sdata, snote = _tool_stock_check(
-                        {"material": nm, "depot": depot, "qty": _qty}, erp)
+                        {"material": nm, "depot": depot, "qty": _qty, "unit": _unit}, erp)
                     pre_steps.append({
                         "step": len(pre_steps) + 1, "tool": "stock_check",
-                        "args": {"material": nm, "depot": depot, "qty": _qty},
+                        "args": {"material": nm, "depot": depot, "qty": _qty, "unit": _unit},
                         "ok": True, "thought": "出库前校验「%s」当前库存" % nm,
                         "observation": sdata,
                     })
                     tot = sdata.get("total")
-                    qty_f = float(it.get("qty") or 0)
+                    need_cmp = sdata.get("need_basic") if sdata.get("need_basic") is not None else float(_qty or 0)
                     if sdata.get("found") is False:
                         pre_risks.append("「%s」在系统中暂无唯一档案" % nm)
-                    elif tot is not None and float(tot) < qty_f:
-                        pre_risks.append("「%s」库存仅 %g，低于本次出库 %g" % (nm, float(tot), qty_f))
+                    elif sdata.get("enough") is False or (tot is not None and float(tot) < float(need_cmp)):
+                        pre_risks.append("「%s」库存仅 %g，低于本次出库 %g" % (nm, float(tot), float(need_cmp)))
                 except Exception:
                     pass
     return needs_llm, pre_steps, "；".join(pre_risks), pre_patches

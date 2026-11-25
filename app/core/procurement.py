@@ -50,23 +50,30 @@ LEVEL_OK = "ok"
 # --------------------------------------------------------------------------
 # 只读取数：一次聚合，缺表/缺库整体降级（上层据此走「不可用」分支）
 # --------------------------------------------------------------------------
+def _tenant():
+    from . import ledger as ledgermod
+    return ledgermod.tenant_subquery()
+
+
 _SQL_STOCK = """
-SELECT material_id, depot_id, current_number
-FROM jsh_material_current_stock
-WHERE delete_flag = '0'
+SELECT c.material_id, c.depot_id, c.current_number
+FROM jsh_material_current_stock c
+JOIN jsh_material m ON m.id = c.material_id AND IFNULL(m.delete_flag, '0') != '1'
+WHERE IFNULL(c.delete_flag, '0') != '1' AND m.tenant_id = {tenant}
 """
 
 _SQL_SOLD = """
 SELECT di.material_id AS material_id,
-       SUM(CASE WHEN dh.type = '出库' AND dh.sub_type = '销售' THEN di.basic_number
-                WHEN dh.type = '入库' AND dh.sub_type = '销售退货' THEN -di.basic_number
+       SUM(CASE WHEN dh.type = '出库' AND dh.sub_type IN ('销售', '零售') THEN IFNULL(di.basic_number, di.oper_number)
+                WHEN dh.type = '入库' AND dh.sub_type IN ('销售退货', '零售退货') THEN -IFNULL(di.basic_number, di.oper_number)
                 ELSE 0 END) AS sold
 FROM jsh_depot_item di
 JOIN jsh_depot_head dh ON dh.id = di.header_id
-WHERE dh.delete_flag = '0' AND di.delete_flag = '0'
-  AND ((dh.type = '出库' AND dh.sub_type = '销售')
-    OR (dh.type = '入库' AND dh.sub_type = '销售退货'))
-  AND dh.oper_time >= DATE_SUB(CURDATE(), INTERVAL %d DAY)
+WHERE IFNULL(dh.delete_flag, '0') != '1' AND IFNULL(di.delete_flag, '0') != '1'
+  AND dh.status IN ('1', '2', '3') AND dh.tenant_id = {tenant}
+  AND ((dh.type = '出库' AND dh.sub_type IN ('销售', '零售'))
+    OR (dh.type = '入库' AND dh.sub_type IN ('销售退货', '零售退货')))
+  AND dh.oper_time >= DATE_SUB(CURDATE(), INTERVAL {days} DAY)
 GROUP BY di.material_id
 """
 
@@ -76,16 +83,18 @@ SELECT di.material_id AS material_id, dh.organ_id AS organ_id,
 FROM jsh_depot_item di
 JOIN jsh_depot_head dh ON dh.id = di.header_id
 WHERE dh.type = '入库' AND dh.sub_type = '采购'
-  AND dh.delete_flag = '0' AND di.delete_flag = '0'
-  AND dh.oper_time >= DATE_SUB(CURDATE(), INTERVAL %d DAY)
+  AND IFNULL(dh.delete_flag, '0') != '1' AND IFNULL(di.delete_flag, '0') != '1'
+  AND dh.status IN ('1', '2', '3') AND dh.tenant_id = {tenant}
+  AND dh.oper_time >= DATE_SUB(CURDATE(), INTERVAL {days} DAY)
 ORDER BY di.material_id, dh.oper_time
 """
 
 _SQL_SAFE = """
-SELECT material_id, SUM(IFNULL(low_safe_stock, 0)) AS safe_stock
-FROM jsh_material_initial_stock
-WHERE delete_flag = '0'
-GROUP BY material_id
+SELECT s.material_id, SUM(IFNULL(s.low_safe_stock, 0)) AS safe_stock
+FROM jsh_material_initial_stock s
+JOIN jsh_material m ON m.id = s.material_id AND IFNULL(m.delete_flag, '0') != '1'
+WHERE IFNULL(s.delete_flag, '0') != '1' AND m.tenant_id = {tenant}
+GROUP BY s.material_id
 """
 
 # 在途采购：已审核但未入库的采购订单明细，扣除已关联入库的数量。
@@ -101,18 +110,19 @@ LEFT JOIN (
     SELECT di.link_id AS link_id, SUM(IFNULL(di.basic_number, di.oper_number)) AS qty
     FROM jsh_depot_item di
     JOIN jsh_depot_head dh ON dh.id = di.header_id
-    WHERE di.link_id IS NOT NULL AND di.delete_flag = '0' AND dh.delete_flag = '0'
-      AND dh.type = '入库' AND dh.sub_type = '采购'
+    WHERE di.link_id IS NOT NULL AND IFNULL(di.delete_flag, '0') != '1'
+      AND IFNULL(dh.delete_flag, '0') != '1' AND dh.status IN ('1', '2', '3')
+      AND dh.tenant_id = {tenant} AND dh.type = '入库' AND dh.sub_type = '采购'
     GROUP BY di.link_id
 ) done ON done.link_id = oi.id
 WHERE oh.type = '其它' AND oh.sub_type = '采购订单'
-  AND oh.delete_flag = '0' AND oi.delete_flag = '0'
-  AND oh.status IN ('1', '3')
+  AND IFNULL(oh.delete_flag, '0') != '1' AND IFNULL(oi.delete_flag, '0') != '1'
+  AND oh.tenant_id = {tenant} AND oh.status IN ('1', '3')
 GROUP BY oi.material_id
 """
 
 _SQL_SUPPLIER = """
-SELECT id, supplier FROM jsh_supplier WHERE delete_flag = '0'
+SELECT id, supplier FROM jsh_supplier WHERE IFNULL(delete_flag, '0') != '1' AND tenant_id = {tenant}
 """
 
 
@@ -202,12 +212,13 @@ def compute(erp, days=None, cover_days=None, lead_time_default=None, limit=30):
     if not mats:
         return {"ok": False, "message": "商品主数据为空或 ERP 不可达，无法生成采购建议"}
 
+    tenant = _tenant()
     try:
-        stock_rows = _q(_SQL_STOCK)
-        sold_rows = _q(_SQL_SOLD % days)
-        purchase_rows = _q(_SQL_PURCHASE % 180, limit=5000)
-        safe_rows = _q(_SQL_SAFE)
-        supplier_rows = _q(_SQL_SUPPLIER)
+        stock_rows = _q(_SQL_STOCK.format(tenant=tenant))
+        sold_rows = _q(_SQL_SOLD.format(tenant=tenant, days=days))
+        purchase_rows = _q(_SQL_PURCHASE.format(tenant=tenant, days=180), limit=5000)
+        safe_rows = _q(_SQL_SAFE.format(tenant=tenant))
+        supplier_rows = _q(_SQL_SUPPLIER.format(tenant=tenant))
     except Exception as e:
         return {"ok": False,
                 "message": "经营数据查询失败（%s）——采购建议需要只读数据库通道" % str(e)[:120]}
@@ -215,7 +226,7 @@ def compute(erp, days=None, cover_days=None, lead_time_default=None, limit=30):
     # 在途采购单独降级：订单表/字段在旧版本可能缺失，失败不拖垮整份建议，
     # 但必须让调用方看见「这批数没算在途」（assumptions 里标注）。
     try:
-        pending_rows = _q(_SQL_PENDING, limit=5000)
+        pending_rows = _q(_SQL_PENDING.format(tenant=tenant), limit=5000)
         pending_ok = True
     except Exception:
         pending_rows, pending_ok = [], False
@@ -460,7 +471,7 @@ def safe_stock_map(erp=None, max_age=60):
         if _safe_cache["data"] and now - _safe_cache["at"] < max_age:
             return _safe_cache["data"]
     try:
-        rows = _q(_SQL_SAFE)
+        rows = _q(_SQL_SAFE.format(tenant=_tenant()))
     except Exception:
         with _safe_lock:
             _safe_cache["at"] = now - max_age + 10   # 失败只缓存 10 秒，避免每次请求都吃超时

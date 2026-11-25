@@ -66,6 +66,13 @@ def validate(draft):
             errs.append(f"第{i}行数量必须大于 0")
         if _num(it.get("price")) < 0:
             errs.append(f"第{i}行单价不能为负")
+    pa = draft.get("pay_amount")
+    if pa not in (None, ""):
+        try:
+            if float(pa) < 0:
+                errs.append("实付/实收金额不能为负")
+        except (TypeError, ValueError):
+            errs.append("实付/实收金额必须是有效数字")
     return errs
 
 
@@ -104,8 +111,13 @@ def resolve(draft, erp=None):
     # 仓库
     from . import config as cfgmod
     ui = cfgmod.load()["ui"]
-    depot_name = (draft.get("depot") or "").strip() or (
-        ui["default_depot_in"] if direction == "in" else ui["default_depot_out"])
+    raw_depot = (draft.get("depot") or "").strip()
+    if raw_depot:
+        depot_name = raw_depot
+    else:
+        fn_dep = getattr(erp, "default_depot_name", None)
+        depot_name = fn_dep(direction) if callable(fn_dep) else (
+            ui["default_depot_in"] if direction == "in" else ui["default_depot_out"])
     drow, dkind = erp.find_depot(depot_name)
     depot_info = {
         "name": depot_name, "id": drow.get("id") if drow else None,
@@ -256,8 +268,13 @@ def commit(draft, erp=None, auto_create=True):
         # 2. 仓库
         from . import config as cfgmod
         ui = cfgmod.load()["ui"]
-        depot_name = (draft.get("depot") or "").strip() or (
-            ui["default_depot_in"] if direction == "in" else ui["default_depot_out"])
+        raw_depot = (draft.get("depot") or "").strip()
+        if raw_depot:
+            depot_name = raw_depot
+        else:
+            fn_dep = getattr(erp, "default_depot_name", None)
+            depot_name = fn_dep(direction) if callable(fn_dep) else (
+                ui["default_depot_in"] if direction == "in" else ui["default_depot_out"])
         drow, was_new = erp.ensure_depot(depot_name)
         if was_new:
             created.append(f"仓库「{depot_name}」")
@@ -308,7 +325,9 @@ def commit(draft, erp=None, auto_create=True):
             rows.append(row)
 
         # 4. 建单
-        acc = draft.get("account_id") or ui.get("default_account_id") or 25
+        pref_acc = draft.get("account_id") or ui.get("default_account_id")
+        fn_acc = getattr(erp, "default_account_id", None)
+        acc = fn_acc(pref_acc) if callable(fn_acc) else (pref_acc or 25)
         # 附件：file_name 为逗号分隔的相对路径串（来自前端上传，已由服务端代理 ERP 拿到）
         file_name = (draft.get("file_name") or "").strip()
         # 本次实付：填了则按实付建单，欠款由 ERP 后端自动算

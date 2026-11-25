@@ -11,6 +11,7 @@
 import hashlib
 import json
 import re
+import secrets
 import threading
 import time
 import urllib.error
@@ -591,13 +592,12 @@ class JshERP:
     ]
 
     def stock_table(self, max_age=60):
-        """一次性把全部出入库明细拉平，按 (条码 → 仓库 → 净库存) 聚合。
+        """一次性把全部出入库明细拉平，按 (条码 → 仓库 → 期末流水净额) 聚合。
 
-        旧实现 _stock_by_depot 是 O(仓 × 子类型 × 单据) 次串行请求
-        （按仓循环 × 每单一次 getDetailList，5 仓就能把一次库存问答拖到 10s+）。
-        这里固定为 (子类型组 + 单据数) 次并行请求，结果缓存 60s，
-        写入后由 invalidate() 清空。⚠️ getDetailList 的明细行没有 materialId，
-        统一用 barCode（= BC<商品id>）锁定商品。
+        ⚠️ 重要口径：本表仅统计 jsh_depot_item 出入库流水净额，**不含期初库存**
+        （jsh_material_initial_stock），只能作流水/趋势参考或终极降级兜底，
+        绝不能代替实时库存（实时库存走 depot_stock_map / jsh_material_current_stock）。
+        优先取 basicNumber（已按单位换算为基本单位），缺失时回退 operNumber。
         """
         now = time.time()
         if self._stock_tbl is not None and now - self._stock_tbl_at < max_age:
@@ -629,7 +629,10 @@ class JshERP:
                     if not bc:
                         continue
                     try:
-                        qty = sign * float(r.get("operNumber") or 0)
+                        raw_q = r.get("basicNumber")
+                        if raw_q in (None, ""):
+                            raw_q = r.get("operNumber")
+                        qty = sign * float(raw_q or 0)
                     except Exception:
                         continue
                     depot = str(r.get("depotId") or "")
@@ -656,42 +659,44 @@ class JshERP:
     def depot_stock_map(self, material_id, max_age=60):
         """某商品的「分仓库存」权威口径（含期初库存）。
 
-        数据源 `/material/getMaterialDepotStock` → jsh_material_current_stock，
-        该表由 ERP 在每次单据审核时维护，口径 = 期初库存 + 出入库净额。
-        ⚠️ 不要用 stock_table() 的明细净额代替：它没有期初，出库多于入库时会
-        算出负数（可口可乐 700：明细净额 -233，真实 103 = 期初 336 + 净额 -233）。
-
-        返回 {depot_id: qty}；该商品在所有仓都没有库存记录时返回 {}；
-        接口异常返回 None（调用方回退到旧聚合口径）。
+        优先级：
+        1. REST `/material/getMaterialDepotStock?materialId=X`（jsh_material_current_stock，含期初）；
+        2. DB 只读降级 `ledger.depot_stock_sql(material_id)`（同源表）；
+        3. 二者皆不可用时返回 None（由调用方决定是否退回不含期初的 stock_table）。
         """
         key = str(material_id)
         now = time.time()
-        hit = self._depot_stk.get(key)
-        if hit and now - hit[0] < max_age:
-            return hit[1]
+        with self._stock_lock:
+            hit = self._depot_stk.get(key)
+            if hit and now - hit[0] < max_age:
+                return hit[1]
+        out = None
         try:
             j = self._req(f"/material/getMaterialDepotStock?materialId={material_id}")
+            rows = ((j.get("data") or {}).get("rows"))
+            if rows is not None:
+                out = {}
+                for r in rows or []:
+                    try:
+                        out[str(r.get("depotId"))] = float(r.get("currentNumber") or 0)
+                    except (TypeError, ValueError):
+                        continue
         except Exception:
-            return None
-        rows = ((j.get("data") or {}).get("rows"))
-        if rows is None:
-            return None
-        out = {}
-        for r in rows or []:
+            out = None
+        if out is None:
             try:
-                out[str(r.get("depotId"))] = float(r.get("currentNumber") or 0)
-            except (TypeError, ValueError):
-                continue
-        self._depot_stk[key] = (now, out)
+                from . import ledger as ledgermod
+                out = ledgermod.depot_stock_sql(material_id)
+            except Exception:
+                out = None
+        if out is None:
+            return None
+        with self._stock_lock:
+            self._depot_stk[key] = (time.time(), out)
         return out
 
     def stock(self, material_id, depot_id=None):
-        """返回某商品（指定仓库时按仓库）的实时库存数量。
-
-        无仓库：material 列表行自带全仓合计 stock 字段（ERP 已含期初）。
-        指定仓库：走 depot_stock_map()（jsh_material_current_stock，含期初）；
-        接口不可用时才回退到 stock_table() 的明细净额（不含期初，可能为负）。
-        """
+        """返回某商品（指定仓库时按仓库）的实时库存数量（含期初）。"""
         try:
             if depot_id:
                 dm = self.depot_stock_map(material_id)
@@ -709,7 +714,9 @@ class JshERP:
                     s = m.get("stock")
                     if s is not None:
                         return float(s)
-            # material 行没有 stock 字段（理论上不该发生），降级到全仓聚合
+            dm = self.depot_stock_map(material_id)
+            if dm is not None:
+                return float(sum(dm.values()))
             bc = self._barcode_of(material_id)
             if not bc:
                 return None
@@ -717,6 +724,60 @@ class JshERP:
             return float(sum(per_depot.values()))
         except Exception:
             return None
+
+    # ---------- 默认主数据解析（防幽灵账户/幽灵仓库） ----------
+    def default_account_id(self, preferred=None):
+        """解析可用的默认结算账户 ID，防止落到不存在的硬编码 ID（如 25）。"""
+        try:
+            rows = [a for a in (self.accounts() or [])
+                    if str(a.get("enabled", 1)) not in ("0", "False", "false")]
+        except Exception:
+            rows = []
+        valid_ids = {r.get("id"): r for r in rows if r.get("id") is not None}
+        candidates = [preferred]
+        try:
+            from . import config as cfgmod
+            candidates.append((cfgmod.load().get("ui") or {}).get("default_account_id"))
+        except Exception:
+            pass
+        for cand in candidates:
+            if cand not in (None, ""):
+                try:
+                    cid = int(cand)
+                except (TypeError, ValueError):
+                    continue
+                if cid in valid_ids or not valid_ids:
+                    return cid
+        for r in rows:
+            if str(r.get("isDefault", "")).lower() in ("1", "true"):
+                return r["id"]
+        if rows and rows[0].get("id") is not None:
+            return rows[0]["id"]
+        try:
+            return int(preferred) if preferred not in (None, "") else 25
+        except (TypeError, ValueError):
+            return 25
+
+    def default_depot_name(self, direction="in"):
+        """解析默认仓库名：配置仓存在则用配置仓；否则复用已有默认仓/首仓，绝不误建幽灵仓。"""
+        from . import config as cfgmod
+        ui = (cfgmod.load().get("ui") or {})
+        cfg_name = str(ui.get("default_depot_in") if direction == "in"
+                       else ui.get("default_depot_out") or "").strip()
+        try:
+            deps = self.depots() or []
+        except Exception:
+            deps = []
+        if cfg_name:
+            hit, _ = match_depot_rows(deps, cfg_name)
+            if hit:
+                return hit.get("name") or cfg_name
+        for d in deps:
+            if str(d.get("isDefault", "")).lower() in ("1", "true") and d.get("name"):
+                return d["name"]
+        if deps and deps[0].get("name"):
+            return deps[0]["name"]
+        return cfg_name or ("原料仓" if direction == "in" else "成品仓")
 
     # ---------- 建单 ----------
     def build_number(self, sub_type):
@@ -728,26 +789,24 @@ class JshERP:
                 return n
         except Exception:
             pass
-        return pre + time.strftime("%Y%m%d") + f"{int(time.time()) % 10000:04d}"
+        return pre + time.strftime("%Y%m%d%H%M%S") + f"{secrets.randbelow(1000):03d}"
 
     def create_bill(self, biz, organ_id, rows, oper_time=None, number=None,
-                    account_id=25, pay_type="现付", remark="", status="1",
+                    account_id=None, pay_type="现付", remark="", status="1",
                     another_depot_id=None, file_name="", pay_amount=None):
         """rows: [{materialId, barCode, name, operNumber, unit, unitPrice, allPrice, depotId, remark}]
 
-        file_name: 附件路径逗号串（如 "bill/a.jpg,bill/b.pdf"），对应 DepotHead.fileName。
-        对应原版 jshERP 单据附件功能（/systemConfig/upload 上传后回写），最多 4 份。
-
-        pay_amount: 本次实付金额（收款/付款）。None 表示全款结清（changeAmount=total）。
-        欠款由 ERP 后端自动计算（debt = 应收 - 预收/优惠 - 本次实付），无需前端传。
-        原版要求 accountIdList / accountMoneyList 为数组（即使单账户），否则收付款流水缺失。
+        完全对齐 jshERP Web 端（PurchaseInModal / SaleOutModal / SaleBackModal /
+        PurchaseBackModal / OtherInModal / OtherOutModal）写入契约：
+        1. 资金流出单（purchase_in / sale_return）totalPrice 与 changeAmount 存负数，
+           discountLastMoney 存正数；other_in totalPrice 存负数且无账户结算；
+        2. 单账户只传 accountId，accountIdList / accountMoneyList 传空串——
+           禁止同时写 accountId 与 accountIdList，否则 jshERP /account/getStatistics
+           会按单账户+多账户累加两遍（余额翻倍 BUG）。
         """
         self.ensure_login()
         btype, sub_type, _, _ = BILL_TYPES[biz]
 
-        # 含税/未税口径：以 ERP 的 materialPriceTaxFlag 为准
-        #  - 含税（True）：录入价即含税价，allPrice 为含税总额，taxMoney = allPrice/(1+r)*r
-        #  - 未税（False）：allPrice 为不含税金额，taxMoney = allPrice*r，taxLastMoney = allPrice+taxMoney
         tax_inclusive = self.price_tax_flag()
         for r in rows:
             try:
@@ -772,20 +831,33 @@ class JshERP:
             float(r["taxLastMoney"]) if r.get("taxLastMoney") is not None
             else float(r.get("allPrice") or 0)
             for r in rows), 2)
-        # 本次实付：没填则视为全额结清
-        change = round(float(pay_amount), 2) if pay_amount not in (None, "") else total
+        is_cash_bill = biz in ("purchase_in", "sale_out", "purchase_return", "sale_return")
+        if is_cash_bill:
+            change = round(float(pay_amount), 2) if pay_amount not in (None, "") else total
+            acc_id = self.default_account_id(account_id)
+        else:
+            change = 0.0
+            acc_id = ""
+
+        # 与 jshERP Web Modal 符号完全一致
+        neg_total = biz in ("purchase_in", "sale_return", "other_in")
+        neg_change = biz in ("purchase_in", "sale_return")
+        stored_total = -abs(total) if neg_total else abs(total)
+        stored_change = -abs(change) if neg_change else abs(change)
+        discount_last = abs(total) if is_cash_bill else 0
+
         info = {
             "type": btype,
             "subType": sub_type,
             "organId": organ_id,
             "operTime": oper_time or time.strftime("%Y-%m-%d %H:%M:%S"),
             "number": number or self.build_number(sub_type),
-            "accountId": account_id,
-            "accountIdList": json.dumps([account_id], ensure_ascii=False),
-            "accountMoneyList": json.dumps([change], ensure_ascii=False),
-            "changeAmount": change,
-            "discountLastMoney": total,
-            "totalPrice": total,
+            "accountId": acc_id,
+            "accountIdList": "",
+            "accountMoneyList": "",
+            "changeAmount": stored_change,
+            "discountLastMoney": discount_last,
+            "totalPrice": stored_total,
             "payType": pay_type,
             "remark": remark,
             "status": status,
@@ -803,25 +875,45 @@ class JshERP:
         return {"ok": ok, "number": info["number"], "total": total,
                 "raw": res, "message": "" if ok else str(res)}
 
-    def create_payment(self, ptype, organ_id, amount, bill_no="",
-                       account_id=25, in_out_item_id=None, remark="货款"):
-        """ptype: 收款 / 付款"""
+    def create_payment(self, ptype, organ_id, amount, bill_no="", target_bill_no="",
+                       account_id=None, in_out_item_id=None, remark="货款",
+                       bill_time=None, status="1"):
+        """ptype: 收款 / 付款（传 target_bill_no 可按单号关联核销具体欠款单据）。"""
         self.ensure_login()
-        if in_out_item_id is None:
-            items = self.in_out_items()
-            in_out_item_id = items[0]["id"] if items else 1
-        num = ("SK" if ptype == "收款" else "FK") + time.strftime("%Y%m%d") + f"{int(time.time()) % 10000:04d}"
-        info = {"type": ptype, "organId": organ_id,
-                "operTime": time.strftime("%Y-%m-%d %H:%M:%S"), "number": num,
-                "billNo": bill_no, "accountId": account_id,
-                "changeAmount": amount, "totalPrice": amount,
-                "remark": remark, "status": "1"}
-        rows = [{"inOutItemId": in_out_item_id, "eachAmount": amount, "remark": remark}]
+        amt = abs(round(float(amount or 0), 2))
+        acc_id = self.default_account_id(account_id)
+        num = bill_no or (
+            ("SK" if ptype == "收款" else "FK")
+            + time.strftime("%Y%m%d%H%M%S")
+            + f"{secrets.randbelow(1000):03d}"
+        )
+        neg = ptype in ("付款", "支出", "转账")
+        stored = -amt if neg else amt
+        now_str = bill_time or time.strftime("%Y-%m-%d %H:%M:%S")
+        info = {
+            "type": ptype,
+            "organId": organ_id,
+            "billTime": now_str,
+            "billNo": num,
+            "accountId": acc_id,
+            "changeAmount": stored,
+            "totalPrice": stored,
+            "remark": remark,
+            "status": status,
+        }
+        row = {"eachAmount": amt, "remark": remark}
+        if target_bill_no:
+            row["billNumber"] = target_bill_no
+        else:
+            if in_out_item_id is None:
+                items = self.in_out_items()
+                in_out_item_id = items[0]["id"] if items else 1
+            row["inOutItemId"] = in_out_item_id
         res = self._req("/accountHead/addAccountHeadAndDetail", "POST", {
             "info": json.dumps(info, ensure_ascii=False),
-            "rows": json.dumps(rows, ensure_ascii=False),
+            "rows": json.dumps([row], ensure_ascii=False),
         })
-        return {"ok": res.get("code") == 200, "number": num, "raw": res}
+        return {"ok": res.get("code") == 200, "number": num, "amount": amt, "raw": res}
 
     # ---------- 单据查询 ----------
     def bills(self, btype=None, sub_type=None, page_size=50, **extra):

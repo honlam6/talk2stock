@@ -35,6 +35,7 @@ FROM jsh_depot_head h
 JOIN jsh_depot_item i ON i.header_id = h.id
 LEFT JOIN jsh_material m ON m.id = i.material_id
 WHERE h.delete_flag = '0' AND i.delete_flag = '0'
+  AND h.tenant_id = %s
   AND h.type = '%s' AND h.sub_type = '%s'
   AND h.organ_id = %d
   AND h.create_time >= DATE_SUB(NOW(), INTERVAL %d MINUTE)
@@ -69,7 +70,9 @@ def _recent_rows(btype, sub_type, window, organ_id):
         hit = _cache.get(key)
         if hit is not None and now - hit[0] < _CACHE_TTL:
             return hit[1]
-    rows = _q(_SQL % (btype.replace("'", "''"), sub_type.replace("'", "''"),
+    from . import ledger as ledgermod
+    rows = _q(_SQL % (ledgermod.tenant_subquery(),
+                      btype.replace("'", "''"), sub_type.replace("'", "''"),
                       int(organ_id), int(window)))
     with _lock:
         if len(_cache) >= _CACHE_MAX:

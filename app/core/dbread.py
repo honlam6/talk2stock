@@ -274,7 +274,13 @@ def schema_brief(max_cols=18):
         cols = [c for c, _ in g["cols"][:max_cols]]
         more = "…（共%d列，用 db_schema 看全字段）" % len(g["cols"]) if len(g["cols"]) > max_cols else ""
         lines.append("- %s【%s】：%s%s" % (t, g["comment"], ", ".join(cols), more))
-    lines.append("# 通用口径：软删除表用 delete_flag='0' 取有效数据；单据金额看 total_price/change_amount；查大表请带 LIMIT。")
+    lines.append("# 通用口径：软删除表加 delete_flag='0'；大表查明细带 LIMIT。")
+    lines.append("# 业务关键规范（必守）：")
+    lines.append("#   1) 业务日期一律用 jsh_depot_head.oper_time（绝不用 create_time 过滤今天/本月/区间，create_time 常为批量导入同日时间戳）；")
+    lines.append("#   2) 已审核有效单据加 delete_flag='0' AND status IN ('1','2','3')（待审核单据为 status='0'）；")
+    lines.append("#   3) 采购/销售退货在库内 total_price/change_amount 常存负数，计算金额请用 ABS(CASE WHEN discount_last_money!=0 THEN discount_last_money ELSE total_price END) 并结合 sub_type 区分采购/销售/退货；")
+    lines.append("#   4) 实时库存查 jsh_material_current_stock.current_number（已含 jsh_material_initial_stock.number 期初）；单据数量用 IFNULL(basic_number, oper_number)；")
+    lines.append("#   5) 资金账户余额不可直接读 jsh_account.current_amount（静态旧列），需由 initial_amount 加减已审核单据及 jsh_account_head 流水。")
     return "\n".join(lines)
 
 
