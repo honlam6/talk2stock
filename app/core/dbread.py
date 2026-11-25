@@ -280,7 +280,8 @@ def schema_brief(max_cols=18):
     lines.append("#   2) 已审核有效单据加 delete_flag='0' AND status IN ('1','2','3')（待审核单据为 status='0'）；")
     lines.append("#   3) 采购/销售退货在库内 total_price/change_amount 常存负数，计算金额请用 ABS(CASE WHEN discount_last_money!=0 THEN discount_last_money ELSE total_price END) 并结合 sub_type 区分采购/销售/退货；")
     lines.append("#   4) 实时库存查 jsh_material_current_stock.current_number（已含 jsh_material_initial_stock.number 期初）；单据数量用 IFNULL(basic_number, oper_number)；")
-    lines.append("#   5) 资金账户余额不可直接读 jsh_account.current_amount（静态旧列），需由 initial_amount 加减已审核单据及 jsh_account_head 流水。")
+    lines.append("#   5) 资金账户余额优先调用 account_balance 工具；若写 SQL，不可读 jsh_account.current_amount（静态旧列），须由 jsh_account.initial_amount 加上 jsh_depot_head.change_amount（单账户按 account_id、多账户按 account_id_list/account_money_list，绝不重复计）及 jsh_account_head/jsh_account_item 流水；")
+    lines.append("#   6) 待审核/待收款/待付款张数优先调用 ops_summary 工具；若写 SQL，未结清不是 pay_type='月结'，而是单据 ABS(CASE WHEN discount_last_money!=0 THEN discount_last_money ELSE total_price END) - ABS(IFNULL(change_amount,0)) 减去 jsh_account_item 已核销金额 > 0.01。")
     return "\n".join(lines)
 
 

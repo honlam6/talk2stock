@@ -296,6 +296,44 @@ class TestSpecPreservationAndUnitCheck(unittest.TestCase):
         })
         self.assertTrue(any("不能为负" in e for e in errs))
 
+    def test_ask_account_balance_tool_uses_ledger_summary(self):
+        from core import ask as askmod
+        fake_acc = {
+            "current": 47858.09,
+            "month": 6013.03,
+            "accounts": [
+                {"id": 17, "name": "账户1", "initial": 100.0, "amount": 47658.09, "month": 6013.03},
+                {"id": 18, "name": "账户2", "initial": 200.0, "amount": 200.0, "month": 0.0},
+            ],
+        }
+        tools = askmod._tools(mock.MagicMock())
+        self.assertIn("account_balance", tools)
+        with mock.patch("core.ledger.account_summary", return_value=fake_acc):
+            data, note = tools["account_balance"]["run"]({})
+        self.assertEqual(data["total_balance"], 47858.09)
+        self.assertEqual(data["accounts"][0]["balance"], 47658.09)
+        self.assertIn("47,858.09", note)
+        self.assertIn("账户1", note)
+
+    def test_ask_ops_summary_tool_uses_ledger_counts(self):
+        from core import ask as askmod
+        tools = askmod._tools(mock.MagicMock())
+        self.assertIn("ops_summary", tools)
+        with mock.patch("core.ledger.ops_counts", return_value={"wait_bills": 0, "bill_total": 649}), \
+             mock.patch("core.ledger.debt_summary", return_value={
+                 "need_recv": 244, "need_pay": 34,
+                 "debt_recv_total": 41328.95, "debt_pay_total": 19538.58,
+             }), \
+             mock.patch("core.ledger.account_summary", return_value={"current": 47858.09}):
+            data, note = tools["ops_summary"]["run"]({})
+        self.assertEqual(data["wait_bills"], 0)
+        self.assertEqual(data["need_recv_count"], 244)
+        self.assertEqual(data["need_pay_count"], 34)
+        self.assertEqual(data["receivable_total"], 41328.95)
+        self.assertEqual(data["payable_total"], 19538.58)
+        self.assertIn("244 张", note)
+        self.assertIn("34 张", note)
+
 
 if __name__ == "__main__":
     unittest.main()

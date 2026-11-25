@@ -179,10 +179,99 @@ def _debts(_args, erp):
     s = summary(erp)
     data = {"receivable_top": s.get("debt_recv"), "receivable_total": s.get("debt_recv_total"),
             "payable_top": s.get("debt_pay"), "payable_total": s.get("debt_pay_total")}
+    try:
+        from . import ledger as ledgermod
+        ds = ledgermod.debt_summary()
+        ops = ledgermod.ops_counts()
+        if ds:
+            data["need_recv_count"] = int(ds.get("need_recv") or 0)
+            data["need_pay_count"] = int(ds.get("need_pay") or 0)
+        if ops:
+            data["wait_bills"] = int(ops.get("wait_bills") or 0)
+    except Exception:
+        pass
     recv = "；".join(f"{x['name']} {x['amount']:,.2f}" for x in (s.get("debt_recv") or [])[:4])
     pay = "；".join(f"{x['name']} {x['amount']:,.2f}" for x in (s.get("debt_pay") or [])[:4])
     tpl = (f"客户共欠我 {s.get('debt_recv_total'):,.2f} 元（{recv or '无'}）；"
            f"我欠供应商 {s.get('debt_pay_total'):,.2f} 元（{pay or '无'}）。")
+    return data, tpl
+
+
+def _account_balance(_args, erp):
+    """资金账户余额与本月净变动（统一走 ledger 会计流水口径，不读静态 current_amount）。"""
+    acc = None
+    try:
+        from . import ledger as ledgermod
+        acc = ledgermod.account_summary()
+    except Exception:
+        acc = None
+    if acc:
+        rows = [
+            {"name": a.get("name") or "", "balance": float(a.get("amount") or 0),
+             "initial": float(a.get("initial") or 0), "month_change": float(a.get("month") or 0)}
+            for a in (acc.get("accounts") or [])
+        ]
+        data = {
+            "total_balance": round(float(acc.get("current") or 0), 2),
+            "month_change": round(float(acc.get("month") or 0), 2),
+            "accounts": rows,
+        }
+    else:
+        st = official_stats(erp)
+        ac = st.get("account") or {}
+        rows = [
+            {"name": a.get("name") or "",
+             "balance": round(float(a.get("currentAmount") or 0), 2)}
+            for a in (erp.accounts() or [])
+        ]
+        data = {
+            "total_balance": round(float(ac.get("current") or 0), 2),
+            "month_change": round(float(ac.get("month") or 0), 2),
+            "accounts": rows,
+        }
+    detail = "、".join(f"{a['name']} {a['balance']:,.2f} 元" for a in data["accounts"]) or "无活跃账户"
+    tpl = (f"当前资金账户总余额 {data['total_balance']:,.2f} 元"
+           f"（本月净变动 {data['month_change']:+,.2f} 元）：{detail}。")
+    return data, tpl
+
+
+def _ops_summary(_args, erp):
+    """待审核、待收款、待付款单据张数与应收应付合计（权威账本口径）。"""
+    ops = ds = acc = None
+    try:
+        from . import ledger as ledgermod
+        ops = ledgermod.ops_counts()
+        ds = ledgermod.debt_summary()
+        acc = ledgermod.account_summary()
+    except Exception:
+        ops = ds = acc = None
+    if ops is not None and ds is not None:
+        wait = int(ops.get("wait_bills") or 0)
+        recv = int(ds.get("need_recv") or 0)
+        pay = int(ds.get("need_pay") or 0)
+        recv_tot = round(float(ds.get("debt_recv_total") or 0), 2)
+        pay_tot = round(float(ds.get("debt_pay_total") or 0), 2)
+        acc_bal = round(float((acc or {}).get("current") or 0), 2)
+    else:
+        st = official_stats(erp)
+        s = summary(erp)
+        wait = int(st.get("wait_bills") or 0)
+        recv = int(st.get("need_recv") or 0)
+        pay = int(st.get("need_pay") or 0)
+        recv_tot = round(float(s.get("debt_recv_total") or 0), 2)
+        pay_tot = round(float(s.get("debt_pay_total") or 0), 2)
+        acc_bal = round(float((st.get("account") or {}).get("current") or 0), 2)
+    data = {
+        "wait_bills": wait,
+        "need_recv_count": recv,
+        "need_pay_count": pay,
+        "receivable_total": recv_tot,
+        "payable_total": pay_tot,
+        "account_balance": acc_bal,
+    }
+    tpl = (f"当前待审核单据 {wait} 张；"
+           f"待收款（未收清销售单）{recv} 张、应收合计 {recv_tot:,.2f} 元；"
+           f"待付款（未付清采购单）{pay} 张、应付合计 {pay_tot:,.2f} 元。")
     return data, tpl
 
 
@@ -486,6 +575,12 @@ def _tools(erp, on_event=None, images=None, previous_draft=None, attachments=Non
                         "run": bind(_month_stats)},
         "debts": {"desc": "谁欠我钱、我欠谁钱（应收应付）", "args_hint": "{}",
                   "run": bind(_debts)},
+        "account_balance": {"desc": "查资金账户总余额、每个结算账户的实时余额与本月变动（权威账本口径，含期初与全部进销存/收付款流水；问资金余额/账户多少钱必须用它，不要手写 SQL）",
+                            "args_hint": "{}",
+                            "run": bind(_account_balance)},
+        "ops_summary": {"desc": "查待审核单据数、待收款/待付款单据张数及应收应付合计（权威账本口径；问待审核/待收款/待付款张数必须用它，不要用 pay_type='月结' 猜）",
+                        "args_hint": "{}",
+                        "run": bind(_ops_summary)},
         "recent_bills": {"desc": "最近录了哪些单（最多 6 张，不是全量；问单据总数用 sql_query COUNT）", "args_hint": "{}",
                          "run": bind(_recent_bills)},
         "stock_value": {"desc": "库存里的货总共值多少钱", "args_hint": "{}",
