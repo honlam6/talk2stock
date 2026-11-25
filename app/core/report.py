@@ -35,60 +35,69 @@ def _day(bill):
 
 
 def _debt_sql():
-    """欠款聚合直查 DB（P4 修复 / ADR-13）。
-
-    为什么不用 REST 单据列表算：①自适应翻页对 /depotHead/list 仍间歇失效
-    （260 张真欠款实测漏 23%，page2 空/整页重复随机出现）；②beginTime/endTime
-    时间过滤语义不稳定（宽窗全量、窄窗全空，与 oper_time/create_time 都对不上，
-    11-09 时间窗二分 sweep 未收敛的根因）。聚合数字本来就该在 DB 算——
-    口径：欠款 = 表头 total_price − change_amount（与 eval/stress_scale.py
-    真路径 ground truth 同一公式），仅审计单（status='1'）计入。
-    dbread 不可达时返回 None，调用方退回 REST 口径（宁可老口径也不空手）。"""
-    from . import dbread as dbmod
-    from . import config as cfgmod
-    user = str((cfgmod.load().get("erp") or {}).get("user") or "jsh")
-    tenant = ("(SELECT tenant_id FROM jsh_user WHERE login_name='%s' ORDER BY id LIMIT 1)"
-              % user.replace("'", "''"))
-    base_where = ("h.delete_flag='0' AND h.status='1' AND h.tenant_id=%s" % tenant)
+    """欠款聚合直查 DB（统一委托 ledger.debt_summary，含符号兼容与收付款核销）。"""
     try:
-        def _total(subs):
-            sql = ("SELECT COALESCE(SUM(GREATEST(h.total_price - h.change_amount, 0)), 0) AS total "
-                   "FROM jsh_depot_head h WHERE " + base_where +
-                   " AND h.sub_type IN (%s) AND (h.total_price - h.change_amount) > 0"
-                   % ",".join("'%s'" % x for x in subs))
-            data, _ = dbmod.sql_query({"sql": sql})
-            rows = data.get("rows") or []
-            return float(rows[0].get("total") or 0) if rows else 0.0
+        from . import ledger as ledgermod
+        return ledgermod.debt_summary()
+    except Exception:
+        return None
 
-        def _top(subs, n=6):
-            sql = ("SELECT s.supplier AS name, SUM(GREATEST(h.total_price - h.change_amount, 0)) AS amount "
-                   "FROM jsh_depot_head h JOIN jsh_supplier s ON s.id = h.organ_id WHERE " + base_where +
-                   " AND h.sub_type IN (%s) AND (h.total_price - h.change_amount) > 0 "
-                   "AND s.delete_flag='0' "
-                   "GROUP BY h.organ_id, s.supplier ORDER BY amount DESC LIMIT %d"
-                   % (",".join("'%s'" % x for x in subs), n))
-            data, _ = dbmod.sql_query({"sql": sql})
-            rows = data.get("rows") or []
-            return [{"name": r.get("name") or "（未填单位）", "amount": round(float(r.get("amount") or 0), 2)}
-                    for r in rows]
+
+def _stat_sql(today, month, year=None):
+    """经营金额与单据笔数直查 DB（统一委托 ledger.period_stats）。"""
+    try:
+        from . import ledger as ledgermod
+        return ledgermod.period_stats(today, month, year)
+    except Exception:
+        return None
+
+
+def _ops_sql():
+    """待审核 / 待收付款 / 真实账户余额——统一委托 ledger 计算。"""
+    try:
+        from . import ledger as ledgermod
+        ops = ledgermod.ops_counts()
+        debt = ledgermod.debt_summary()
+        acc = ledgermod.account_summary()
+        if ops is None and debt is None and acc is None:
+            return None
         return {
-            "debt_pay_total": round(_total(("采购",)), 2),
-            "debt_recv_total": round(_total(("销售", "零售")), 2),
-            "debt_pay": _top(("采购",)),
-            "debt_recv": _top(("销售", "零售")),
+            "wait": (ops or {}).get("wait_bills", 0),
+            "bill_total": (ops or {}).get("bill_total"),
+            "recv": (debt or {}).get("need_recv", 0),
+            "pay": (debt or {}).get("need_pay", 0),
+            "acc": (acc or {}).get("current", 0.0),
+            "acc_month": (acc or {}).get("month", 0.0),
         }
     except Exception:
         return None
 
 
-def summary(erp=None, bills=None):
-    """核心经营指标。bills 可传入已取好的单据列表（避免重复查询）。"""
-    erp = erp or get_client()
-    bills = bills if bills is not None else erp.all_bills()
-
+def day_stats(erp=None):
+    """今日/本月/本年经营额与笔数（DB 带符号口径）。"""
     today = time.strftime("%Y-%m-%d")
     month = time.strftime("%Y-%m")
+    st = _stat_sql(today, month, time.strftime("%Y"))
+    if not st:
+        return None
+    st["month"] = st.pop("month_stat")
+    return st
 
+
+def material_flow(material_id, depot_id=None):
+    """某商品的期初 / 累计入库 / 累计出库 / 现库存（委托 ledger.material_flow）。"""
+    try:
+        from . import ledger as ledgermod
+        return ledgermod.material_flow(material_id, depot_id=depot_id)
+    except Exception:
+        return None
+
+
+def _acc_from_bills(bills, today, month):
+    """REST 回退口径：从单据列表累加经营额与欠款分户。
+
+    ⚠ 只在 _stat_sql 不可达时用于金额；负 total_price 已被 REST 取绝对值，
+    这里的金额仅作兜底参考。待审核单（status≠'1'）不参与金额累加。"""
     acc = {
         "today": {"buy": 0.0, "sell": 0.0, "buy_n": 0, "sell_n": 0},
         "month": {"buy": 0.0, "sell": 0.0, "buy_n": 0, "sell_n": 0},
@@ -105,18 +114,20 @@ def summary(erp=None, bills=None):
         d = _day(b)
         sign_buy = 1 if st in BUY_SUBS else (-1 if st in BUY_BACK_SUBS else 0)
         sign_sell = 1 if st in SELL_SUBS else (-1 if st in SELL_BACK_SUBS else 0)
+        posted = str(b.get("status")) == "1"
 
-        for scope, cond in (("today", d == today), ("month", d.startswith(month)), ("all", True)):
-            if not cond:
-                continue
-            if sign_buy:
-                acc[scope]["buy"] += sign_buy * amt
-                if scope != "all" and sign_buy > 0:
-                    acc[scope]["buy_n"] += 1
-            if sign_sell:
-                acc[scope]["sell"] += sign_sell * amt
-                if scope != "all" and sign_sell > 0:
-                    acc[scope]["sell_n"] += 1
+        if posted:
+            for scope, cond in (("today", d == today), ("month", d.startswith(month)), ("all", True)):
+                if not cond:
+                    continue
+                if sign_buy:
+                    acc[scope]["buy"] += sign_buy * amt
+                    if scope != "all" and sign_buy > 0:
+                        acc[scope]["buy_n"] += 1
+                if sign_sell:
+                    acc[scope]["sell"] += sign_sell * amt
+                    if scope != "all" and sign_sell > 0:
+                        acc[scope]["sell_n"] += 1
 
         # 欠款：debt 字段为本单未付/未收
         dv = _f(b.get("debt"))
@@ -127,14 +138,24 @@ def summary(erp=None, bills=None):
             elif sign_sell > 0:
                 debt_recv[name] += dv
 
-    def top(d, n=6):
-        return [{"name": k, "amount": round(v, 2)}
-                for k, v in sorted(d.items(), key=lambda x: -x[1])[:n]]
-
     for k in ("today", "month", "all"):
         acc[k]["buy"] = round(acc[k]["buy"], 2)
         acc[k]["sell"] = round(acc[k]["sell"], 2)
         acc[k]["profit"] = round(acc[k]["sell"] - acc[k]["buy"], 2)
+    return acc, debt_pay, debt_recv
+
+
+def summary(erp=None, bills=None):
+    """核心经营指标。bills 可传入已取好的单据列表（避免重复查询）。
+
+    金额口径优先走 SQL 直查（_stat_sql），REST 列表只作回退：REST 会把负
+    totalPrice 返回成绝对值、且不过滤待审核单，直接累加会虚增。"""
+    erp = erp or get_client()
+    bills = bills if bills is not None else erp.all_bills()
+
+    today = time.strftime("%Y-%m-%d")
+    month = time.strftime("%Y-%m")
+    acc, debt_pay, debt_recv = _acc_from_bills(bills, today, month)
 
     out = {
         "ok": True,
@@ -145,6 +166,18 @@ def summary(erp=None, bills=None):
         "all": acc["all"],
         "bill_count": len(bills),
     }
+    # 金额以 DB 带符号口径为准（见 _stat_sql 文档串）
+    try:
+        sql_stat = _stat_sql(today, month)
+    except Exception:
+        sql_stat = None
+    if sql_stat:
+        out.update(sql_stat)
+
+    def top(d, n=6):
+        return [{"name": k, "amount": round(v, 2)}
+                for k, v in sorted(d.items(), key=lambda x: -x[1])[:n]]
+
     # P4 修复：欠款合计/top 优先走 SQL 直查（REST 列表规模下不可靠，见 _debt_sql）；
     # SQL 不可达时退回 REST 口径（bills 循环里的 debt 累加），绝不空手
     sql_debt = _debt_sql()
@@ -195,7 +228,7 @@ def recent_bills(erp=None, limit=12, bills=None):
             "total": _f(b.get("totalPrice")),
             "debt": _f(b.get("debt")),
             "time": _day(b),
-            "status": "已审核" if str(b.get("status")) == "1" else "草稿",
+            "status": "已审核" if str(b.get("status")) in ("1", "2", "3") else "草稿",
             # ---- 以下为详情弹层补充字段 ----
             "oper_time": (b.get("operTimeStr") or str(b.get("operTime") or ""))[:19].replace("T", " "),
             "create_time": (b.get("createTime") or "")[:19].replace("T", " "),
@@ -219,6 +252,15 @@ def recent_bills(erp=None, limit=12, bills=None):
     return out
 
 
+def low_stock_by_depot(erp=None):
+    """按仓比对安全库存：委托 ledger.low_stock_by_depot（零库存仓同样检出）。"""
+    try:
+        from . import ledger as ledgermod
+        return ledgermod.low_stock_by_depot()
+    except Exception:
+        return {}
+
+
 def stock_overview(erp=None, low_threshold=10, limit=40, goods=None, safe_map=None):
     """库存总览 + 低库存预警。material/list 行自带 stock 字段。
 
@@ -233,6 +275,7 @@ def stock_overview(erp=None, low_threshold=10, limit=40, goods=None, safe_map=No
     vals = {}
     for g in (goods or {}).get("all_rows", []):
         vals[g["name"]] = g["value"]
+    tight_map = low_stock_by_depot(erp)
     rows, total_kinds, neg, low = [], 0, 0, 0
     for m in mats:
         st = m.get("stock")
@@ -245,26 +288,31 @@ def stock_overview(erp=None, low_threshold=10, limit=40, goods=None, safe_map=No
         except (TypeError, ValueError):
             pass
         thr = _f((safe_map or {}).get(key)) or low_threshold
+        tight = tight_map.get(key)
         total_kinds += 1
         if st < 0:
             neg += 1
-        elif st <= thr:
+        elif st <= thr or tight:
             low += 1
-        rows.append({
+        row = {
             "name": m.get("name"),
             "unit": m.get("unit") or "",
             "stock": st,
             "category": m.get("categoryName") or "",
             "threshold": thr,
             "value": round(vals.get(m.get("name")) or 0, 2),
-        })
+        }
+        if tight:
+            # 合计没破线但某仓已不足：把事实带出去，别让「合计看起来正常」盖住缺口
+            row["tight"] = {"depot": tight["depot"], "stock": tight["stock"], "low": tight["low"]}
+        rows.append(row)
     rows.sort(key=lambda r: (r["stock"] - r["threshold"]) / max(r["threshold"], 1))
     return {
         "kinds": total_kinds,
         "negative": neg,
         "low": low,
         "threshold": low_threshold,
-        "warn_list": [r for r in rows if r["stock"] <= r["threshold"]][:limit],
+        "warn_list": [r for r in rows if r["stock"] <= r["threshold"] or r.get("tight")][:limit],
     }
 
 
@@ -346,6 +394,36 @@ def official_stats(erp=None):
 
     out["need_recv"] = int((d["need_recv"] or {}).get("needCount") or 0)
     out["need_pay"] = int((d["need_pay"] or {}).get("needCount") or 0)
+
+    # 上面三个 REST 口径在本环境全错，DB 可读时一律以 ledger 权威口径覆盖：
+    # wait_bills / need_* / account 余额与本月净发生额。
+    ops = _ops_sql()
+    if ops:
+        out["wait_bills"] = int(ops.get("wait") or 0)
+        out["need_recv"] = int(ops.get("recv") or 0)
+        out["need_pay"] = int(ops.get("pay") or 0)
+        out["account"] = dict(out.get("account") or {},
+                              current=round(ops.get("acc") or 0.0, 2),
+                              month=round(ops.get("acc_month") or 0.0, 2))
+
+    # 金额与笔数：DB 可达时统一与 summary() 同源（含 year 笔数与退货拆分），
+    # 彻底消除 buyIn/saleOut `total` 为商品种数以及 admin 下 trend 为空的问题。
+    stx = _stat_sql(today, m0, time.strftime("%Y"))
+    if stx:
+        for scope, src_key in (("today", "today"), ("month", "month_stat"), ("year", "year")):
+            src = stx.get(src_key) or {}
+            if not isinstance(out.get(scope), dict) or not src:
+                continue
+            out[scope].update(src)
+
+    if not out["trend"]["buy"] and not out["trend"]["sell"]:
+        try:
+            from . import ledger as ledgermod
+            tr = ledgermod.monthly_trend(6)
+            if tr:
+                out["trend"] = tr
+        except Exception:
+            pass
 
     return out
 
@@ -486,7 +564,14 @@ def debt_aging(bills):
 
 
 def account_breakdown(erp=None):
-    """资金账户明细（每个账户的当前余额）。"""
+    """资金账户明细（优先按 ledger 从期初+全部已审核单据/财务流水计算真实余额）。"""
+    try:
+        from . import ledger as ledgermod
+        acc = ledgermod.account_summary()
+        if acc and acc.get("accounts"):
+            return acc["accounts"]
+    except Exception:
+        pass
     erp = erp or get_client()
     try:
         rows = erp.accounts()
@@ -544,17 +629,29 @@ def _dashboard_full(erp):
     except Exception:
         s["stock"] = {"kinds": 0, "negative": 0, "low": 0, "warn_list": []}
     try:
-        s["daily"] = daily_trend(bills)
+        from . import ledger as ledgermod
+        s["daily"] = ledgermod.daily_trend() or daily_trend(bills)
     except Exception:
-        s["daily"] = []
+        try:
+            s["daily"] = daily_trend(bills)
+        except Exception:
+            s["daily"] = []
     try:
-        s["parties"] = top_parties(bills)
+        from . import ledger as ledgermod
+        s["parties"] = ledgermod.top_parties() or top_parties(bills)
     except Exception:
-        s["parties"] = {"suppliers": [], "customers": []}
+        try:
+            s["parties"] = top_parties(bills)
+        except Exception:
+            s["parties"] = {"suppliers": [], "customers": []}
     try:
-        s["aging"] = debt_aging(bills)
+        from . import ledger as ledgermod
+        s["aging"] = ledgermod.debt_aging() or debt_aging(bills)
     except Exception:
-        s["aging"] = {"recv": [], "pay": []}
+        try:
+            s["aging"] = debt_aging(bills)
+        except Exception:
+            s["aging"] = {"recv": [], "pay": []}
     try:
         s["accounts"] = account_breakdown(erp)
     except Exception:

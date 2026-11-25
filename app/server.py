@@ -1178,13 +1178,11 @@ def api_conversations_post(_q, body):
 
 
 def _bill_total_sql():
-    """全部单据数（直查 DB，绕过 REST 列表的翻页上限）。不可达返回 None。"""
+    """全部单据数（直查 DB，带 tenant_id 过滤，绕过 REST 列表的翻页上限）。不可达返回 None。"""
     try:
-        from core import dbread as dbmod
-        data, _ = dbmod.sql_query(
-            {"sql": "SELECT COUNT(*) AS n FROM jsh_depot_head WHERE delete_flag='0'"})
-        rows = data.get("rows") or []
-        return int(rows[0].get("n") or 0) if rows else None
+        from core import ledger as ledgermod
+        ops = ledgermod.ops_counts()
+        return ops.get("bill_total") if ops else None
     except Exception:
         return None
 

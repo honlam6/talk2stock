@@ -25,7 +25,7 @@ RECV_FOCUS_RATIO = 0.5    # 应收集中度：top1 占比超过该值提示
 def collect_facts(erp=None):
     """规则层：从看板数据模块提取结构化事实（全部只读、全部可解释）。"""
     erp = erp or get_client()
-    facts = {"generated_at": time.strftime("%Y-%m-%d %H:%M")}
+    facts: dict = {"generated_at": time.strftime("%Y-%m-%d %H:%M")}
 
     ov = stock_overview(erp, safe_map=_safe_stock_map(erp))
     facts["stock"] = {"kinds": ov.get("kinds"), "negative_kinds": ov.get("negative"),
@@ -178,8 +178,8 @@ def _template_insights(f):
     st = f.get("stock") or {}
     if st.get("negative_kinds") or st.get("low_kinds"):
         out.append({"title": "库存风险",
-                    "detail": "%d 种负库存、%d 种低于安全库存 %s。" % (
-                        st.get("negative_kinds") or 0, st.get("low_kinds") or 0, st.get("threshold")),
+                    "detail": "%d 种负库存、%d 种低于安全库存。" % (
+                        st.get("negative_kinds") or 0, st.get("low_kinds") or 0),
                     "level": "warn"})
     return out[:4]
 
