@@ -24,7 +24,11 @@ PROMPT_VERSION = "unified-v1-20261119"
 def _compound_hints(text):
     """复合问题：把子问题显式列成清单注入 goal——实测仅靠规则约束模型仍会
     只查一半就作答（"库存总值未取到"式偷懒），显式清单是最可靠的干预。"""
-    parts = re.split(r"另外|以及|顺便|然后|同时|还有(?!(?:多少|几|吗|没有|剩))", text or "")
+    raw = text or ""
+    if re.search(r"(生成草稿|起草|开一?张?单|录单|入库单|出库单)", raw) and not re.search(
+            r"(今天卖了|本月|欠款|余额|排行|体检)", raw):
+        return ""
+    parts = re.split(r"另外|以及|顺便|然后|同时|还有(?!(?:多少|几|吗|没有|剩))", raw)
     parts = [p.strip(" ？?，。,") for p in parts if p.strip(" ？?，。,")]
     if len(parts) > 1:
         return ("\n\n# 该问题包含 %d 个子问题，每个都必须先用工具取证、全部查完才能作答：\n"
@@ -627,8 +631,9 @@ def _tools(erp, on_event=None, images=None, previous_draft=None, attachments=Non
                       "run": lambda a: dbmod.sql_query(a)},
         "db_schema": {"desc": "看某张表的全部字段与取值样本（写 SQL 前不确定字段/枚举值先查它）",
                       "args_hint": '{"table":"表名，如 jsh_supplier"}',
+                      "internal": True,
                       "run": lambda a: dbmod.db_schema(a)},
-        "draft_order": {"desc": "用户要录单/新建单据时起草草稿；有附件时按编号/文件名选择对应文件（只出预览绝不写库）",
+        "draft_order": {"desc": "用户要录单/新建单据/生成草稿时直接调用（已内置多单拆分、历史进价核价与库存校验，无需先查历史或库存）；有附件时按编号/文件名选择对应文件（只出预览绝不写库）",
                         "args_hint": '{"text":"用户的业务原话（结合会话补全代词）","attachment":"有附件时传编号或文件名；无附件留空"}',
                         "run": lambda a: _draft_order(a, erp, on_event, images,
                                                        previous_draft, attachments)},
@@ -688,7 +693,8 @@ def ask(text, erp=None, on_event=None, history=None, images=None, previous_draft
     out = agentmod.run_agent(goal, _tools(erp, on_event=_emit, images=images,
                                          previous_draft=previous_draft,
                                          attachments=attachments), max_steps=8,
-                             context_block=context, on_event=_emit)
+                             context_block=context, on_event=_emit,
+                             sticky_context=dbmod.CORE_SQL_CHEATSHEET)
     if not out.get("ok"):
         out["meta"] = meta
         return out

@@ -173,6 +173,42 @@ class TestFlow(TestLoop):
         self.assertEqual(box["verdict"], "ok")
         self.assertTrue(out["meta"]["terminal"])
 
+    def test_error_observation_marks_step_failed_and_internal_note_excluded(self):
+        tools = {
+            "bad_sql": {"desc": "报错工具", "args_hint": "{}",
+                        "run": lambda a: ({"error": "ERROR 1054"}, None)},
+            "internal_probe": {"desc": "内部探查", "args_hint": "{}", "internal": True,
+                               "run": lambda a: ({"cols": ["id"]}, "内部字段样本：{\"a\": 1}")},
+        }
+        replies = [
+            _resp({"thought": "探一下", "tool": "internal_probe", "args": {}}),
+            _resp({"thought": "试一下", "tool": "bad_sql", "args": {}}),
+            RuntimeError("收尾失败"),
+        ]
+        with mock.patch.object(cfgmod_holder(), "active_profile", lambda: {"model": "mock"}), \
+             mock.patch.object(llmmod, "_chat", side_effect=replies):
+            out = agent.run_agent("查排名", tools, max_steps=2)
+        self.assertTrue(out["steps"][0]["ok"])
+        self.assertFalse(out["steps"][1]["ok"])
+        self.assertNotIn("样本", out["answer"])
+        self.assertNotIn("{", out["answer"])
+
+    def test_sticky_context_sent_on_second_step(self):
+        seen = []
+        def fake_chat(prof, msgs, **kw):
+            seen.append(msgs[1]["content"])
+            if len(seen) == 1:
+                return _resp({"thought": "先查", "tool": "echo", "args": {}})
+            return _resp({"thought": "答", "final": "102 瓶"})
+        with mock.patch.object(cfgmod_holder(), "active_profile", lambda: {"model": "mock"}), \
+             mock.patch.object(llmmod, "_chat", side_effect=fake_chat):
+            out = agent.run_agent("库存", {"echo": TOOLS["echo"]}, max_steps=3,
+                                  context_block="FULL_CTX", sticky_context="STICKY_SQL")
+        self.assertTrue(out["ok"])
+        self.assertIn("FULL_CTX", seen[0])
+        self.assertNotIn("FULL_CTX", seen[1])
+        self.assertIn("STICKY_SQL", seen[1])
+
 
 if __name__ == "__main__":
     unittest.main()

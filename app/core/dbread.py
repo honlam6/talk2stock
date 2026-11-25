@@ -189,10 +189,41 @@ def _table_candidates(err):
     return difflib.get_close_matches(name, table_names(), n=3, cutoff=0.35)
 
 
+def _column_hint(sql, err):
+    """从 MySQL 1054（Unknown column）错误里提取关联表并附上真实列名，
+    避免模型再花一轮去调 db_schema 探字段或重复写错列名。"""
+    if not re.search(r"Unknown column '([^']+)'", err or ""):
+        return ""
+    tables = list(dict.fromkeys(
+        re.findall(r"\b(?:from|join)\s+`?([A-Za-z0-9_]+)`?", sql or "", re.I)
+    ))[:3]
+    if not tables:
+        return ""
+    try:
+        rows = _schema_rows()
+    except Exception:
+        return ""
+    cols_by_table = {}
+    for r in rows:
+        t = r.get("table_name")
+        if t in tables:
+            cols_by_table.setdefault(t, []).append(r.get("column_name"))
+    parts = []
+    for t in tables:
+        cols = [c for c in (cols_by_table.get(t) or []) if c][:40]
+        if cols:
+            parts.append(f"{t}({', '.join(cols)})")
+    if not parts:
+        return ""
+    return ("字段不存在。相关表真实字段：%s——直接改用真实字段重写 SQL，不必再调 db_schema"
+            % "；".join(parts))
+
+
 def sql_query(args):
     """agent 工具：只读 SQL 查全库。返回 (data, 模板句)。"""
+    clean = str(args.get("sql") or "")
     try:
-        clean = validate_sql(str(args.get("sql") or ""))
+        clean = validate_sql(clean)
         res = _run(clean)
     except DbError as e:
         msg = str(e)
@@ -201,6 +232,10 @@ def sql_query(args):
         if cands:
             hint = ("表名不存在。相近的业务表：%s——直接用其中的表名重写 SQL，"
                     "不要再猜或查 information_schema" % "、".join(cands))
+        else:
+            col_hint = _column_hint(clean, msg)
+            if col_hint:
+                hint = col_hint
         return {"error": msg, "hint": hint}, None
     data = {"sql": clean, "columns": res["columns"], "rows": res["rows"],
             "row_count": res["row_count"], "truncated": res["truncated"]}
@@ -259,6 +294,16 @@ def table_names():
         return []
 
 
+CORE_SQL_CHEATSHEET = (
+    "# 核心业务表关联速查（写 SQL 严格按此列名，禁止猜字段）\n"
+    "- jsh_depot_head(id, type, sub_type, number, oper_time, organ_id, account_id, change_amount, total_price, discount_last_money, status, delete_flag)：往来单位一律用 organ_id 关联 jsh_supplier.id（无 supplier_id/customer_id 列）；sub_type 取值含 采购/采购退货/销售/销售退货/零售/零售退货\n"
+    "- jsh_supplier(id, supplier, type, delete_flag)：供应商(type='供应商')与客户(type='客户')都在本表，名称列是 supplier（绝不查 jsh_user）\n"
+    "- jsh_depot_item(id, header_id, material_id, oper_number, basic_number, unit_price, all_price, depot_id, delete_flag)：header_id=jsh_depot_head.id，material_id=jsh_material.id\n"
+    "- jsh_material(id, name, model, unit, unit_id, delete_flag)：无 ratio 列（多单位换算在 jsh_unit.ratio）\n"
+    "- jsh_material_current_stock(material_id, depot_id, current_number, delete_flag)"
+)
+
+
 def schema_brief(max_cols=18):
     """注入 agent context 的压缩表结构：表名【表注释】：列名..."""
     try:
@@ -274,6 +319,7 @@ def schema_brief(max_cols=18):
         cols = [c for c, _ in g["cols"][:max_cols]]
         more = "…（共%d列，用 db_schema 看全字段）" % len(g["cols"]) if len(g["cols"]) > max_cols else ""
         lines.append("- %s【%s】：%s%s" % (t, g["comment"], ", ".join(cols), more))
+    lines.append(CORE_SQL_CHEATSHEET)
     lines.append("# 通用口径：软删除表加 delete_flag='0'；大表查明细带 LIMIT。")
     lines.append("# 业务关键规范（必守）：")
     lines.append("#   1) 业务日期一律用 jsh_depot_head.oper_time（绝不用 create_time 过滤今天/本月/区间，create_time 常为批量导入同日时间戳）；")
@@ -313,4 +359,4 @@ def db_schema(args):
         except Exception:
             continue
     data = {"table": table, "columns": cols, "column_count": len(cols), "value_samples": samples}
-    return data, "「%s」共 %d 个字段，取值样本：%s。" % (table, len(cols), json.dumps(samples, ensure_ascii=False)[:400])
+    return data, None

@@ -43,6 +43,22 @@ class TestTableHint(unittest.TestCase):
             data, _ = dbmod.sql_query({"sql": "SELECT * FROM zzz_qqq"})
         self.assertNotIn("相近的业务表", data["hint"])
 
+    def test_1054_unknown_column_returns_real_table_columns(self):
+        err = "ERROR 1054 (42S22) at line 1: Unknown column 'h.supplier_id' in 'field list'"
+        schema_rows = [
+            {"table_name": "jsh_depot_head", "column_name": "id"},
+            {"table_name": "jsh_depot_head", "column_name": "organ_id"},
+            {"table_name": "jsh_depot_head", "column_name": "discount_last_money"},
+            {"table_name": "jsh_supplier", "column_name": "id"},
+            {"table_name": "jsh_supplier", "column_name": "supplier"},
+        ]
+        with mock.patch.object(dbmod, "_schema_rows", return_value=schema_rows), \
+             mock.patch.object(dbmod, "_run", side_effect=dbmod.DbError(err)):
+            data, _ = dbmod.sql_query({"sql": "SELECT h.supplier_id FROM jsh_depot_head h JOIN jsh_supplier s ON s.id=h.supplier_id"})
+        self.assertIn("真实字段", data["hint"])
+        self.assertIn("organ_id", data["hint"])
+        self.assertIn("discount_last_money", data["hint"])
+
 
 if __name__ == "__main__":
     unittest.main()

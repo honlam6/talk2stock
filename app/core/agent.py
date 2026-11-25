@@ -91,7 +91,7 @@ LOOP_PROMPT = """你是 Talk2Stock 的统一业务 Agent，负责理解用户意
    （闲聊/天气/常识/写文案等）不要调用任何工具，直接 final：「我只能查本系统
    的进销存数据，比如『可乐还有多少库存』『本月卖了多少』『谁欠我钱』。」
 8. 写操作的边界分几种（严格遵守）：
-   - 用户要录单/进货/销售/退货/报损/盘盈等（6 类出入库单：purchase_in / sale_out / purchase_return / sale_return / other_in / other_out）：调用 draft_order 工具起草（args.text = 用户的录单原话，结合会话把「改成60瓶」「还是那家」等代词补全成完整业务描述）。草稿只是预览、绝不会写入系统。
+   - 用户要录单/进货/销售/退货/报损/盘盈/生成草稿等（6 类出入库单：purchase_in / sale_out / purchase_return / sale_return / other_in / other_out）：直接调用 draft_order 工具起草（该工具已内置多单拆分、历史进价核价与库存校验，无需先用 search_history / stock_query / sql_query 逐项查价或查库存；args.text = 用户的录单原话，结合会话把「改成60瓶」「还是那家」等代词补全成完整业务描述）。草稿只是预览、绝不会写入系统。
    - 草稿观察里有 clarify 时，final 只自然地追问缺失信息，不要说已经生成草稿。
      有草稿且没有 clarify 时，final 简短说明「草稿已生成，请核对」，不要复述
      所有明细，也不要新增观察之外的数量、金额或单位。
@@ -138,10 +138,19 @@ def numeric_grounded(ans, observations):
 
 def _fallback_answer(notes, steps):
     """接地失败或预算耗尽时的干净兜底：优先复用专用工具模板句；仅有 sql_query 时
-    只格式化最后一个非空 SQL 的前几行，绝不把多步原始 JSON 串直接拼给用户。"""
-    non_sql = [n for n in dict.fromkeys(notes or []) if n and not n.startswith("只读查询返回")]
+    只格式化最后一个非空 SQL 的前几行，绝不把多步原始 JSON 串或内部探查日志拼给用户。"""
+    non_sql = [
+        n for n in dict.fromkeys(notes or [])
+        if n and not n.startswith("只读查询返回") and "取值样本：" not in n and "{" not in n
+    ]
+    if len(non_sql) > 1:
+        substantive = [n for n in non_sql if "没有查到相关记录" not in n]
+        if substantive:
+            non_sql = substantive
+    if len(non_sql) == 1:
+        return non_sql[0]
     if non_sql:
-        return "；".join(non_sql)
+        return "；".join(n.rstrip("。；;") for n in non_sql) + "。"
     for st in reversed(steps or []):
         if st.get("tool") == "sql_query" and st.get("ok") and isinstance(st.get("observation"), dict):
             rows = st["observation"].get("rows") or []
@@ -152,8 +161,15 @@ def _fallback_answer(notes, steps):
                         parts.append("，".join(f"{k}: {v}" for k, v in r.items() if v not in (None, "")))
                 if parts:
                     return "查询结果：" + "；".join(parts) + ("（仅展示前6条）。" if len(rows) > 6 else "。")
-    clean = list(dict.fromkeys(notes or []))
-    return "；".join(clean) if clean else "查询了 %d 步但没有得到可用的数据，请稍后再试。" % len(steps or [])
+    clean = [
+        n for n in dict.fromkeys(notes or [])
+        if n and "取值样本：" not in n and "{" not in n
+    ]
+    if len(clean) == 1:
+        return clean[0]
+    if clean:
+        return "；".join(n.rstrip("。；;") for n in clean) + "。"
+    return "查询了 %d 步但没有得到可用的数据，请稍后再试。" % len(steps or [])
 
 
 def _hist(i, thought, name, args, obs):
@@ -166,7 +182,7 @@ def _hist(i, thought, name, args, obs):
 
 def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_TOKENS,
               context_block="", on_event=None, prompt_template=None,
-              decision_max_tokens=None):
+              decision_max_tokens=None, sticky_context=""):
     """执行一个 agent 会话。返回 {ok, answer, steps, tokens, meta}。
 
     tools: {name: {"desc": str, "args_hint": str, "run": callable(args) -> (data, note[, extra])}}
@@ -202,9 +218,9 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         prompt = (prompt_template or LOOP_PROMPT).format(
             tool_catalog=catalog, history="\n".join(history_lines) or "（还没有）",
             max_steps=max_steps, goal=goal) + extra
-        # 全库表结构/主数据只在第一轮注入：后续轮靠 history 里的观察继续，
-        # 否则推理模型在重复的长上下文里会过度思考（实测单步 120s+ / 空输出）。
-        ctx = context_block if not history_lines else ""
+        # 全库表结构/主数据只在第一轮注入：后续轮保留精简核心字段速查（sticky_context），
+        # 既防止模型忘记关联列名，又避免长上下文导致推理模型过度思考。
+        ctx = context_block if not history_lines else sticky_context
         raw = llmmod._chat(prof, [
             {"role": "system", "content": prompt},
             {"role": "user", "content": (ctx + "\n请给出下一轮动作。").strip()},
@@ -284,10 +300,11 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
                 data, note, extra = res
             else:
                 data, note = res
-            ok = True
-            observations.append(data)
-            if note:
-                notes.append(str(note))
+            ok = not (isinstance(data, dict) and data.get("error"))
+            if ok:
+                observations.append(data)
+                if note and not tool.get("internal"):
+                    notes.append(str(note))
             if isinstance(extra, dict):
                 _emit(on_event, {"type": "draft", "tool": name, "payload": extra})
         except Exception as e:

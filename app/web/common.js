@@ -12,11 +12,13 @@ const BIZ = {
   other_out:       { label: '其他出库', party: '往来单位', dir: 'out' },
 };
 
-// ---------- 就地输入弹框（替代 prompt） ----------
-/** WebView/部分内嵌浏览器不支持 prompt()，导致公网部署下取口令/操作人直接卡死。
-    统一用自绘 modal：Enter 确认、Esc 取消、输入框自动聚焦。返回 string 或 null（取消）。 */
+// ---------- 就地输入/确认弹框（替代 prompt / confirm） ----------
+/** WebView/部分内嵌浏览器不支持 prompt() / confirm()，导致公网部署下直接卡死。
+    统一用自绘 modal：当传入 input / password / value / placeholder 时展示输入框，
+    否则为纯确认弹框（不出现空文本框）。确定返回 string，取消返回 null。 */
 function askInline(opt) {
-  const o = Object.assign({ title: '请输入', hint: '', value: '', okText: '确定', cancelText: '取消', password: false, maxlen: 60 }, opt || {});
+  const o = Object.assign({ title: '请输入', hint: '', value: '', placeholder: '', input: false, okText: '确定', cancelText: '取消', password: false, maxlen: 60 }, opt || {});
+  const needInput = !!(o.input || o.password || o.value || o.placeholder);
   return new Promise(resolve => {
     const old = document.getElementById('__askInline');
     if (old) old.remove();
@@ -27,38 +29,42 @@ function askInline(opt) {
     mask.setAttribute('aria-modal', 'true');
     mask.innerHTML = `
       <div class="modal" style="max-width:440px">
-        <button class="modal-x" aria-label="关闭">×</button>
+        <button type="button" class="modal-x" aria-label="关闭">×</button>
         <h3>${esc(o.title)}</h3>
         ${o.hint ? `<div class="hint" style="margin-top:6px">${esc(o.hint)}</div>` : ''}
-        <div class="pv-form">
+        ${needInput ? `<div class="pv-form">
           <div class="pv-line">
             <input id="__askInlineInput" type="${o.password ? 'password' : 'text'}" maxlength="${o.maxlen}"
-              value="${esc(o.value)}" autocomplete="off" spellcheck="false"
+              value="${esc(o.value)}" placeholder="${esc(o.placeholder)}" autocomplete="off" spellcheck="false"
               style="flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:15px">
           </div>
-        </div>
+        </div>` : ''}
         <div class="row-btns mt-4">
-          <button class="btn btn-ghost" id="__askInlineCancel">${esc(o.cancelText)}</button>
-          <span class="hint flex-1">Enter 确认 · Esc 取消</span>
-          <button class="btn btn-primary" id="__askInlineOk">${esc(o.okText)}</button>
+          <button type="button" class="btn btn-ghost" id="__askInlineCancel">${esc(o.cancelText)}</button>
+          <span class="hint flex-1 pv-kbd-hint">${needInput ? 'Enter 确认 · Esc 取消' : 'Esc 取消'}</span>
+          <button type="button" class="btn btn-primary" id="__askInlineOk">${esc(o.okText)}</button>
         </div>
       </div>`;
     document.body.appendChild(mask);
     const input = mask.querySelector('#__askInlineInput');
     const done = v => { if (mask._done) return; mask._done = true; if (untrap) untrap(); mask.remove(); resolve(v); };
-    const ok = () => done(input.value);
+    const ok = () => done(input ? input.value : '');
     mask.querySelector('#__askInlineOk').onclick = ok;
     mask.querySelector('#__askInlineCancel').onclick = () => done(null);
     mask.querySelector('.modal-x').onclick = () => done(null);
     mask.addEventListener('mousedown', e => { if (e.target === mask) done(null); });
-    input.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); ok(); }
-      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
-      e.stopPropagation();
-    });
+    if (input) {
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+          if (e.isComposing || e.keyCode === 229) return;
+          e.preventDefault(); ok();
+        } else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+        e.stopPropagation();
+      });
+    }
     const untrap = trapFocus(mask.querySelector('.modal'), () => done(null));
-    input.focus();
-    input.select();
+    if (input) { input.focus(); input.select(); }
+    else { mask.querySelector('#__askInlineCancel').focus(); }
   });
 }
 async function askPass() {
@@ -270,7 +276,7 @@ async function ensureOperator() {
     const v = await askInline({
       title: '你的名字或编号',
       hint: '只存本机，用于实验记录归因（写入审计）。可留空。登录后自动使用登录名。',
-      okText: '保存', maxlen: 40,
+      input: true, placeholder: '例如 张三 或 001', okText: '保存', maxlen: 40,
     });
     op = (v || '').trim().slice(0, 40);
     if (op) localStorage.setItem('t2s_operator', op);
@@ -1987,62 +1993,132 @@ document.addEventListener('keydown', e => {
 // ---------- 侧边导航骨架 ----------
 // 入口收敛：ERP Agent 是唯一主入口；录单页降级为助手内的工具（/new?mode=…）
 const NAV_ITEMS = [
-  ['/ask', 'ERP Agent', '❝'],
-  ['/dashboard', '经营看板', '◫'],
-  ['/settings', '设置', '⚙'],
+  ['/ask', 'ERP Agent', '❝', 'Agent'],
+  ['/dashboard', '经营看板', '◫', '看板'],
+  ['/new', '录单工具', '▤', '录单'],
+  ['/settings', '系统设置', '⚙', '设置'],
 ];
+const PAGE_TITLE = { '/ask': 'ERP Agent', '/dashboard': '经营看板', '/new': '录单工具', '/settings': '系统设置', '/': '工作台' };
 const ERP_URL = location.protocol + '//' + location.hostname + ':8080';
 
 function shell(active) {
   document.body.classList.add('has-shell');
-  const nav = document.createElement('nav');
+  const nav = document.createElement('aside');
   nav.className = 'shell-nav';
+  nav.id = '__shellNav';
+  nav.setAttribute('aria-label', '主导航');
   nav.innerHTML = `
-    <div class="shell-brand">
-      <div class="seal">账</div>
-      <div><div class="t1">Talk2Stock</div><div class="t2">ERP AGENT</div></div>
+    <div class="chat-side-top">
+      <div class="side-brand">
+        <span class="agent-mark"><img src="/avatars/agent-cat-v3.jpg" alt=""></span>
+        <div class="side-brand-txt"><strong>Talk2Stock</strong><small>ERP AGENT</small></div>
+      </div>
+      <button type="button" class="chat-side-fold" id="__shellFold" title="收起侧栏" aria-label="收起侧栏">«</button>
     </div>
-    <div class="nav-sec">主菜单</div>
+    <div class="nav-sec">主要入口</div>
     ${NAV_ITEMS.map(([h, t, i]) =>
       `<a class="nav-item${h === active ? ' on' : ''}" href="${h}"><span class="ico">${i}</span>${t}</a>`).join('')}
-    <div class="nav-sec">系统</div>
-    <a class="nav-item" href="${ERP_URL}" target="_blank" rel="noopener"><span class="ico">▦</span>原版 ERP</a>
+    <div class="nav-sec">快捷工具</div>
+    <a class="nav-item" href="${ERP_URL}" target="_blank" rel="noopener"><span class="ico">▦</span>原版 ERP ↗</a>
     <a class="nav-item" id="__navCmd" href="javascript:void 0" title="快捷键 Ctrl/⌘ + K"><span class="ico">⌘</span>命令面板</a>
     <div class="nav-foot">
-      <div><span class="nav-dot" id="__navDot"></span><span id="__navStat">连接检查中…</span></div>
-      <div id="__navUser" class="me-chip"></div>
-      <div>说一句话 · 变成一张 <b>ERP 单据</b></div>
+      <div class="nav-status"><span class="nav-dot" id="__navDot"></span><span id="__navStat">连接检查中…</span></div>
+      <div class="nav-foot-row">
+        <div id="__navUser" class="me-chip"></div>
+        <button type="button" class="chat-side-acct" id="__navAcct" title="查看账号">账号</button>
+      </div>
     </div>`;
   document.body.prepend(nav);
 
+  const mask = document.createElement('div');
+  mask.className = 'chat-side-mask';
+  mask.id = '__shellMask';
+  mask.hidden = true;
+  document.body.insertBefore(mask, nav.nextSibling);
+
   const main = document.createElement('div');
   main.className = 'shell-main';
-  while (document.body.children.length > 1) main.appendChild(document.body.children[1]);
+  while (document.body.children.length > 2) main.appendChild(document.body.children[2]);
+
+  const hdr = document.createElement('header');
+  hdr.className = 'shell-header';
+  hdr.innerHTML = `
+    <div class="agent-brand">
+      <button type="button" class="agent-menu" id="__shellMenu" title="展开导航" aria-label="展开导航" aria-expanded="false">☰</button>
+      <span class="agent-mark shell-hdr-mark"><img src="/avatars/agent-cat-v3.jpg" alt=""></span>
+      <strong>${esc(PAGE_TITLE[active] || 'Talk2Stock')}</strong>
+      <span class="agent-presence" id="__hdrPresence">正在连接 ERP</span>
+    </div>
+    <div class="agent-header-actions">
+      <a href="/ask" class="hdr-ask-pill" title="前往 ERP Agent 对话"><span class="ha-ico">❝</span><span class="ha-txt">问 Agent</span></a>
+      <button type="button" class="header-cmd-btn" id="__hdrCmd" title="命令面板 (⌘/Ctrl+K)">⌘K</button>
+    </div>`;
+  main.prepend(hdr);
   document.body.appendChild(main);
 
-  // 手机底部 Tab（第 6 项「账号」：窄屏侧边栏隐藏，身份徽章/退出要在这里可达）
+  // 手机底部 Tab（统一双端主导航：Agent · 看板 · 录单 · 设置 · 账号）
   const tab = document.createElement('div');
   tab.className = 'tabbar';
-  // 移动端四个 Tab：助手（主入口）· 录入（工具页直达）· 看板 · 账号
-  tab.innerHTML = [NAV_ITEMS[0], NAV_ITEMS[1]].map(([h, t, i]) =>
-    `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="ico">${i}</span>${t}</a>`).join('')
+  tab.innerHTML = NAV_ITEMS.map(([h, t, i, s]) =>
+    `<a href="${h}" class="${h === active ? 'on' : ''}"><span class="ico">${i}</span>${s || t}</a>`).join('')
     + '<a href="javascript:void 0" id="__tabAcct"><span class="ico">◉</span>账号</a>';
   document.body.appendChild(tab);
   const tabAcct = $('#__tabAcct');
   if (tabAcct) tabAcct.onclick = () => accountSheet();
+  const navAcct = $('#__navAcct');
+  if (navAcct) navAcct.onclick = () => { closeDrawer(); accountSheet(); };
 
   const navCmd = $('#__navCmd');
-  if (navCmd) navCmd.onclick = () => commandPalette();
+  if (navCmd) navCmd.onclick = () => { closeDrawer(); commandPalette(); };
+  const hdrCmd = $('#__hdrCmd');
+  if (hdrCmd) hdrCmd.onclick = () => commandPalette();
 
-  // ERP 连接状态（静默）
+  const closeDrawer = () => {
+    nav.classList.remove('is-open');
+    mask.hidden = true;
+    const m = $('#__shellMenu');
+    if (m) m.setAttribute('aria-expanded', 'false');
+  };
+  const openDrawer = () => {
+    nav.classList.add('is-open');
+    mask.hidden = false;
+    const m = $('#__shellMenu');
+    if (m) m.setAttribute('aria-expanded', 'true');
+  };
+  const menuBtn = $('#__shellMenu');
+  if (menuBtn) {
+    menuBtn.onclick = () => {
+      if (matchMedia('(max-width:900px)').matches) {
+        nav.classList.contains('is-open') ? closeDrawer() : openDrawer();
+        return;
+      }
+      const collapsed = document.body.classList.toggle('side-collapsed');
+      try { localStorage.setItem('t2s_side_collapsed', collapsed ? '1' : '0'); } catch (_) {}
+    };
+  }
+  const foldBtn = $('#__shellFold');
+  if (foldBtn) {
+    foldBtn.onclick = () => {
+      if (matchMedia('(max-width:900px)').matches) { closeDrawer(); return; }
+      document.body.classList.add('side-collapsed');
+      try { localStorage.setItem('t2s_side_collapsed', '1'); } catch (_) {}
+    };
+  }
+  mask.onclick = closeDrawer;
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+  try { if (localStorage.getItem('t2s_side_collapsed') === '1') document.body.classList.add('side-collapsed'); } catch (_) {}
+
+  // ERP 连接状态（同步左侧边栏与顶栏）
   api('/api/master').then(() => {
-    const d = $('#__navDot'), s = $('#__navStat');
+    const d = $('#__navDot'), s = $('#__navStat'), p = $('#__hdrPresence');
     if (d) d.className = 'nav-dot ok';
     if (s) s.textContent = 'ERP 已连接';
+    if (p) { p.textContent = 'ERP 在线'; p.classList.add('is-online'); }
   }).catch(() => {
-    const d = $('#__navDot'), s = $('#__navStat');
+    const d = $('#__navDot'), s = $('#__navStat'), p = $('#__hdrPresence');
     if (d) d.className = 'nav-dot bad';
     if (s) s.textContent = 'ERP 未连接';
+    if (p) { p.textContent = 'ERP 待连接'; p.classList.add('is-offline'); }
   });
 
   // 登录者徽章（401 时 api() 会先弹登录框，成功后再回来刷新）

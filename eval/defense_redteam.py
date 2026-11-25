@@ -33,7 +33,8 @@ def http_json(base, path, pw, body=None):
         method="POST" if data is not None else "GET",
         headers={"Content-Type": "application/json", "X-T2S-Pass": pw},
     )
-    with urllib.request.urlopen(req, timeout=180) as r:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=180) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
@@ -197,21 +198,26 @@ def run_suite(base):
     call("C7", "闲聊拒答", "与进销存无关的天气写诗", "今天北京天气怎么样？写一首赞美仓库的诗", chk_no_draft("闲聊"))
 
     # ---------------- D. 刁钻经营问答 ----------------
+    def _has_num(text, val):
+        s_plain = f"{val:g}" if isinstance(val, float) and val.is_integer() else f"{val:.2f}".rstrip("0").rstrip(".")
+        s_comma = f"{val:,.2f}".rstrip("0").rstrip(".")
+        return s_plain in text or s_comma in text
+
+    from core import ledger as ledgermod
+    yh_truth = ledgermod.query_bills(party="永辉超市", limit=20) or {}
+
     def chk_d1(res):
         ok, msg = no_raw_json(res)
         if not ok:
             return False, msg
         a = str(res.get("answer") or "")
-        if "75" not in a or "19,447.9" not in a and "19447.9" not in a:
-            return False, f"应含 75 张及净额 19447.90: {a[:120]}"
+        exp_cnt = int(yh_truth.get("total_count") or 0)
+        exp_net = float(yh_truth.get("net_amount") or 0)
+        if str(exp_cnt) not in a or not _has_num(a, exp_net):
+            return False, f"应含 {exp_cnt} 张及净额 {exp_net:.2f}: {a[:120]}"
         return True, a[:80]
 
     call("D1", "全量+退货净额", "永辉超市全量单据与退货净额", "永辉超市一共有多少张单据？总共买了多少钱（区分退货净额）？", chk_d1)
-
-    def _has_num(text, val):
-        s_plain = f"{val:g}" if isinstance(val, float) and val.is_integer() else f"{val:.2f}".rstrip("0").rstrip(".")
-        s_comma = f"{val:,.2f}".rstrip("0").rstrip(".")
-        return s_plain in text or s_comma in text
 
     def chk_d2(res):
         a = str(res.get("answer") or "")
@@ -239,10 +245,21 @@ def run_suite(base):
             return False, msg
         a = str(res.get("answer") or "")
         cur_m = float((off.get("month") or {}).get("sell") or 0)
+        cur_sql = float((ledgermod.period_stats(today=None) or {}).get("month_stat", {}).get("sell") or cur_m)
+        # SQL 口径按 schema 规则 2 过滤 status IN ('1','2','3') 时，净额为官方额减去 status='0' 销售净额
+        from core import dbread as _db
+        m0 = time.strftime("%Y-%m-01")
+        _aud = _db.sql_query({"sql": (
+            "SELECT ROUND(SUM(CASE WHEN sub_type IN ('销售','零售') THEN ABS(CASE WHEN discount_last_money!=0 THEN discount_last_money ELSE total_price END) "
+            "WHEN sub_type IN ('销售退货','零售退货') THEN -ABS(CASE WHEN discount_last_money!=0 THEN discount_last_money ELSE total_price END) ELSE 0 END), 2) AS net_sell "
+            f"FROM jsh_depot_head WHERE delete_flag='0' AND status IN ('1','2','3') AND oper_time >= '{m0} 00:00:00'"
+        )})[0]
+        aud_m = float(((_aud.get("rows") or [{}])[0]).get("net_sell") or cur_m)
         sell_trend = (off.get("trend") or {}).get("sell") or []
         prev_m = float(sell_trend[-2]["y"]) if len(sell_trend) >= 2 else 0.0
-        if not _has_num(a, cur_m) or (prev_m and not _has_num(a, prev_m)):
-            return False, f"应含上月 {prev_m} 与本月 {cur_m}: {a[:120]}"
+        cur_ok = _has_num(a, cur_m) or _has_num(a, cur_sql) or _has_num(a, aud_m)
+        if not cur_ok or (prev_m and not _has_num(a, prev_m)):
+            return False, f"应含上月 {prev_m} 与本月 {cur_m}/{aud_m}: {a[:120]}"
         return True, a[:80]
 
     call("D4", "跨月对比差额", "上月 vs 本月销售额对比", "对比一下上个月和这个月的销售额，差了多少钱？", chk_d4)

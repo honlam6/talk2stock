@@ -11,27 +11,28 @@
 <div class="chat-app">
   <aside class="chat-side" id="side" aria-label="对话历史">
     <div class="chat-side-top">
-      <span class="chat-side-title">对话</span>
+      <div class="side-brand"><span class="agent-mark"><img src="/avatars/agent-cat-v3.jpg" alt=""></span><div class="side-brand-txt"><strong>Talk2Stock</strong><small>ERP AGENT</small></div></div>
       <button class="chat-side-fold" id="sideFold" title="收起侧栏" aria-label="收起侧栏">«</button>
     </div>
-    <div class="chat-side-actions"><button class="chat-side-new" id="sideNew" title="新对话" aria-label="新对话">＋ 新对话</button></div>
     <nav class="chat-side-nav" aria-label="主要入口">
+      <a href="/ask" class="is-on"><span class="csn-ico">❝</span>ERP Agent</a>
       <a href="/dashboard"><span class="csn-ico">◫</span>经营看板</a>
-      <a href="/new"><span class="csn-ico">▤</span>录单</a>
-      <a href="/settings"><span class="csn-ico">⚙</span>设置</a>
+      <a href="/new"><span class="csn-ico">▤</span>录单工具</a>
+      <a href="/settings"><span class="csn-ico">⚙</span>系统设置</a>
     </nav>
+    <div class="chat-side-actions"><button class="chat-side-new" id="sideNew" title="新对话" aria-label="新对话">＋ 新对话</button></div>
+    <div class="chat-side-sec">历史对话</div>
     <div class="chat-side-list" id="sideList" role="list"></div>
-    <div class="chat-side-foot"><span class="chat-side-user" id="sideUser"></span></div>
+    <div class="chat-side-foot"><span class="chat-side-user" id="sideUser"></span><button type="button" class="chat-side-acct" id="sideAcct" title="查看账号">账号</button></div>
   </aside>
   <div class="chat-side-mask" id="sideMask" hidden></div>
   <div class="agent-shell">
   <header class="agent-header">
-    <div class="agent-brand"><button class="agent-menu" id="menuBtn" title="展开对话历史" aria-label="展开对话历史" aria-expanded="false">☰</button><span class="agent-mark" id="brandMark" title="Talk2Stock · ERP Agent"></span><strong>ERP Agent</strong><span class="agent-presence">正在连接 ERP</span></div>
-    <div class="agent-header-actions"><a href="/dashboard" title="经营看板" aria-label="经营看板"><span class="ha-ico">◫</span><span class="ha-txt">看板</span></a><a href="/settings" title="模型与账号设置" aria-label="模型与账号设置"><span class="ha-ico">⚙</span><span class="ha-txt">设置</span></a></div>
+    <div class="agent-brand"><button class="agent-menu" id="menuBtn" title="展开导航与历史" aria-label="展开导航与历史" aria-expanded="false">☰</button><span class="agent-mark" id="brandMark" title="Talk2Stock · ERP Agent"></span><strong>ERP Agent</strong><span class="agent-presence">正在连接 ERP</span></div>
+    <div class="agent-header-actions"><button type="button" class="agent-new" id="headerNew" title="新对话" aria-label="新对话">＋</button><button type="button" class="header-cmd-btn" id="headerCmd" title="命令面板 (⌘/Ctrl+K)">⌘K</button><a href="/dashboard" title="经营看板" aria-label="经营看板"><span class="ha-ico">◫</span><span class="ha-txt">看板</span></a><a href="/settings" title="模型与账号设置" aria-label="模型与账号设置"><span class="ha-ico">⚙</span><span class="ha-txt">设置</span></a></div>
   </header>
   <main class="agent-main" id="main"><div class="agent-log" id="log" role="log" aria-live="polite"></div></main>
   <footer class="agent-dock">
-    <div class="agent-suggestions" id="suggestions"><button data-q="今天采销怎么样？">今日经营</button><button data-q="可乐还有多少库存？">查库存</button><button data-q="谁欠我钱？">看欠款</button><button data-q="从美宜佳买30瓶可乐，单价3块5，入原料仓">录一单</button></div>
     <div class="agent-composer" id="composer">
       <button class="agent-icon" id="plus" title="添加图片或表格" aria-label="添加图片或表格" aria-expanded="false">＋</button>
       <textarea id="q" rows="1" maxlength="1000" placeholder="问经营，或说一句要办的事" aria-label="给 ERP Agent 发消息"></textarea>
@@ -49,10 +50,10 @@
 (() => {
 'use strict';
 const $id = id => document.getElementById(id);
-const log = $id('log'), q = $id('q'), send = $id('send'), suggestions = $id('suggestions');
+const log = $id('log'), q = $id('q'), send = $id('send');
 const KEY = 't2s_agent_v2';
-const TOOL_LABEL = {stock_query:'查询库存',low_stock:'检查库存预警',today_stats:'汇总今日经营',month_stats:'汇总本月经营',debts:'核算应收应付',recent_bills:'查看近期单据',stock_value:'计算库存货值',master_count:'统计档案',search_docs:'查阅操作指引',search_history:'检索历史',query_bills:'查询单据明细',procurement_suggest:'计算补货建议',sql_query:'核对业务数据',db_schema:'核对数据结构',draft_order:'生成与校验草稿',stock_check:'校验可用库存',last_price:'参考最近成交价',habit_defaults:'参考录入习惯',party_history:'核对往来记录',submit_verdict:'整理校验结论',response_review:'检查回答',decide:'重新思考'};
-const TOOL_VERB = {stock_query:'正在查库存',low_stock:'正在看库存预警',today_stats:'正在汇总今日经营',month_stats:'正在汇总本月经营',debts:'正在核算欠款',recent_bills:'正在查近期单据',stock_value:'正在计算库存货值',master_count:'正在统计档案',search_docs:'正在查操作指引',search_history:'正在找历史记录',query_bills:'正在查单据',procurement_suggest:'正在核对库存与销量',sql_query:'正在核对业务数据',draft_order:'正在整理并校验草稿',stock_check:'正在校验库存',last_price:'正在核对历史价格',habit_defaults:'正在参考录入习惯',party_history:'正在核对往来记录',submit_verdict:'正在整理校验结论'};
+const TOOL_LABEL = {stock_query:'查询库存',low_stock:'检查库存预警',today_stats:'汇总今日经营',month_stats:'汇总本月经营',debts:'核算应收应付',account_balance:'核对账户余额',ops_summary:'统计待办单据',recent_bills:'查看近期单据',stock_value:'计算库存货值',master_count:'统计档案',search_docs:'查阅操作指引',search_history:'检索历史',query_bills:'查询单据明细',procurement_suggest:'计算补货建议',sql_query:'核对业务数据',db_schema:'核对数据结构',draft_order:'生成与校验草稿',stock_check:'校验可用库存',last_price:'参考最近成交价',habit_defaults:'参考录入习惯',party_history:'核对往来记录',submit_verdict:'整理校验结论',response_review:'检查回答',decide:'重新思考'};
+const TOOL_VERB = {stock_query:'正在查库存',low_stock:'正在看库存预警',today_stats:'正在汇总今日经营',month_stats:'正在汇总本月经营',debts:'正在核算欠款',account_balance:'正在核对资金账户余额',ops_summary:'正在统计待审核与待收付款',recent_bills:'正在查近期单据',stock_value:'正在计算库存货值',master_count:'正在统计档案',search_docs:'正在查操作指引',search_history:'正在找历史记录',query_bills:'正在查单据',procurement_suggest:'正在核对库存与销量',sql_query:'正在核对业务数据',draft_order:'正在整理并校验草稿',stock_check:'正在校验库存',last_price:'正在核对历史价格',habit_defaults:'正在参考录入习惯',party_history:'正在核对往来记录',submit_verdict:'正在整理校验结论'};
 
 /* ---- 像素头像：40×40 手绘 rect，整数倍缩放（聊天 40px / 欢迎页 160px） ---- */
 const AV_IMG = { agent: '/avatars/agent-cat-v3.jpg', user: '/avatars/user-bear-v2.jpg' };
@@ -208,27 +209,58 @@ function restore() {
 function node(cls, text) { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; return d; }
 function scrollEnd(smooth = true) { $id('main').scrollTo({top:$id('main').scrollHeight,behavior:smooth && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth':'auto'}); }
 const CAPS = [
-  {ico:'◔', t:'今日经营', d:'采销与现金流一屏汇总', q:'今天采销怎么样？'},
-  {ico:'▤', t:'库存预警', d:'负库存/低库存扫描', q:'库存有哪些不足？'},
-  {ico:'¥', t:'应收应付', d:'谁欠我、我欠谁', q:'谁欠我钱？'},
-  {ico:'▦', t:'单据检索', d:'按条件查历史单据', q:'最近有哪些采购单？'},
-  {ico:'✦', t:'一句话录单', d:'自然语言起草并校验', q:'从美宜佳买30瓶可乐，单价3块5，入原料仓'},
-  {ico:'↻', t:'采购建议', d:'按销量算该补什么', q:'哪些商品该补货？建议采购多少？'},
-  {ico:'▣', t:'查库存', d:'指定商品现有多少', q:'可乐还有多少库存？'},
-  {ico:'◫', t:'库存货值', d:'按仓库核算金额', q:'库存现在值多少钱？'},
+  {ico:'◔', t:'经营体检', d:'采销毛利、账户余额与待办汇总', q:'帮我做一次今日与本月经营体检：汇总采销毛利、各结算账户实时余额，以及待审核和待收付款单据情况'},
+  {ico:'↻', t:'智能补货', d:'预警排查 + 30天销量测算货值', q:'排查低于安全库存和负库存的商品，结合近30天销量计算建议采购量，并汇总当前库存总货值'},
+  {ico:'✦', t:'多单起草', d:'一句话拆单 + 核价验库存', q:'向美宜佳商贸采购可口可乐 500ml 100瓶（按上次进价）；同时卖给永辉超市维达抽纸 3层*24包 20箱单价54元，帮我核价验库存并生成草稿'},
+  {ico:'¥', t:'账款风控', d:'应收应付排行与待结算单据', q:'核算目前谁欠我钱、我欠谁钱，按金额列出重点往来欠款，并说明有多少张待收款和待付款单据'},
+  {ico:'▦', t:'经营排行', d:'SQL 取证 + 扣除退货净额排名', q:'统计本月采购额和销售额前5的往来单位与畅销商品，扣除退货后按净额排名'},
+  {ico:'▤', t:'往来对账', d:'指定单位全量单据与退货净额', q:'查询美宜佳商贸的全部采购与退货单据，核对总单数、退货金额和净采购额，并列出最近几笔明细'},
 ];
+let prefillTimer = null;
+function prefillInput(text, triggerEl) {
+  q.value = text || '';
+  resizeInput();
+  q.focus({ preventScroll: true });
+  try { q.setSelectionRange(q.value.length, q.value.length); } catch (_) {}
+  const comp = $id('composer');
+  if (comp) {
+    comp.classList.remove('is-prefilled');
+    void comp.offsetWidth;
+    comp.classList.add('is-prefilled');
+    clearTimeout(prefillTimer);
+    prefillTimer = setTimeout(() => comp.classList.remove('is-prefilled'), 850);
+  }
+  document.querySelectorAll('.agent-cap-grid button.is-selected').forEach(el => el.classList.remove('is-selected'));
+  if (triggerEl && triggerEl.closest('.agent-cap-grid')) triggerEl.classList.add('is-selected');
+  $id('draftState').textContent = '已预填到输入框，可修改后发送';
+}
+function openImportTool() {
+  if (!window.ImportDialog) { location.href = '/new?mode=import'; return; }
+  ImportDialog.open({onDrafts:p => { const t = {kind:'answer',answer:'表格已整理成 ' + (p.bills || []).length + ' 张草稿。',steps:[],drafts:[p]}; turns.push(t); save(); persist(); renderHistory(); activeDraft = p; $id('draftState').textContent = '可继续用自然语言修改这张草稿'; }});
+}
 function welcome() {
   log.innerHTML = '<section class="agent-welcome">'
-    + '<div class="am-stage">'
-    + '<span class="am-orbit" aria-hidden="true"></span><span class="am-orbit-dot" aria-hidden="true"></span>'
+    + '<div class="am-hero">'
+    + '<div class="am-avatar-wrap">'
+    + '<span class="am-ring" aria-hidden="true"></span>'
     + '<span class="am-portrait" id="heroAgent" role="img" aria-label="Talk2Stock ERP Agent">' + avatarHTML('agent') + '</span>'
-    + '<span class="am-nameplate"><i class="am-dot"></i>Talk2Stock · ERP Agent</span>'
-    + '<span class="am-spark am-s1" aria-hidden="true">✦</span><span class="am-spark am-s2" aria-hidden="true">✦</span><span class="am-spark am-s3" aria-hidden="true">✦</span>'
     + '</div>'
-    + '<p class="agent-eyebrow">TALK2STOCK · ERP AGENT</p><h1>今天，先处理哪件事？</h1>'
-    + '<p class="am-lede">我是 ERP Agent。说一句话，我会查 ERP 数据、核库存、找凭证；多步取证后再给结论，写库前先给你过目。</p>'
-    + '<div class="agent-cap-grid">' + CAPS.map(c => '<button data-q="' + esc(c.q) + '"><span class="cap-ico">' + c.ico + '</span><b>' + c.t + '</b><small>' + c.d + '</small></button>').join('') + '</div>'
-    + '<p class="agent-cap-note">支持多轮改稿 · 附件识别 · 表格导入 · 写库前人工确认</p></section>';
+    + '<span class="am-nameplate"><i class="am-dot"></i>Talk2Stock · ERP Agent</span>'
+    + '<h1>今天，先处理哪件事？</h1>'
+    + '<p class="am-lede">多步取证核对真实账本 · 一句话拆单核价 · 写库前人工确认</p>'
+    + '</div>'
+    + '<div class="agent-cap-grid">' + CAPS.map(c =>
+      '<button type="button" data-q="' + esc(c.q) + '">'
+      + '<span class="cap-top"><span class="cap-ico">' + c.ico + '</span><b>' + c.t + '</b><span class="cap-fill">填入 ↵</span></span>'
+      + '<small>' + c.d + '</small></button>').join('') + '</div>'
+    + '<div class="agent-cap-foot">'
+    + '<button type="button" class="cap-util" id="welcomeUpload">▧ 拍单据 / 传文件</button>'
+    + '<button type="button" class="cap-util" id="welcomeImport">▦ Excel / CSV 批量导入</button>'
+    + '<span class="agent-cap-note">点击卡片预填到输入框，修改后再发送</span>'
+    + '</div></section>';
+  const wu = $id('welcomeUpload'), wi = $id('welcomeImport');
+  if (wu) wu.onclick = () => $id('imageFile').click();
+  if (wi) wi.onclick = openImportTool;
 }
 function userView(t, idx) {
   const row = node('agent-turn agent-turn-user');
@@ -295,10 +327,14 @@ function runMeta(t) {
   if (tk) parts.push(fmtTok(tk) + ' tok');
   return parts.join(' · ');
 }
+function isStepErr(s) {
+  return Boolean(s && (s.ok === false || (s.observation && typeof s.observation === 'object' && s.observation.error)));
+}
 function stepView(s, idx) {
   const detail = document.createElement('details');
-  detail.className = 'agent-step' + (s.correction ? ' is-correct' : (s.ok === false ? ' is-error' : ''));
-  const label = TOOL_LABEL[s.tool] || s.tool || (s.correction ? '自我校验' : (s.ok === false ? '未完成' : '思考'));
+  const err = isStepErr(s);
+  detail.className = 'agent-step' + (s.correction ? ' is-correct' : (err ? ' is-error' : ''));
+  const label = TOOL_LABEL[s.tool] || s.tool || (s.correction ? '自我校验' : (err ? '未完成' : '思考'));
   const brief = argBrief(s);
   const summary = document.createElement('summary');
   summary.innerHTML = '<span class="agent-step-idx">' + (idx != null ? idx : '') + '</span>'
@@ -344,7 +380,7 @@ function retryTurn(t) {
     return;
   }
   turns = turns.slice(0, u + 1);
-  save(); persist(); renderHistory(); suggestions.hidden = true;
+  save(); persist(); renderHistory();
   retryAsk(user);
 }
 function answerView(t) {
@@ -364,11 +400,11 @@ function answerView(t) {
     trace.className = 'agent-trace';
     trace.open = true;   // 过程就是产品：默认展开，可收起
     const summary = document.createElement('summary');
-    const bad = allSteps.filter(s => s.ok === false).length;
+    const bad = allSteps.filter(s => isStepErr(s)).length;
     const fixed = allSteps.filter(s => s.correction).length;
     summary.innerHTML = '<span class="agent-trace-icon">⚙</span><span>执行过程 · ' + allSteps.length + ' 步'
       + (bad ? '（' + bad + ' 步被纠正）' : '') + (fixed ? '（自检拦截 ' + fixed + ' 次）' : '')
-      + (t.elapsed ? ' · ' + t.elapsed + 's' : '') + '</span><span class="agent-trace-more">收起</span>';
+      + (t.elapsed ? ' · ' + t.elapsed + 's' : '') + '</span><span class="agent-trace-more" aria-hidden="true"></span>';
     trace.appendChild(summary);
     const box = node('agent-trace-list'); allSteps.forEach((s, i) => box.appendChild(stepView(s, i + 1))); trace.appendChild(box);
     body.appendChild(trace);
@@ -474,7 +510,6 @@ function enterChat(user) {
   const portrait = document.querySelector('.agent-welcome .am-portrait');
   heroRect = portrait ? portrait.getBoundingClientRect() : null;
   if (log.querySelector('.agent-welcome')) log.innerHTML = '';
-  suggestions.hidden = true;
   userView(user, turns.length - 1);
   const av = log.querySelector('.agent-turn-user:last-child .agent-avatar');
   popAvatar(av);
@@ -645,9 +680,9 @@ function attachmentMenu() {
   const menu = node('agent-attach-menu'); menu.id = 'attachMenu'; menu.innerHTML = '<button id="chooseImage"><span>▧</span><div><b>附件与单据照片</b><small>多选图片、PDF、Word、Excel</small></div></button><button id="chooseSheet"><span>▦</span><div><b>表格导入与修复</b><small>先核对字段，再生成草稿</small></div></button><a href="/new?mode=form"><span>▤</span><div><b>手动填写</b><small>逐字段录入</small></div></a>';
   $id('composer').appendChild(menu); $id('plus').setAttribute('aria-expanded','true');
   $id('chooseImage').onclick = () => { menu.remove(); $id('imageFile').click(); };
-  $id('chooseSheet').onclick = () => { menu.remove(); if (!window.ImportDialog) { location.href = '/new?mode=import'; return; } ImportDialog.open({onDrafts:p => { const t = {kind:'answer',answer:'表格已整理成 ' + (p.bills || []).length + ' 张草稿。',steps:[],drafts:[p]}; turns.push(t); save(); persist(); renderHistory(); activeDraft = p; $id('draftState').textContent = '可继续用自然语言修改这张草稿'; }}); };
+  $id('chooseSheet').onclick = () => { menu.remove(); openImportTool(); };
 }
-function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); suggestions.hidden = true; return; } turns.forEach((t, i) => t.kind === 'user' ? userView(t, i) : t.kind === 'answer' ? answerView(t, i) : null); suggestions.hidden = true; scrollEnd(false); }
+function renderHistory() { log.innerHTML = ''; if (!turns.length) { welcome(); return; } turns.forEach((t, i) => t.kind === 'user' ? userView(t, i) : t.kind === 'answer' ? answerView(t, i) : null); scrollEnd(false); }
 function newChat() {
   clearTimeout(saveTimer);
   if (busy && controller) { controller._stopped = true; controller.abort(); }
@@ -657,14 +692,21 @@ function newChat() {
   renderHistory(); ctxNote(); q.value = ''; resizeInput(); q.focus({preventScroll:true}); closeSide();
 }
 send.onclick = () => { if (busy && controller) { controller._stopped = true; controller.abort(); } else doAsk(q.value); };
-q.addEventListener('input',resizeInput); q.addEventListener('keydown',e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (!busy) doAsk(q.value); } });
+q.addEventListener('input',resizeInput);
+q.addEventListener('keydown',e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    if (!busy) doAsk(q.value);
+  }
+});
 window.addEventListener('resize',resizeInput);
 q.addEventListener('paste',e => { const files = Array.from((e.clipboardData || {}).items || []).filter(x => x.kind === 'file' && x.type.startsWith('image/')).map(x => x.getAsFile()).filter(Boolean); if (files.length) { e.preventDefault(); addImages(files); } });
 ['dragover','dragleave','drop'].forEach(type => $id('composer').addEventListener(type,e => { e.preventDefault(); $id('composer').classList.toggle('is-drag',type === 'dragover'); if (type === 'drop') addImages(e.dataTransfer.files); }));
 $id('plus').onclick = attachmentMenu; $id('imageFile').onchange = e => { addImages(e.target.files); e.target.value = ''; };
 $id('thumbs').onclick = e => { const b = e.target.closest('[data-remove]'); if (b) { pendingImages.splice(+b.dataset.remove,1); renderThumbs(); } };
 document.addEventListener('click',e => { const m = $id('attachMenu'); if (m && !e.target.closest('#composer')) { m.remove(); $id('plus').setAttribute('aria-expanded','false'); } });
-document.addEventListener('click',e => { const b = e.target.closest('[data-q]'); if (b && !busy) doAsk(b.dataset.q); });
+document.addEventListener('click',e => { const b = e.target.closest('[data-q]'); if (b && !busy) prefillInput(b.dataset.q, b); });
 const mic = $id('mic'), SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 mic.innerHTML = '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
 if (!SR) mic.hidden = true;
@@ -681,20 +723,23 @@ $id('sideFold').onclick = () => {
   try { localStorage.setItem('t2s_side_collapsed', '1'); } catch (_) {}
 };
 $id('sideNew').onclick = newChat;
+if ($id('headerNew')) $id('headerNew').onclick = newChat;
+if ($id('headerCmd')) $id('headerCmd').onclick = () => { if (typeof commandPalette === 'function') commandPalette(); };
+if ($id('sideAcct')) $id('sideAcct').onclick = () => { closeSide(); if (typeof accountSheet === 'function') accountSheet(); };
 sideMask.onclick = closeSide;
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSide(); });
 try { if (localStorage.getItem('t2s_side_collapsed') === '1') document.querySelector('.chat-app').classList.add('side-collapsed'); } catch (_) {}
 api('/api/master').then(() => { const p = document.querySelector('.agent-presence'); if (p) { p.textContent = 'ERP 在线'; p.classList.add('is-online'); } }).catch(() => { const p = document.querySelector('.agent-presence'); if (p) { p.textContent = 'ERP 待连接'; p.classList.add('is-offline'); } });
-// 启动：优先恢复服务端当前会话，其次本地兜底（迁移旧会话时首次发送会自动落库）
+// 启动：默认停留在干净欢迎页；历史对话仍加载到左侧边栏，仅显式带 ?conv= 时打开对应会话
 (async function boot() {
   try { await loadConvs(); } catch (_) { renderSide(); }
-  if (convs.active) {
+  const urlConv = new URLSearchParams(location.search).get('conv');
+  if (urlConv) {
     try {
-      const r = await api('/api/conversations?id=' + encodeURIComponent(convs.active));
-      if (r.ok && r.item) { currentId = convs.active; turns = r.item.turns || []; }
-    } catch (_) { /* 服务端不可用时退回本地缓存 */ }
+      const r = await api('/api/conversations?id=' + encodeURIComponent(urlConv));
+      if (r.ok && r.item) { currentId = urlConv; turns = r.item.turns || []; }
+    } catch (_) { /* 读取失败退回欢迎页 */ }
   }
-  if (!turns.length) restore();
   renderHistory(); ctxNote(); renderSide();
   api('/api/auth/me').then(me => { if (me && !me.local) $id('sideUser').textContent = me.username || me.login || ''; }).catch(() => {});
   resizeInput(); if (!matchMedia('(pointer:coarse)').matches) q.focus({preventScroll:true});

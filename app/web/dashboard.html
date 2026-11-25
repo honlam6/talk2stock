@@ -2,7 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f4f1e8">
 <title>经营看板 · Talk2Stock</title>
 <link rel="stylesheet" href="/style.css">
 </head>
@@ -29,8 +30,10 @@
     <h2><span class="bar"></span>AI 经营洞察
       <span class="muted" style="font-size:12px;font-weight:400" id="insSrc"></span>
       <span class="flex-1"></span>
-      <button class="btn btn-sm" id="diagBtn">深度诊断</button>
-      <button class="btn btn-sm" id="reportBtn">生成日报</button>
+      <span class="card-hd-acts">
+        <button class="btn btn-sm" id="diagBtn">深度诊断</button>
+        <button class="btn btn-sm" id="reportBtn">生成日报</button>
+      </span>
     </h2>
     <div id="insBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div></div>
     <div id="diagBox" hidden></div>
@@ -42,7 +45,9 @@
     <h2><span class="bar"></span>智能采购建议
       <span class="muted" style="font-size:12px;font-weight:400" id="procSrc">· 按近 30 天销量与库存计算</span>
       <span class="flex-1"></span>
-      <button class="btn btn-sm" id="procDraftBtn" disabled>生成采购草稿</button>
+      <span class="card-hd-acts">
+        <button class="btn btn-primary btn-sm" id="procDraftBtn" disabled>生成采购草稿</button>
+      </span>
     </h2>
     <div id="procBox"><div class="skel skel-bar"></div><div class="skel skel-bar w-80"></div><div class="skel skel-bar w-60"></div></div>
   </div>

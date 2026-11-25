@@ -450,6 +450,40 @@ class TestSpecPreservationAndUnitCheck(unittest.TestCase):
         self.assertEqual(extra["bills"][0]["draft"]["oper_time"], b0["oper_time"])
         self.assertIn(b0["oper_time"][:10], note)
 
+    def test_fallback_answer_strips_schema_and_double_punctuation(self):
+        from core import agent as agentmod
+        notes = [
+            "历史单据里没有查到相关记录。",
+            "「维达抽纸 3层*24包」当前库存 15箱。总仓 15；门店仓 0；退货仓 0。低于安全库存 20箱。",
+            '「jsh_material」共 25 个字段，取值样本：{"enabled": ["\\u0001"], "delete_flag": ["0"]}。',
+        ]
+        out = agentmod._fallback_answer(notes, [])
+        self.assertNotIn("取值样本", out)
+        self.assertNotIn("{", out)
+        self.assertNotIn("没有查到相关记录", out)
+        self.assertNotIn("。；", out)
+        self.assertIn("维达抽纸", out)
+        self.assertEqual(agentmod._fallback_answer(["库存 102 瓶"], []), "库存 102 瓶")
+
+    def test_db_schema_returns_none_note(self):
+        from core import dbread as dbmod
+        rows = [
+            {"table_name": "jsh_material", "table_comment": "", "column_name": "id",
+             "column_comment": "", "data_type": "bigint", "ordinal_position": 1},
+            {"table_name": "jsh_material", "table_comment": "", "column_name": "enabled",
+             "column_comment": "", "data_type": "bit", "ordinal_position": 2},
+        ]
+        with mock.patch.object(dbmod, "_schema_rows", return_value=rows), \
+             mock.patch.object(dbmod, "_run", return_value={"rows": [{"v": "1"}]}):
+            data, note = dbmod.db_schema({"table": "jsh_material"})
+        self.assertEqual(data["table"], "jsh_material")
+        self.assertIsNone(note)
+
+    def test_compound_hints_skips_multi_order_draft_prompt(self):
+        from core import ask as askmod
+        q = "向美宜佳商贸采购可口可乐 500ml 100瓶（按上次进价）；同时卖给永辉超市维达抽纸 3层*24包 20箱单价28元，帮我核价验库存并生成草稿"
+        self.assertEqual(askmod._compound_hints(q), "")
+
 
 if __name__ == "__main__":
     unittest.main()
