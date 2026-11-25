@@ -543,6 +543,84 @@ function AttachmentManager(zoneEl, opts) {
   };
 }
 
+// ---------- 预览确认公共辅助（单单 / 批量统一复用） ----------
+const pvMatNorm = s => String(s || '').replace(/[()（）]/g, '').replace(/[×✕ｘ]/g, 'x')
+  .trim().toLowerCase().replace(/\s/g, '');
+
+function pvDepotTag(depotVal) {
+  const v = (depotVal || '').trim();
+  if (!v) return '<span class="tag tag-muted">默认仓</span>';
+  return findExact(MD.depots || [], v)
+    ? '<span class="tag tag-ok">已有</span>'
+    : '<span class="tag tag-new">将新建</span>';
+}
+
+function pvItemTag(it) {
+  if (!it || !(it.name || '').trim()) return '<span class="muted">未填</span>';
+  const n = pvMatNorm(it.name);
+  const hit = (MD.materials || []).find(x =>
+    pvMatNorm(x.name) === n || pvMatNorm(x.name + (x.model || '') + (x.standard || '')) === n);
+  return hit ? '<span class="tag tag-ok">已有</span>' : '<span class="tag tag-new">将新建</span>';
+}
+
+// 候选 chip：商品候选是 {id,name,model,standard,unit}（同名档案靠型号区分），
+// 往来单位候选仍是纯名字字符串——两种都渲染；商品 chip 带 data-cand-mid，
+// 点选后 material_id 直达档案，不再靠名字匹配
+function pvCandChips(cands, pick) {
+  if (!(cands || []).length) return '';
+  return `<div class="mt-1"><span class="hint">是指：</span>${cands.map(c => {
+    const o = (c && typeof c === 'object');
+    const label = o ? [c.name, c.model, c.standard].filter(Boolean).join(' · ') : c;
+    const mid = o && c.id ? ` data-cand-mid="${c.id}"` : '';
+    return `<span class="tag tag-blue" style="cursor:pointer" data-pick="${esc(pick)}" data-cand="${esc(o ? c.name : c)}"${mid}>${esc(label)}</span>`;
+  }).join(' ')}</div>`;
+}
+
+function pvRenderRows(items, previewItems, pickPrefix, priceTitle) {
+  if (!(items || []).length) {
+    return '<tr class="pv-empty-row"><td colspan="6" class="muted center">没有明细</td></tr>';
+  }
+  return items.map((it, i) => {
+    const pv = (previewItems || [])[i] || {};
+    const matchTag = (pv.match_kind === 'fuzzy' || pv.match_kind === 'picked') && pv.matched_name
+      ? ` <span class="tag ${pv.match_kind === 'picked' ? 'tag-ok' : 'tag-fuzzy'}">匹配→${esc(pv.matched_name)}${pv.matched_model ? ' ' + esc(pv.matched_model) : ''}</span>`
+      : '';
+    return `<tr>
+      <td class="pv-c-name">
+        <div class="pv-name-row"><div class="ac-wrap" style="flex:1"><input class="pv-name" data-i="${i}" value="${esc(it.name)}" placeholder="商品名称" autocomplete="off"></div></div>
+        <div class="pv-sub">${pvItemTag(it)}${matchTag}${pvCandChips(pv.candidates, pickPrefix + i)}</div>
+      </td>
+      <td class="pv-c-qty" data-label="数量"><input class="pv-qty num" data-i="${i}" type="number" inputmode="decimal" step="any" value="${it.qty ?? ''}" placeholder="0"></td>
+      <td class="pv-c-unit" data-label="单位"><input class="pv-unit" data-i="${i}" value="${esc(it.unit || '')}" placeholder="个"></td>
+      <td class="pv-c-price" data-label="单价">
+        <div class="pv-price-cell">
+          <input class="pv-price num${pv.price_missing ? ' price-zero' : ''}" data-i="${i}" type="number" inputmode="decimal" step="any" value="${it.price ?? ''}" placeholder="0.00">
+          ${pv.price_missing ? `<span class="tag tag-new" title="${esc(priceTitle)}">单价?</span>` : ''}
+        </div>
+      </td>
+      <td class="pv-c-amt num" data-label="小计"><b class="pv-amt" data-i="${i}">${money(num(it.qty) * num(it.price))}</b></td>
+      <td class="pv-c-del"><button type="button" class="xdel" data-del="${i}" title="删除该行" aria-label="删除第 ${i + 1} 行">×</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function pvTableHtml(rowsHtml, tbodyAttrs) {
+  return `
+    <div class="pv-items-wrap tbl-wrap" tabindex="0" role="region" aria-label="单据商品明细">
+      <table class="xtable">
+        <thead><tr>
+          <th class="pv-th-name">商品</th>
+          <th class="pv-th-qty num">数量</th>
+          <th class="pv-th-unit">单位</th>
+          <th class="pv-th-price num">单价</th>
+          <th class="pv-th-amt num">金额</th>
+          <th class="pv-th-del" aria-label="操作"></th>
+        </tr></thead>
+        <tbody ${tbodyAttrs}>${rowsHtml}</tbody>
+      </table>
+    </div>`;
+}
+
 // ---------- 预览确认弹层（三个页面共用，支持就地改数） ----------
 /** preview 须含 confirm_token（由 /api/parse 或 /api/resolve 签发）；
  *  draft 为可编辑草稿（就地改数量/单价/仓库/往来单位/日期/业务类型）；
@@ -567,18 +645,6 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
   let detachKey = null;        // 当前弹层的键盘监听卸载器（重渲染时先卸旧的，防残留）
   let detachTrap = null;       // 焦点陷阱卸载器
 
-  // 候选 chip：商品候选是 {id,name,model,standard,unit}（同名档案靠型号区分），
-  // 往来单位候选仍是纯名字字符串——两种都渲染；商品 chip 带 data-cand-mid，
-  // 点选后 material_id 直达档案，不再靠名字匹配
-  const candChips = (cands, pick) => (cands || []).length
-    ? `<div class="mt-1"><span class="hint">是指：</span>${cands.map(c => {
-        const o = (c && typeof c === 'object');
-        const label = o ? [c.name, c.model, c.standard].filter(Boolean).join(' · ') : c;
-        const mid = o && c.id ? ` data-cand-mid="${c.id}"` : '';
-        return `<span class="tag tag-blue" style="cursor:pointer" data-pick="${esc(pick)}" data-cand="${esc(o ? c.name : c)}"${mid}>${esc(label)}</span>`;
-      }).join(' ')}</div>`
-    : '';
-
   // 与服务端 draft.validate 同口径的轻校验，编辑后即时给出反馈
   function clientErrors() {
     const d = st.draft, errs = [];
@@ -596,21 +662,7 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
   const curTotal = () => (st.draft.items || [])
     .reduce((t, it) => t + num(it.qty) * num(it.price), 0);
 
-  // 与服务端 _norm_text/_mat_composite 同口径：名字+型号合成串比较，
-  // 「螺丝 M8×20」要认出是已有档案「螺丝 / 型号M8×20」，不能误报「将新建」
-  const matNorm = s => String(s || '').replace(/[()（）]/g, '').replace(/[×✕ｘ]/g, 'x')
-    .trim().toLowerCase().replace(/\s/g, '');
-
-  function itemTag(i) {
-    const it = (st.draft.items || [])[i];
-    if (!it || !(it.name || '').trim()) return '<span class="muted">未填</span>';
-    const n = matNorm(it.name);
-    const hit = (MD.materials || []).find(x =>
-      matNorm(x.name) === n || matNorm(x.name + (x.model || '') + (x.standard || '')) === n);
-    return hit
-      ? '<span class="tag tag-ok">已有</span>'
-      : '<span class="tag tag-new">将新建</span>';
-  }
+  const itemTag = i => pvItemTag((st.draft.items || [])[i]);
 
   function partyTag() {
     const d = st.draft;
@@ -620,8 +672,18 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
       : '<span class="tag tag-new">将新建</span>';
   }
 
+  const payNoteText = (payAmt, total) => {
+    if (payAmt === null || payAmt === undefined || payAmt === '') return '全款结清';
+    const pa = num(payAmt), debt = Math.round((total - pa) * 100) / 100;
+    return debt > 0 ? `欠款 ￥${money(debt)}` : '全款结清';
+  };
+
   function render() {
-    if (detachKey) detachKey();               // 重渲染前卸掉上一轮的键盘监听
+    if (detachKey) { detachKey(); detachKey = null; }
+    if (detachTrap) { detachTrap(); detachTrap = null; }
+    const prevMask = $('#__mask');
+    if (prevMask) prevMask.remove();
+
     const p = st.preview, d = st.draft;
     const errs = p.errors || [];
     const warns = p.warnings || [];
@@ -629,116 +691,119 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
     const ai = p.ai || {};
     const aiFlag = (ai.confidence && ai.confidence !== 'high') || (ai.note || '').trim()
       || (ai.problems || []).length;
-    const pitem = i => (p.items || [])[i] || {};
 
-    const rows = (d.items || []).map((it, i) => {
-      const pv = pitem(i);
-      return `<tr>
-        <td>
-          <div class="pv-name-row"><div class="ac-wrap" style="flex:1"><input class="pv-name" data-i="${i}" value="${esc(it.name)}" placeholder="商品名称" autocomplete="off"></div></div>
-          <div class="pv-sub">${itemTag(i)}${(pv.match_kind === 'fuzzy' || pv.match_kind === 'picked') && pv.matched_name ? ` <span class="tag ${pv.match_kind === 'picked' ? 'tag-ok' : 'tag-fuzzy'}">匹配→${esc(pv.matched_name)}${pv.matched_model ? ' ' + esc(pv.matched_model) : ''}</span>` : ''}${candChips(pv.candidates, 'item:' + i)}</div>
-        </td>
-        <td><input class="pv-qty num" data-i="${i}" type="number" step="any" value="${it.qty ?? ''}" placeholder="0"></td>
-        <td><input class="pv-unit" data-i="${i}" value="${esc(it.unit || '')}" placeholder="个"></td>
-        <td><input class="pv-price num${pv.price_missing ? ' price-zero' : ''}" data-i="${i}" type="number" step="any" value="${it.price ?? ''}" placeholder="0.00">${pv.price_missing ? ' <span class="tag tag-new" title="原话里可能没有说价格">单价?</span>' : ''}</td>
-        <td class="num"><b class="pv-amt" data-i="${i}">${money(num(it.qty) * num(it.price))}</b></td>
-        <td><button class="xdel" data-del="${i}" title="删除该行">×</button></td>
-      </tr>`;
-    }).join('');
-
+    const rows = pvRenderRows(d.items || [], p.items || [], 'item:', '原话里可能没有说价格');
     const depotOpts = (MD.depots || []).map(x => `<option value="${esc(x.name)}">`).join('');
-    const dtVal = (d.oper_time || '').replace(' ', 'T').slice(0, 16);
+    const effTime = (d.oper_time || p.oper_time || '').trim();
+    const dtVal = effTime.replace(' ', 'T').slice(0, 16);
 
     const html = `
-    <div class="mask show" id="__mask">
-      <div class="modal">
-        <button class="modal-x" id="__modalX" title="关闭（Esc）" aria-label="关闭">×</button>
-        <h2><span class="bar"></span>确认单据　
-          <select id="__biz" class="biz-sel">${Object.entries(BIZ).map(([k, v]) =>
+    <div class="mask show" id="__mask" role="dialog" aria-modal="true" aria-labelledby="__pvTitle">
+      <div class="modal pv-modal">
+        <div class="pv-modal-hd">
+          <h2 id="__pvTitle">确认单据</h2>
+          <select id="__biz" class="biz-sel" aria-label="业务类型">${Object.entries(BIZ).map(([k, v]) =>
             `<option value="${k}"${k === d.biz ? ' selected' : ''}>${v.label}</option>`).join('')}</select>
-        </h2>
+          <button type="button" class="modal-x m-close" id="__modalX" title="关闭（Esc）" aria-label="关闭">×</button>
+        </div>
 
-        <div id="__pErrs">${errs.length ? `<div class="alert alert-error"><b>无法提交：</b><br>${errs.map(esc).join('<br>')}</div>` : ''}</div>
+        <div class="pv-modal-body">
+          <div id="__pErrs">${errs.length ? `<div class="alert alert-error"><b>无法提交：</b><br>${errs.map(esc).join('<br>')}</div>` : ''}</div>
 
-        ${aiFlag ? `
-        <div class="alert ${ai.confidence === 'low' ? 'alert-warn' : 'alert-info'}">
-          <b>AI 提示（置信度：${esc(ai.confidence || '—')}）：</b>${esc(ai.note || '')}
-          ${(ai.problems || []).length ? '<br>解析问题：' + ai.problems.map(esc).join('；') : ''}
-        </div>` : ''}
+          ${aiFlag ? `
+          <div class="alert ${ai.confidence === 'low' ? 'alert-warn' : 'alert-info'}">
+            <b>AI 提示（置信度：${esc(ai.confidence || '—')}）：</b>${esc(ai.note || '')}
+            ${(ai.problems || []).length ? '<br>解析问题：' + ai.problems.map(esc).join('；') : ''}
+          </div>` : ''}
 
-        ${(p.duplicate && p.duplicate.hit) ? `
-        <div class="alert alert-warn">
-          <b>⚠ 疑似重复录入：</b><br>
-          ${(p.duplicate.matches || []).map(m => `近 ${p.duplicate.window_minutes} 分钟已有 <b>${esc(m.number)}</b>（${esc(m.time)}，${esc(m.party)}，${(m.hits || []).map(h => esc(h.name) + '×' + h.qty).join('、')}）`).join('<br>')}
-          <br>若这是同一笔业务，请先核对上面的单号，避免重复入库/出库。
-        </div>` : ''}
+          ${(p.duplicate && p.duplicate.hit) ? `
+          <div class="alert alert-warn">
+            <b>⚠ 疑似重复录入：</b><br>
+            ${(p.duplicate.matches || []).map(m => `近 ${p.duplicate.window_minutes} 分钟已有 <b>${esc(m.number)}</b>（${esc(m.time)}，${esc(m.party)}，${(m.hits || []).map(h => esc(h.name) + '×' + h.qty).join('、')}）`).join('<br>')}
+            <br>若这是同一笔业务，请先核对上面的单号，避免重复入库/出库。
+          </div>` : ''}
 
-        ${toCreate.length ? `
-        <div class="alert alert-warn">
-          <b>⚠ 以下资料系统里还没有，写入时会自动帮你建好：</b>
-          <ul style="margin:8px 0 0 20px;padding:0">${toCreate.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
-          <div class="hint mt-2">不用先去「基础资料」里新增，确认后一并创建。</div>
-        </div>` : ''}
+          ${toCreate.length ? `
+          <div class="alert alert-warn">
+            <b>⚠ 以下资料系统里还没有，写入时会自动帮你建好：</b>
+            <ul style="margin:8px 0 0 20px;padding:0">${toCreate.map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+            <div class="hint mt-2">不用先去「基础资料」里新增，确认后一并创建。</div>
+          </div>` : ''}
 
-        ${warns.length ? `<div class="alert alert-info"><b>提醒：</b><br>${warns.map(esc).join('<br>')}</div>` : ''}
+          ${warns.length ? `<div class="alert alert-info"><b>提醒：</b><br>${warns.map(esc).join('<br>')}</div>` : ''}
 
-        ${(st.suggestions && st.suggestions.length) ? `
-        <div class="sugg-bar">
-          <span class="sugg-label">💡 校验建议（来自历史证据，点击采纳）：</span>
-          ${st.suggestions.map((sg, si) => {
-            const label = sg.field === 'depot'
-              ? `仓库 → ${sg.value}`
-              : `第${(sg.item_index || 0) + 1}行单价 → ￥${sg.value}`;
-            return `<button type="button" class="sugg-chip" data-pv-sugg="${si}" title="${esc(sg.reason || '')}">✓ ${esc(label)}${sg.reason ? ' · ' + esc(sg.reason) : ''}</button>`;
-          }).join('')}
-        </div>` : ''}
+          ${(st.suggestions && st.suggestions.length) ? `
+          <div class="sugg-bar">
+            <span class="sugg-label">💡 校验建议（来自历史证据，点击采纳）：</span>
+            <div class="sugg-list">${st.suggestions.map((sg, si) => {
+              const label = sg.field === 'depot'
+                ? `仓库 → ${sg.value}`
+                : `第${(sg.item_index || 0) + 1}行单价 → ￥${sg.value}`;
+              return `<button type="button" class="sugg-chip" data-pv-sugg="${si}" title="${esc(sg.reason || '')}">✓ ${esc(label)}${sg.reason ? ' · ' + esc(sg.reason) : ''}</button>`;
+            }).join('')}</div>
+          </div>` : ''}
 
-        <div class="pv-form">
-          <div class="pv-line">
-            <label id="__partyLbl">${esc((p.party && p.party.type) || (BIZ[d.biz] && BIZ[d.biz].party) || '往来单位')}</label>
-            <div class="ac-wrap pv-grow"><input id="__party" value="${esc(d.party || '')}" placeholder="名称，没有的会自动新建" autocomplete="off"></div>
-            <span id="__partyTag">${partyTag()}</span>
-          </div>
-          <div id="__partyCand">${d.party && p.party && !p.party.matched ? candChips(p.party.candidates, 'party') : ''}</div>
-          <div class="pv-line">
-            <label>仓库</label>
-            <div class="pv-grow"><input id="__depot" list="__depotList" value="${esc(d.depot || '')}" placeholder="留空用默认仓"></div>
-            <datalist id="__depotList">${depotOpts}</datalist>
-            ${p.depot && p.depot.will_create && d.depot ? '<span class="tag tag-new">将新建</span>' : '<span class="tag tag-ok">已有</span>'}
-          </div>
-          <div class="pv-line">
-            <label>日期</label>
-            <div class="pv-grow">
+          <div class="pv-meta-grid">
+            <div class="pv-field pv-f-party">
+              <div class="pv-field-hd">
+                <label id="__partyLbl" for="__party">${esc((p.party && p.party.type) || (BIZ[d.biz] && BIZ[d.biz].party) || '往来单位')}</label>
+                <span id="__partyTag">${partyTag()}</span>
+              </div>
+              <div class="ac-wrap"><input id="__party" value="${esc(d.party || '')}" placeholder="名称，没有的会自动新建" autocomplete="off"></div>
+              <div id="__partyCand">${d.party && p.party && !p.party.matched ? pvCandChips(p.party.candidates, 'party') : ''}</div>
+            </div>
+            <div class="pv-field pv-f-depot">
+              <div class="pv-field-hd">
+                <label for="__depot">仓库</label>
+                <span id="__depotTag">${pvDepotTag(d.depot)}</span>
+              </div>
+              <input id="__depot" list="__depotList" value="${esc(d.depot || '')}" placeholder="留空用默认仓（${esc((p.depot && p.depot.name) || '默认仓')}）">
+              <datalist id="__depotList">${depotOpts}</datalist>
+            </div>
+            <div class="pv-field pv-f-time">
+              <div class="pv-field-hd">
+                <label for="__otime">日期</label>
+                ${effTime ? '' : '<span class="pv-field-note">留空用当前时间</span>'}
+              </div>
               <input id="__otime" type="datetime-local" value="${esc(dtVal)}">
-              ${(d.oper_time || '').trim() ? '' : '<div class="hint" style="margin:0">留空 = 按当前时间写入</div>'}
             </div>
           </div>
-        </div>
-
-        <div class="tbl-wrap mt-3" tabindex="0" role="region" aria-label="单据商品明细">
-          <table class="xtable">
-            <thead><tr><th>商品</th><th class="num" style="width:86px">数量</th><th style="width:76px">单位</th><th class="num" style="width:110px">单价</th><th class="num" style="width:100px">金额</th><th style="width:40px"></th></tr></thead>
-            <tbody id="__pvBody">${rows || '<tr><td colspan="6" class="muted center">没有明细</td></tr>'}</tbody>
-          </table>
-        </div>
-        <button class="btn btn-sm btn-ghost mt-1" id="__addRow">＋ 加一行</button>
-
-        <div class="total-row">合计：<span class="amount" id="__pvTotal">￥${money(curTotal())}</span></div>
-
-        <div class="pv-dirty hidden" id="__dirtyBar">✏ 内容已修改：先「刷新预览」重新校验档案匹配 / 库存 / 合计，再确认写入。</div>
-
-        ${(st.attach && st.attach.length) ? `
-        <div class="field mt-3">
-          <label>附件（${st.attach.length} 份，已上传到 ERP）</label>
-          <div class="attach-list mt-1">
-            ${st.attach.map(x => `<div class="attach-item"><span class="ok">✓</span><span class="nm">${esc(x.name)}</span></div>`).join('')}
+          <div class="pv-meta-grid-2">
+            <div class="pv-field">
+              <div class="pv-field-hd">
+                <label for="__payAmt">${d.biz && d.biz.includes('sale') ? '实收金额' : '实付金额'}</label>
+                <span class="pv-field-note" id="__payNote">${payNoteText(d.pay_amount, curTotal())}</span>
+              </div>
+              <input id="__payAmt" type="number" step="any" min="0" value="${d.pay_amount ?? ''}" placeholder="留空按全款结清">
+            </div>
+            <div class="pv-field">
+              <div class="pv-field-hd"><label for="__remark">备注</label></div>
+              <input id="__remark" type="text" value="${esc(d.remark || '')}" placeholder="选填备注">
+            </div>
           </div>
-        </div>` : ''}
 
-        <div class="row-btns mt-4">
-          <button class="btn btn-ghost" id="__cancel">再改改</button>
-          <span class="hint" style="flex:1">Esc 关闭 · ⌘/Ctrl+Enter 确认 · 表格里可直接改数</span>
-          <button class="btn btn-primary btn-lg" id="__ok" ${errs.length ? 'disabled' : ''}>确认写入 ERP</button>
+          ${pvTableHtml(rows, 'id="__pvBody"')}
+
+          <div class="pv-items-foot">
+            <button type="button" class="btn btn-sm btn-ghost" id="__addRow">＋ 加一行</button>
+            <div class="total-row">合计：<span class="amount" id="__pvTotal">￥${money(curTotal())}</span></div>
+          </div>
+
+          <div class="pv-dirty hidden" id="__dirtyBar">✏ 内容已修改：先「刷新预览」重新校验档案匹配 / 库存 / 合计，再确认写入。</div>
+
+          ${(st.attach && st.attach.length) ? `
+          <div class="field mt-3">
+            <label>附件（${st.attach.length} 份，已上传到 ERP）</label>
+            <div class="attach-list mt-1">
+              ${st.attach.map(x => `<div class="attach-item"><span class="ok">✓</span><span class="nm">${esc(x.name)}</span></div>`).join('')}
+            </div>
+          </div>` : ''}
+        </div>
+
+        <div class="pv-modal-ft">
+          <button type="button" class="btn btn-ghost" id="__cancel">再改改</button>
+          <span class="hint pv-kbd-hint" style="margin:0;flex:1">Esc 关闭 · ⌘/Ctrl+Enter 确认 · 表格里可直接改数</span>
+          <button type="button" class="btn btn-primary btn-lg" id="__ok" ${errs.length ? 'disabled' : ''}>确认写入 ERP</button>
         </div>
       </div>
     </div>`;
@@ -875,12 +940,17 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
       else { items[0] = { name: '', qty: 0, unit: '个', price: 0 }; }
       st.dirty = true;
       render();
+      setDirty();
+      refreshOkState();
       toast('已删除一行，刷新预览后生效', 'warn');
     });
 
     $('#__addRow').onclick = () => {
       (st.draft.items = st.draft.items || []).push({ name: '', qty: 0, unit: '个', price: 0 });
+      st.dirty = true;
       render();
+      setDirty();
+      refreshOkState();
       const inps = $$('.pv-name');
       if (inps.length) inps[inps.length - 1].focus();
     };
@@ -892,11 +962,26 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
     });
     $('#__depot').addEventListener('input', () => {
       st.draft.depot = $('#__depot').value.trim();
+      const dt = $('#__depotTag');
+      if (dt) dt.innerHTML = pvDepotTag(st.draft.depot);
       setDirty();
     });
     $('#__otime').addEventListener('change', () => {
       const v = $('#__otime').value || '';
-      if (v) st.draft.oper_time = v.replace('T', ' ') + (v.length === 16 ? ':00' : '');
+      st.draft.oper_time = v ? (v.replace('T', ' ') + (v.length === 16 ? ':00' : '')) : '';
+      setDirty();
+    });
+    const payEl = $('#__payAmt');
+    if (payEl) payEl.addEventListener('input', () => {
+      const raw = payEl.value.trim();
+      st.draft.pay_amount = raw === '' ? null : num(raw);
+      const pn = $('#__payNote');
+      if (pn) pn.textContent = payNoteText(st.draft.pay_amount, curTotal());
+      setDirty(); refreshOkState();
+    });
+    const remEl = $('#__remark');
+    if (remEl) remEl.addEventListener('input', () => {
+      st.draft.remark = remEl.value.trim();
       setDirty();
     });
     $('#__biz').addEventListener('change', () => {
@@ -910,12 +995,13 @@ function showPreview(preview, draft, onConfirm, attachPaths, extra) {
 
     $('#__modalX').onclick = close;
     $('#__cancel').onclick = close;
-    mask.onclick = e => { if (e.target === mask) close(); };
+    let downOnMask = false;
+    mask.addEventListener('mousedown', e => { downOnMask = e.target === mask; });
+    mask.addEventListener('mouseup', e => { if (downOnMask && e.target === mask) close(); downOnMask = false; });
 
-    // 键盘：Esc 关闭；⌘/Ctrl+Enter = 点主按钮（改过数=刷新预览，没改=写入）
+    // 键盘：⌘/Ctrl+Enter = 点主按钮（改过数=刷新预览，没改=写入）；Esc 由 trapFocus 统一处理
     const onKey = e => {
-      if (e.key === 'Escape') { close(); }
-      else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); $('#__ok').click(); }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); $('#__ok').click(); }
     };
     document.addEventListener('keydown', onKey);
     detachKey = () => document.removeEventListener('keydown', onKey);
@@ -1105,61 +1191,19 @@ function showMultiPreview(bills, extra) {
   };
   const STATUS_ZH = { ready: '可写入', warned: '需注意', blocked: '无法提交', committed: '已写入', failed: '写入失败' };
   const billTotal = b => (b.draft.items || []).reduce((t, it) => t + num(it.qty) * num(it.price), 0);
-  const clientErrors = b => {
-    const d = b.draft, errs = [];
-    if (!(d.party || '').trim()) errs.push('缺少往来单位名称');
-    const items = d.items || [];
-    if (!items.length) errs.push('至少需要一项商品明细');
-    items.forEach((it, i) => {
-      if (!(it.name || '').trim()) errs.push(`第${i + 1}行缺商品名称`);
-      if (num(it.qty) <= 0) errs.push(`第${i + 1}行数量必须大于 0`);
-      if (num(it.price) < 0) errs.push(`第${i + 1}行单价不能为负`);
-    });
-    return errs;
-  };
-  const matNorm = s => String(s || '').replace(/[()（）]/g, '').replace(/[×✕ｘ]/g, 'x')
-    .trim().toLowerCase().replace(/\s/g, '');
-  const itemTag = (b, i) => {
-    const it = (b.draft.items || [])[i];
-    if (!it || !(it.name || '').trim()) return '<span class="muted">未填</span>';
-    const n = matNorm(it.name);
-    const hit = (MD.materials || []).find(x =>
-      matNorm(x.name) === n || matNorm(x.name + (x.model || '') + (x.standard || '')) === n);
-    return hit ? '<span class="tag tag-ok">已有</span>' : '<span class="tag tag-new">将新建</span>';
-  };
-  const candChips = (cands, pick) => (cands || []).length
-    ? `<div class="mt-1"><span class="hint">是指：</span>${cands.map(c => {
-        const o = (c && typeof c === 'object');
-        const label = o ? [c.name, c.model, c.standard].filter(Boolean).join(' · ') : c;
-        const mid = o && c.id ? ` data-cand-mid="${c.id}"` : '';
-        return `<span class="tag tag-blue" style="cursor:pointer" data-pick="${esc(pick)}" data-cand="${esc(o ? c.name : c)}"${mid}>${esc(label)}</span>`;
-      }).join(' ')}</div>`
-    : '';
 
   // ---------- 渲染 ----------
   let detachKey = null;
 
   function cardBody(b) {
     const p = b.preview, d = b.draft;
+    const stat = statusOf(b);
     const errs = p.errors || [], warns = p.warnings || [], toCreate = p.to_create || [];
     const ai = b.ai || {};
     const aiFlag = (ai.confidence && ai.confidence !== 'high') || (ai.note || '').trim() || (ai.problems || []).length;
-    const pitem = i => (p.items || [])[i] || {};
-    const rows = (d.items || []).map((it, i) => {
-      const pv = pitem(i);
-      return `<tr>
-        <td>
-          <div class="ac-wrap" style="flex:1"><input class="pv-name" data-i="${i}" value="${esc(it.name)}" placeholder="商品名称" autocomplete="off"></div>
-          <div class="pv-sub">${itemTag(b, i)}${(pv.match_kind === 'fuzzy' || pv.match_kind === 'picked') && pv.matched_name ? ` <span class="tag ${pv.match_kind === 'picked' ? 'tag-ok' : 'tag-fuzzy'}">匹配→${esc(pv.matched_name)}${pv.matched_model ? ' ' + esc(pv.matched_model) : ''}</span>` : ''}${candChips(pv.candidates, `${b.idx}:item:${i}`)}</div>
-        </td>
-        <td><input class="pv-qty num" data-i="${i}" type="number" step="any" value="${it.qty ?? ''}" placeholder="0"></td>
-        <td><input class="pv-unit" data-i="${i}" value="${esc(it.unit || '')}" placeholder="个"></td>
-        <td><input class="pv-price num${pv.price_missing ? ' price-zero' : ''}" data-i="${i}" type="number" step="any" value="${it.price ?? ''}" placeholder="0.00">${pv.price_missing ? ' <span class="tag tag-new" title="原内容里可能没有价格">单价?</span>' : ''}</td>
-        <td class="num"><b class="pv-amt" data-i="${i}">${money(num(it.qty) * num(it.price))}</b></td>
-        <td><button class="xdel" data-del="${i}" title="删除该行">×</button></td>
-      </tr>`;
-    }).join('');
-    const dtVal = (d.oper_time || '').replace(' ', 'T').slice(0, 16);
+    const rows = pvRenderRows(d.items || [], p.items || [], `${b.idx}:item:`, '原内容里可能没有价格');
+    const effTime = (d.oper_time || p.oper_time || '').trim();
+    const dtVal = effTime.replace(' ', 'T').slice(0, 16);
     const partyTag = () => {
       if (!(d.party || '').trim()) return '';
       return findExact(partyPool(d.biz), d.party)
@@ -1175,6 +1219,8 @@ function showMultiPreview(bills, extra) {
           return `<button type="button" class="sugg-chip" data-applysugg="${b.idx}:${si}">${esc(fl)}建议 ${esc(String(val))}${s.reason ? ' · ' + esc(s.reason) : ''} <b>一键采纳</b></button>`;
         }).join('')}</div>
       </div>` : '';
+    const commitDisabled = b.state === 'committed' || stat === 'blocked';
+    const commitLabel = b.state === 'committed' ? '✓ 已写入' : '确认此单';
     return `
       <div data-errs="${b.idx}">${errs.length ? `<div class="alert alert-error"><b>无法提交：</b><br>${errs.map(esc).join('<br>')}</div>` : ''}</div>
       ${aiFlag ? `<div class="alert ${ai.confidence === 'low' ? 'alert-warn' : 'alert-info'}"><b>AI 提示（置信度：${esc(ai.confidence || '—')}）：</b>${esc(ai.note || '')}${(ai.problems || []).length ? '<br>解析问题：' + ai.problems.map(esc).join('；') : ''}</div>` : ''}
@@ -1183,45 +1229,61 @@ function showMultiPreview(bills, extra) {
       ${toCreate.length ? `<div class="alert alert-warn"><b>⚠ 将自动新建：</b>${toCreate.map(esc).join('；')}</div>` : ''}
       ${warns.length ? `<div class="alert alert-info"><b>提醒：</b><br>${warns.map(esc).join('<br>')}</div>` : ''}
       <div data-res="${b.idx}">${b.state === 'committed' && b.res
-        ? `<div class="alert alert-ok"><b>✓ 已写入：</b>${esc(b.res.number || '')} ${esc(b.res.message || '')}${REVERSIBLE[d.biz] ? `<div class="mt-2"><button class="btn btn-ghost btn-sm" data-reverse="${b.idx}">生成${REVERSIBLE[d.biz]}（冲销本单）</button></div>` : ''}</div>`
+        ? `<div class="alert alert-ok"><b>✓ 已写入：</b>${esc(b.res.number || '')} ${esc(b.res.message || '')}${REVERSIBLE[d.biz] ? `<div class="mt-2"><button type="button" class="btn btn-ghost btn-sm" data-reverse="${b.idx}">生成${REVERSIBLE[d.biz]}（冲销本单）</button></div>` : ''}</div>`
         : (b.state === 'failed' && b.res
-          ? `<div class="alert alert-error"><b>写入失败：</b>${esc(b.res.message || '请检查后重试')}${b.res.need_confirm ? '（令牌失效，点重试会先刷新确认令牌）' : ''}<div class="mt-2"><button class="btn btn-ghost btn-sm" data-retry="${b.idx}">重试本单</button></div></div>`
+          ? `<div class="alert alert-error"><b>写入失败：</b>${esc(b.res.message || '请检查后重试')}${b.res.need_confirm ? '（令牌失效，点重试会先刷新确认令牌）' : ''}<div class="mt-2"><button type="button" class="btn btn-ghost btn-sm" data-retry="${b.idx}">重试本单</button></div></div>`
           : '')}</div>
-      <div class="pv-form">
-        <div class="pv-line">
-          <label>${esc((p.party && p.party.type) || (BIZ[d.biz] && BIZ[d.biz].party) || '往来单位')}</label>
-          <div class="ac-wrap pv-grow"><input class="pv-party" value="${esc(d.party || '')}" placeholder="名称，没有的会自动新建" autocomplete="off"></div>
-          <span class="pv-partytag">${partyTag()}</span>
+      <div class="pv-meta-grid">
+        <div class="pv-field pv-f-party">
+          <div class="pv-field-hd">
+            <label for="__mparty_${b.idx}">${esc((p.party && p.party.type) || (BIZ[d.biz] && BIZ[d.biz].party) || '往来单位')}</label>
+            <span class="pv-partytag">${partyTag()}</span>
+          </div>
+          <div class="ac-wrap"><input id="__mparty_${b.idx}" class="pv-party" value="${esc(d.party || '')}" placeholder="名称，没有的会自动新建" autocomplete="off"></div>
+          <div class="pv-partycand">${d.party && p.party && !p.party.matched ? pvCandChips(p.party.candidates, `${b.idx}:party`) : ''}</div>
         </div>
-        <div class="pv-partycand">${d.party && p.party && !p.party.matched ? candChips(p.party.candidates, `${b.idx}:party`) : ''}</div>
-        <div class="pv-line">
-          <label>仓库</label>
-          <div class="pv-grow"><input class="pv-depot" list="__depotListM" value="${esc(d.depot || '')}" placeholder="留空用默认仓"></div>
-          ${p.depot && p.depot.will_create && d.depot ? '<span class="tag tag-new">将新建</span>' : '<span class="tag tag-ok">已有</span>'}
+        <div class="pv-field pv-f-depot">
+          <div class="pv-field-hd">
+            <label for="__mdepot_${b.idx}">仓库</label>
+            <span class="pv-depottag">${pvDepotTag(d.depot)}</span>
+          </div>
+          <input id="__mdepot_${b.idx}" class="pv-depot" list="__depotListM" value="${esc(d.depot || '')}" placeholder="留空用默认仓（${esc((p.depot && p.depot.name) || '默认仓')}）">
         </div>
-        <div class="pv-line">
-          <label>日期</label>
-          <div class="pv-grow"><input class="pv-otime" type="datetime-local" value="${esc(dtVal)}"></div>
+        <div class="pv-field pv-f-time">
+          <div class="pv-field-hd">
+            <label for="__motime_${b.idx}">日期</label>
+            ${effTime ? '' : '<span class="pv-field-note">留空用当前时间</span>'}
+          </div>
+          <input id="__motime_${b.idx}" class="pv-otime" type="datetime-local" value="${esc(dtVal)}">
         </div>
       </div>
-      <div class="tbl-wrap mt-2 tbl-scroll">
-        <table class="xtable">
-          <thead><tr><th>商品</th><th class="num" style="width:80px">数量</th><th style="width:70px">单位</th><th class="num" style="width:100px">单价</th><th class="num" style="width:92px">金额</th><th style="width:36px"></th></tr></thead>
-          <tbody class="m-pvbody" data-i="${b.idx}">${rows || '<tr><td colspan="6" class="muted center">没有明细</td></tr>'}</tbody>
-        </table>
+      <div class="pv-meta-grid-2">
+        <div class="pv-field">
+          <div class="pv-field-hd">
+            <label for="__mpay_${b.idx}">${d.biz && d.biz.includes('sale') ? '实收金额' : '实付金额'}</label>
+            <span class="pv-field-note pv-paynote">${(d.pay_amount === null || d.pay_amount === undefined || d.pay_amount === '') ? '全款结清' : ((Math.round((billTotal(b) - num(d.pay_amount)) * 100) / 100 > 0) ? `欠款 ￥${money(Math.round((billTotal(b) - num(d.pay_amount)) * 100) / 100)}` : '全款结清')}</span>
+          </div>
+          <input id="__mpay_${b.idx}" class="pv-payamt" type="number" step="any" min="0" value="${d.pay_amount ?? ''}" placeholder="留空按全款结清">
+        </div>
+        <div class="pv-field">
+          <div class="pv-field-hd"><label for="__mrem_${b.idx}">备注</label></div>
+          <input id="__mrem_${b.idx}" class="pv-remark" type="text" value="${esc(d.remark || '')}" placeholder="选填备注">
+        </div>
       </div>
-      <button class="btn btn-sm btn-ghost mt-1" data-addrow="${b.idx}">＋ 加一行</button>
-      <div class="total-row">合计：<span class="amount" data-total="${b.idx}">￥${money(billTotal(b))}</span></div>
-      <div class="pv-dirty hidden" data-dirty="${b.idx}">✏ 内容已修改：写入前会自动刷新预览换新令牌。</div>
-      <div class="field mt-2">
-        <label>附件（选填 · 发票 / 合同，随本单写入 ERP）</label>
+      ${pvTableHtml(rows, `class="m-pvbody" data-i="${b.idx}"`)}
+      <div class="pv-items-foot">
+        <button type="button" class="btn btn-sm btn-ghost" data-addrow="${b.idx}">＋ 加一行</button>
+        <div class="total-row">本单合计：<span class="amount" data-total="${b.idx}">￥${money(billTotal(b))}</span></div>
+      </div>
+      <div class="pv-dirty${b.dirty ? '' : ' hidden'}" data-dirty="${b.idx}">✏ 内容已修改：写入前会自动刷新预览换新令牌。</div>
+      <details class="m-att-fold"${b.attach.length ? ' open' : ''}>
+        <summary>📎 附件（选填 · 发票 / 合同${b.attach.length ? ` · 已选 ${b.attach.length} 份` : ''}）</summary>
         <div class="attach-zone" data-att="${b.idx}"></div>
-      </div>
-      <datalist id="__depotListM">${(MD.depots || []).map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>
-      <div class="row-btns mt-3">
-        <button class="btn" data-refresh="${b.idx}">↻ 刷新预览</button>
-        <span class="hint" style="flex:1">表格里可直接改数</span>
-        <button class="btn btn-primary" data-commitone="${b.idx}">确认此单</button>
+      </details>
+      <div class="m-card-actions">
+        <button type="button" class="btn" data-refresh="${b.idx}">↻ 刷新预览</button>
+        <span class="hint pv-kbd-hint" style="flex:1;margin:0">表格里可直接改数</span>
+        <button type="button" class="btn btn-primary" data-commitone="${b.idx}"${commitDisabled ? ' disabled' : ''}>${commitLabel}</button>
       </div>`;
   }
 
@@ -1238,22 +1300,35 @@ function showMultiPreview(bills, extra) {
       (list || document.body).appendChild(el);
     }
     const stat = statusOf(b);
-    el.className = `m-card open ${stat}` + (b.collapsed ? '' : ' open');
-    if (b.collapsed) el.classList.remove('open');
+    el.className = `m-card ${stat}` + (b.collapsed ? '' : ' open');
     const one = (b.preview.errors || [])[0];
     const sel = $(`.m-sel[data-sel="${i}"]`);
     const lockSel = stat === 'blocked' || stat === 'committed';
     const isChecked = lockSel ? (stat === 'committed') : (sel ? sel.checked : true);
+    const bizLabel = (BIZ[b.draft.biz] || {}).label || b.draft.biz || '';
+    const itemCnt = (b.draft.items || []).length;
     el.innerHTML = `
-      <div class="m-card-hd" data-toggle="${i}">
-        <input class="m-sel" data-sel="${i}" type="checkbox" ${lockSel ? 'disabled' : ''} ${isChecked ? 'checked' : ''}>
-        <span class="m-idx">#${i + 1}</span>
-        <span class="m-title">${esc((BIZ[b.draft.biz] || {}).label || b.draft.biz || '')} · ${esc(b.draft.party || '？')} · ${(b.draft.items || []).length} 行</span>
-        <span class="m-status ${stat}">${STATUS_ZH[stat]}${stat === 'blocked' && one ? '：' + esc(one) : ''}</span>
-        <b class="m-total">￥${money(billTotal(b))}</b>
-        <span class="caret">▶</span>
+      <div class="m-card-hd" data-toggle="${i}" role="button" tabindex="0" aria-expanded="${!b.collapsed}">
+        <label class="m-sel-wrap" aria-label="选择第 ${i + 1} 单">
+          <input class="m-sel" data-sel="${i}" type="checkbox" ${lockSel ? 'disabled' : ''} ${isChecked ? 'checked' : ''}>
+        </label>
+        <div class="m-hd-info">
+          <div class="m-hd-row1">
+            <span class="m-idx">#${i + 1}</span>
+            <span class="m-party" data-hdparty="${i}">${esc(b.draft.party || '未填往来单位')}</span>
+            <span class="m-biz-pill">${esc(bizLabel)}</span>
+          </div>
+          <div class="m-hd-row2">
+            <span class="m-items-cnt">${itemCnt} 项商品</span>
+            <span class="m-status ${stat}">${STATUS_ZH[stat]}${stat === 'blocked' && one ? ' · ' + esc(one) : ''}</span>
+          </div>
+        </div>
+        <div class="m-hd-right">
+          <b class="m-total" data-hdtotal="${i}">￥${money(billTotal(b))}</b>
+          <span class="caret" aria-hidden="true">▾</span>
+        </div>
       </div>
-      <div class="m-body" ${b.collapsed ? '' : ''} style="${b.collapsed ? 'display:none' : ''}">${cardBody(b)}</div>`;
+      <div class="m-body" style="${b.collapsed ? 'display:none' : ''}">${cardBody(b)}</div>`;
 
     // 附件管理器：以 st.attach 为初始状态（卡片重渲染不丢已传附件）
     const zone = $(`.attach-zone[data-att="${i}"]`, el);
@@ -1261,16 +1336,24 @@ function showMultiPreview(bills, extra) {
       b._att = AttachmentManager(zone, { biz: 'bill', max: 4, initial: b.attach });
       b._getAttach = () => {
         const ps = b._att ? b._att.getPaths() : b.attach.map(a => a.path);
-        const oldPaths = b.attach.map(a => a.path);
         b.attach = ps.map(p => ({ path: p, name: p.split('/').pop() }));
-        void oldPaths;
         return b.attach;
       };
     }
     bindCard(i, el);
   }
 
+  function syncToggleAllBtn() {
+    const tbtn = $('#__mtoggleAll');
+    if (!tbtn) return;
+    const allOpen = st.bills.length > 0 && st.bills.every(b => !b.collapsed);
+    tbtn.textContent = allOpen ? '全部收起' : '展开全部';
+    tbtn.disabled = st.bills.length <= 1;
+  }
+
   function renderAll() {
+    const dl = $('#__depotListM');
+    if (dl) dl.innerHTML = (MD.depots || []).map(x => `<option value="${esc(x.name)}">`).join('');
     st.bills.forEach((_, i) => renderCard(i));
     updateBars();
   }
@@ -1279,18 +1362,51 @@ function showMultiPreview(bills, extra) {
     const n = st.bills.length;
     const cnt = { ready: 0, warned: 0, blocked: 0, committed: 0, failed: 0 };
     st.bills.forEach(b => { cnt[statusOf(b)]++; });
-    const pending = cnt.ready + cnt.warned + cnt.failed;
-    const selCount = st.bills.filter(b => {
+    const selectable = st.bills.filter(b => {
       const s = $(`.m-sel[data-sel="${b.idx}"]`);
-      return s && s.checked && b.state !== 'committed';
-    }).length;
+      return s && !s.disabled;
+    });
+    const selectedBills = selectable.filter(b => $(`.m-sel[data-sel="${b.idx}"]`).checked);
+    const selCount = selectedBills.length;
+    const selTotal = selectedBills.reduce((t, b) => t + billTotal(b), 0);
+
     const sb = $('#__msum');
-    if (sb) sb.innerHTML =
-      `共 <b>${n}</b> 张：<span class="row-ok">可写入 ${cnt.ready}</span> · ` +
-      `<span class="row-warn">需注意 ${cnt.warned}</span> · ` +
-      (cnt.blocked ? `<span class="row-bad">无法提交 ${cnt.blocked}</span> · ` : '') +
-      `<span class="row-ok">已写入 ${cnt.committed}</span>` +
-      (cnt.failed ? ` · <span class="row-bad">失败 ${cnt.failed}</span>` : '');
+    if (sb) {
+      const parts = [
+        `<span class="m-stat total">共 <b>${n}</b> 张</span>`,
+        `<span class="m-stat ok">可写入 <b>${cnt.ready}</b></span>`,
+      ];
+      if (cnt.warned) parts.push(`<span class="m-stat warn">需注意 <b>${cnt.warned}</b></span>`);
+      if (cnt.blocked) parts.push(`<span class="m-stat bad">无法提交 <b>${cnt.blocked}</b></span>`);
+      parts.push(`<span class="m-stat ${cnt.committed ? 'ok' : ''}">已写入 <b>${cnt.committed}</b></span>`);
+      if (cnt.failed) parts.push(`<span class="m-stat bad">失败 <b>${cnt.failed}</b></span>`);
+      sb.innerHTML = parts.join('');
+    }
+
+    const selAll = $('#__mselall');
+    if (selAll) {
+      selAll.disabled = selectable.length === 0;
+      selAll.checked = selectable.length > 0 && selCount === selectable.length;
+      selAll.indeterminate = selCount > 0 && selCount < selectable.length;
+    }
+
+    const selSum = $('#__mselSummary');
+    if (selSum) {
+      if (cnt.committed === n && n > 0) {
+        selSum.innerHTML = '<span>全部单据已写入 ✓</span>';
+      } else if (selCount > 0) {
+        selSum.innerHTML = `已选 <b>${selCount}</b> 单 · 合计 <b class="m-grand-total">￥${money(selTotal)}</b>`;
+      } else {
+        selSum.innerHTML = '<span>未勾选待写入单据</span>';
+      }
+      selSum.classList.toggle('hidden', !!st.busy);
+    }
+
+    const pw = $('#__mprogWrap');
+    if (pw) pw.classList.toggle('hidden', !st.busy);
+
+    syncToggleAllBtn();
+
     const btn = $('#__mbatch');
     if (btn) {
       btn.disabled = selCount === 0 || st.busy;
@@ -1300,33 +1416,78 @@ function showMultiPreview(bills, extra) {
 
   function bindCard(i, el) {
     const b = st.bills[i];
-    const partyTagEl = () => $('.pv-partytag', el);
+    const markDirty = () => {
+      b.dirty = true;
+      const db = $(`[data-dirty="${b.idx}"]`, el);
+      if (db) db.classList.remove('hidden');
+    };
     const refreshPartyTag = () => {
-      const d = b.draft, t = partyTagEl();
+      const d = b.draft, t = $('.pv-partytag', el);
       if (t) t.innerHTML = (!(d.party || '').trim()) ? ''
         : (findExact(partyPool(d.biz), d.party) ? '<span class="tag tag-ok">已有</span>' : '<span class="tag tag-new">将新建</span>');
     };
-    // 折叠
-    $('.m-card-hd', el).onclick = e => {
-      if (e.target.closest('.m-sel')) return;
+    const syncHeaderParty = () => {
+      const hp = $(`[data-hdparty="${i}"]`, el);
+      if (hp) hp.textContent = b.draft.party || '未填往来单位';
+    };
+    const toggleCard = () => {
       b.collapsed = !b.collapsed;
       const body = $('.m-body', el);
       body.style.display = b.collapsed ? 'none' : '';
       el.classList.toggle('open', !b.collapsed);
+      const hd = $('.m-card-hd', el);
+      if (hd) hd.setAttribute('aria-expanded', String(!b.collapsed));
+      syncToggleAllBtn();
+    };
+    // 折叠
+    const hd = $('.m-card-hd', el);
+    hd.onclick = e => {
+      if (e.target.closest('.m-sel-wrap') || e.target.closest('.m-sel')) return;
+      toggleCard();
+    };
+    hd.onkeydown = e => {
+      if (e.target !== hd) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleCard(); }
     };
     // 勾选
     $('.m-sel', el).onchange = updateBars;
     // 输入绑定
     const bindScope = () => {
       const party = $('.pv-party', el);
-      if (party) party.addEventListener('input', () => { b.draft.party = party.value.trim(); refreshPartyTag(); b.dirty = true; });
+      if (party) party.addEventListener('input', () => {
+        b.draft.party = party.value.trim();
+        refreshPartyTag();
+        syncHeaderParty();
+        markDirty();
+      });
       const depot = $('.pv-depot', el);
-      if (depot) depot.addEventListener('input', () => { b.draft.depot = depot.value.trim(); b.dirty = true; });
+      if (depot) depot.addEventListener('input', () => {
+        b.draft.depot = depot.value.trim();
+        const dt = $('.pv-depottag', el);
+        if (dt) dt.innerHTML = pvDepotTag(b.draft.depot);
+        markDirty();
+      });
       const ot = $('.pv-otime', el);
       if (ot) ot.addEventListener('change', () => {
         const v = ot.value || '';
-        if (v) b.draft.oper_time = v.replace('T', ' ') + (v.length === 16 ? ':00' : '');
-        b.dirty = true;
+        b.draft.oper_time = v ? (v.replace('T', ' ') + (v.length === 16 ? ':00' : '')) : '';
+        markDirty();
+      });
+      const payEl = $('.pv-payamt', el);
+      if (payEl) payEl.addEventListener('input', () => {
+        const raw = payEl.value.trim();
+        b.draft.pay_amount = raw === '' ? null : num(raw);
+        const pn = $('.pv-paynote', el);
+        if (pn) {
+          const debt = b.draft.pay_amount === null ? 0 : Math.round((billTotal(b) - num(b.draft.pay_amount)) * 100) / 100;
+          pn.textContent = (b.draft.pay_amount === null || debt <= 0) ? '全款结清' : `欠款 ￥${money(debt)}`;
+        }
+        markDirty();
+      });
+      const remEl = $('.pv-remark', el);
+      if (remEl) remEl.addEventListener('input', () => {
+        b.draft.remark = remEl.value.trim();
+        markDirty();
       });
       const body = $('.m-pvbody', el);
       if (body) {
@@ -1341,11 +1502,13 @@ function showMultiPreview(bills, extra) {
           else return;   // pv-name 走 autocomplete
           const amt = $(`.pv-amt[data-i="${ri}"]`, body);
           if (amt) amt.textContent = money(num(it.qty) * num(it.price));
-          const tot = $(`[data-total="${b.idx}"]`);
-          if (tot) tot.textContent = '￥' + money(billTotal(b));
-          b.dirty = true;
-          const db = $(`[data-dirty="${b.idx}"]`);
-          if (db) db.classList.remove('hidden');
+          const totalText = '￥' + money(billTotal(b));
+          const tot = $(`[data-total="${b.idx}"]`, el);
+          if (tot) tot.textContent = totalText;
+          const hdTot = $(`[data-hdtotal="${b.idx}"]`, el);
+          if (hdTot) hdTot.textContent = totalText;
+          markDirty();
+          updateBars();
         });
         body.addEventListener('click', e => {
           const del = e.target.closest('[data-del]');
@@ -1362,12 +1525,23 @@ function showMultiPreview(bills, extra) {
           const chip = e.target.closest('[data-pick]');
           if (chip) pickCandidate(i, chip);
         });
-        const add = $(`[data-addrow="${i}"]`);
+        const add = $(`[data-addrow="${i}"]`, el);
         if (add) add.onclick = () => {
           (b.draft.items = b.draft.items || []).push({ name: '', qty: 0, unit: '个', price: 0 });
           b.dirty = true;
           renderCard(i);
+          updateBars();
+          const inps = $$('.pv-name', $(`.m-card[data-i="${i}"]`));
+          if (inps.length) inps[inps.length - 1].focus();
         };
+      }
+      // 往来单位候选点选
+      const partyCand = $('.pv-partycand', el);
+      if (partyCand) {
+        partyCand.addEventListener('click', e => {
+          const chip = e.target.closest('[data-pick]');
+          if (chip) pickCandidate(i, chip);
+        });
       }
       // 商品自动补全（点选锁档案，手改解除——与单单确认卡同规则）
       $$('.pv-name', el).forEach(inp => {
@@ -1392,10 +1566,15 @@ function showMultiPreview(bills, extra) {
             it.name = inp.value.trim();
             if (!pickedNow) delete it.material_id;
             pickedNow = false;
-            b.dirty = true;
+            markDirty();
           });
       });
-      if (party) autocomplete(party, () => partyPool(b.draft.biz), null, refreshPartyTag);
+      if (party) autocomplete(party, () => partyPool(b.draft.biz), null, () => {
+        b.draft.party = party.value.trim();
+        refreshPartyTag();
+        syncHeaderParty();
+        markDirty();
+      });
     };
     bindScope();
 
@@ -1445,6 +1624,7 @@ function showMultiPreview(bills, extra) {
     try {
       const r = await api('/api/resolve', { method: 'POST', body: { draft: b.draft, source: st.source } });
       if (!r.ok) { toast(r.message || '刷新预览失败', 'bad'); return false; }
+      if (r.draft) b.draft = r.draft;
       b.preview = r.preview;
       b.confirm_token = r.preview.confirm_token;
       b.dirty = false;
@@ -1458,6 +1638,7 @@ function showMultiPreview(bills, extra) {
 
   async function commitOne(i) {
     const b = st.bills[i];
+    if (b.state === 'committed') return;
     // 失败单的令牌可能已被闸门消费：重试前必须换新令牌，否则必然再被拒
     if ((b.dirty || b.state === 'failed') && !(await refreshBill(i, true))) return;
     const btn = $(`[data-commitone="${i}"]`);
@@ -1515,15 +1696,22 @@ function showMultiPreview(bills, extra) {
     });
     if (!sel.length) { toast('请先勾选要写入的单据', 'warn'); return; }
     st.busy = true;
-    updateBars();
     const prog = $('#__mprog'), progFill = prog ? prog.querySelector('i') : null;
     const progTxt = $('#__mprogTxt');
+    if (progFill) progFill.style.width = '0%';
+    if (progTxt) progTxt.textContent = '准备写入…';
+    updateBars();
     // 脏单/失败单先刷新换新令牌（旧令牌绑定旧内容或已被消费，直接提交会被闸门拒）
     for (const b of sel) {
       if (b.dirty || b.state === 'failed') {
         if (progTxt) progTxt.textContent = `刷新第 ${b.idx + 1} 单预览…`;
         const ok = await refreshBill(b.idx, true);
-        if (!ok) { st.busy = false; updateBars(); return; }
+        if (!ok) {
+          st.busy = false;
+          if (progTxt) progTxt.textContent = '';
+          updateBars();
+          return;
+        }
       }
     }
     const items = sel.map(b => {
@@ -1551,6 +1739,7 @@ function showMultiPreview(bills, extra) {
       toast(e.message, 'bad');
     }
     st.busy = false;
+    if (progTxt) progTxt.textContent = '';
     updateBars();
   }
 
@@ -1565,7 +1754,7 @@ function showMultiPreview(bills, extra) {
       }).then(v => v !== null).catch(() => false);
       if (!ok) return;
     }
-    if (detachKey) detachKey();
+    if (detachKey) { detachKey(); detachKey = null; }
     const mask = $('#__mmask');
     if (mask) mask.remove();
     if (extra.onClose) extra.onClose(st.bills.map(({ _att, _getAttach, ...rest }) => {
@@ -1580,36 +1769,56 @@ function showMultiPreview(bills, extra) {
   mask.className = 'multi-mask';
   mask.setAttribute('role', 'dialog');
   mask.setAttribute('aria-modal', 'true');
+  mask.setAttribute('aria-labelledby', '__mtitle');
   mask.innerHTML = `
     <div class="multi-wrap">
       <div class="m-head">
-        <h2>批量确认</h2>
-        <span class="m-count" id="__msum"></span>
-        <button class="modal-x" title="关闭（Esc）" aria-label="关闭">×</button>
+        <div class="m-head-main">
+          <h2 id="__mtitle">批量确认</h2>
+          <div class="m-count" id="__msum"></div>
+        </div>
+        <button type="button" class="modal-x m-close" title="关闭（Esc）" aria-label="关闭">×</button>
       </div>
       <div class="m-sumbar">
-        <label class="m-selall"><input type="checkbox" id="__mselall" checked> 全选可写入的单</label>
-        <span class="hint" style="margin:0">每单独立过闸门：改过的单写入前自动刷新；失败的单不影响其他单。</span>
+        <label class="m-selall"><input type="checkbox" id="__mselall" checked><span>全选可写入</span></label>
+        <span class="m-sumbar-hint">每单独立过闸门，改数自动刷新令牌</span>
+        <button type="button" class="btn btn-sm btn-ghost m-toggle-all" id="__mtoggleAll">展开全部</button>
       </div>
       <div class="m-list" id="__mlist"></div>
+      <datalist id="__depotListM"></datalist>
       <div class="m-sticky">
-        <button class="btn btn-primary btn-lg" id="__mbatch">确认写入</button>
-        <div class="m-prog" id="__mprog"><i></i></div>
-        <span class="hint-c" id="__mprogTxt"></span>
-        <span class="hint-c" style="margin-left:auto">Esc 关闭</span>
+        <div class="m-sticky-info">
+          <div class="m-sel-summary" id="__mselSummary"></div>
+          <div class="m-prog-wrap hidden" id="__mprogWrap">
+            <div class="m-prog" id="__mprog"><i></i></div>
+            <span class="hint-c" id="__mprogTxt"></span>
+          </div>
+        </div>
+        <div class="m-sticky-actions">
+          <span class="hint-c m-esc-hint">Esc 关闭</span>
+          <button type="button" class="btn btn-primary btn-lg" id="__mbatch">确认写入</button>
+        </div>
       </div>
     </div>`;
   document.body.appendChild(mask);
-  mask.querySelector('.modal-x').onclick = close;
+  mask.querySelector('.m-close').onclick = close;
+  let downOnMask = false;
+  mask.addEventListener('mousedown', e => { downOnMask = e.target === mask; });
+  mask.addEventListener('mouseup', e => { if (downOnMask && e.target === mask) close(); downOnMask = false; });
   $('#__mselall').onchange = e => {
     const on = e.target.checked;
     $$('.m-sel').forEach(s => { if (!s.disabled) s.checked = on; });
     updateBars();
   };
+  $('#__mtoggleAll').onclick = () => {
+    const shouldExpand = !st.bills.every(b => !b.collapsed);
+    st.bills.forEach(b => { b.collapsed = !shouldExpand; });
+    renderAll();
+  };
   $('#__mbatch').onclick = commitSelected;
-  const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
-  document.addEventListener('keydown', onKey);
-  detachKey = () => document.removeEventListener('keydown', onKey);
+  detachKey = trapFocus(mask.querySelector('.multi-wrap'), () => {
+    if (!$('#__askInline')) close();
+  });
   renderAll();
   // 已有/将新建标签依赖主数据池——问一问等页面首次打开时 MD 还是空的，这里补拉
   // 并重渲染（不阻塞首帧；bill.html 已提前 loadMaster，这里只兜底）

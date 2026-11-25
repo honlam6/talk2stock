@@ -833,6 +833,11 @@ def api_sheet_resolve(_q, body):
             it if isinstance(it, dict) else None)
         if not d:
             continue
+        _ot = draftmod.normalize_oper_time(d.get("oper_time"))
+        if _ot == "":
+            d["oper_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        elif _ot:
+            d["oper_time"] = _ot
         preview = draftmod.resolve(d, erp)
         m = _confirm_meta("import", "导入行%s" % ((it.get("row_no") or i + 1) if isinstance(it, dict) else i + 1),
                           extra={"draft_resolved": d, "bill_index": i})
@@ -846,6 +851,11 @@ def api_resolve(_q, body):
     d = _pick_draft(body)
     if not d:
         return {"ok": False, "message": "缺少草稿数据"}
+    _ot = draftmod.normalize_oper_time(d.get("oper_time"))
+    if _ot == "":
+        d["oper_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    elif _ot:
+        d["oper_time"] = _ot
     erp = _erp()
     preview = draftmod.resolve(d, erp)
     try:

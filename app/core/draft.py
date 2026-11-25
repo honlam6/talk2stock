@@ -15,10 +15,30 @@ Draft 结构（前后端统一契约）：
   "items": [{"name":"可乐","qty":3,"unit":"瓶","price":3.5}]
 }
 """
+import re
 import time
 
 from . import gate as gatemod
 from .erp import BILL_TYPES, get_client
+
+_OTIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2})(?::(\d{2}))?)?$")
+
+
+def normalize_oper_time(v):
+    """规范并校验业务时间，支持 YYYY-MM-DD[ HH:MM[:SS]]；空串返回空，无效返回 None。"""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    m = _OTIME_RE.match(s)
+    if not m:
+        return None
+    day, hm, sec = m.group(1), m.group(2), m.group(3)
+    norm = f"{day} {hm or '00:00'}:{sec or '00'}"
+    try:
+        time.strptime(norm, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    return norm
 
 BIZ_LABEL = {
     "purchase_in": "采购入库",
@@ -73,6 +93,9 @@ def validate(draft):
                 errs.append("实付/实收金额不能为负")
         except (TypeError, ValueError):
             errs.append("实付/实收金额必须是有效数字")
+    ot = (draft.get("oper_time") or "").strip()
+    if ot and normalize_oper_time(ot) is None:
+        errs.append("单据日期格式无效（需 YYYY-MM-DD 或 YYYY-MM-DD HH:MM:SS）")
     return errs
 
 
@@ -378,6 +401,11 @@ def prepare_bills(drafts, meta, erp, source, raw_text, batch_id=""):
     C1-C4 不变量在批量语义下原样成立。"""
     bills = []
     for i, d in enumerate(drafts):
+        norm_ot = normalize_oper_time(d.get("oper_time"))
+        if norm_ot == "":
+            d["oper_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        elif norm_ot:
+            d["oper_time"] = norm_ot
         preview = resolve(d, erp)
         bm = (meta.get("bills") or [{}])[i] or {}
         preview["ai"] = {"confidence": bm.get("confidence", ""),

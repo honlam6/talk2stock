@@ -90,16 +90,15 @@ LOOP_PROMPT = """你是 Talk2Stock 的统一业务 Agent，负责理解用户意
 7. 只处理工具目录能查的范围（经营数据、录单起草、系统操作方法）。与此无关的问题
    （闲聊/天气/常识/写文案等）不要调用任何工具，直接 final：「我只能查本系统
    的进销存数据，比如『可乐还有多少库存』『本月卖了多少』『谁欠我钱』。」
-8. 写操作的边界分两种：
-   - 用户要录单/下单/进货/退货（新建单据）：调用 draft_order 工具起草
-     （args.text = 用户的录单原话，结合会话把「改成60瓶」「还是那家」等
-     代词补全成完整业务描述）。草稿只是预览、绝不会写入系统。
+8. 写操作的边界分几种（严格遵守）：
+   - 用户要录单/进货/销售/退货/报损/盘盈等（6 类出入库单：purchase_in / sale_out / purchase_return / sale_return / other_in / other_out）：调用 draft_order 工具起草（args.text = 用户的录单原话，结合会话把「改成60瓶」「还是那家」等代词补全成完整业务描述）。草稿只是预览、绝不会写入系统。
    - 草稿观察里有 clarify 时，final 只自然地追问缺失信息，不要说已经生成草稿。
      有草稿且没有 clarify 时，final 简短说明「草稿已生成，请核对」，不要复述
      所有明细，也不要新增观察之外的数量、金额或单位。
    - 关键信息缺失也照样起草，由草稿与追问引导用户补全，禁止编造具体数值。
-   - 改库存/删单据/改已有单据等破坏性请求：不要调用任何工具，直接 final
-     说明「智能助手只能查询和起草新单，不能修改或删除已有数据」。
+   - 纯收款单/付款单（收货款、付欠款、回款核销）：不要调用 draft_order，直接说明目前对话起草仅支持 6 类出入库单，收付款请去「录单 → 收付款」页面操作。
+   - 仓库调拨单（把货从A仓调拨到B仓）：不要调用 draft_order，直接说明暂不支持对话起草调拨单，请在 jshERP 后台「仓库管理 → 调拨出库」操作。
+   - 改库存/删单据/作废/红冲/审核或反审核已有单据：不要调用任何工具，直接 final 说明「智能助手只能查询和起草新单，不能修改、删除或审核已有数据」。
 9. 当前消息可能带多个附件（目录在上下文里）。用户说「第一张/第二份/这份合同」时，
    按编号或文件名选择对应附件；一次 draft_order 只处理一个附件，多个附件就分步调用。
    不要把不同单据的附件合并成一个草稿，除非用户明确说它们属于同一单。
@@ -109,9 +108,11 @@ LOOP_PROMPT = """你是 Talk2Stock 的统一业务 Agent，负责理解用户意
 
 
 def _numbers_in(text):
-    """抽出文本里所有数字（含千分位/小数），按数值归一化——100.00 与 100.0 视为同一个数。"""
+    """抽出文本里所有数字（含千分位/小数），按数值归一化——100.00 与 100.0 视为同一个数。
+
+    用 (?<!\\d)-? 避免把日期 "2026-11-25" 的 "-11"、"-25" 误当成负数。"""
     out = set()
-    for raw in re.findall(r"-?\d[\d,]*(?:\.\d+)?", text or ""):
+    for raw in re.findall(r"(?<!\d)-?\d[\d,]*(?:\.\d+)?", text or ""):
         try:
             out.add(round(float(raw.replace(",", "")), 2))
         except ValueError:
@@ -119,16 +120,40 @@ def _numbers_in(text):
     return out
 
 
-def numeric_grounded(ans, observations):
-    """答案里的每个数字都必须能在某步观察 JSON 里找到（防 LLM 编数）。"""
-    if not ans:
-        return False
+def _allow_numbers(observations):
     allow = set()
     for obs in observations or []:
         if obs is None:
             continue
         allow |= _numbers_in(json.dumps(obs, ensure_ascii=False))
-    return _numbers_in(ans) <= allow
+    return allow
+
+
+def numeric_grounded(ans, observations):
+    """答案里的每个数字都必须能在某步观察 JSON 里找到（防 LLM 编数）。"""
+    if not ans:
+        return False
+    return _numbers_in(ans) <= _allow_numbers(observations)
+
+
+def _fallback_answer(notes, steps):
+    """接地失败或预算耗尽时的干净兜底：优先复用专用工具模板句；仅有 sql_query 时
+    只格式化最后一个非空 SQL 的前几行，绝不把多步原始 JSON 串直接拼给用户。"""
+    non_sql = [n for n in dict.fromkeys(notes or []) if n and not n.startswith("只读查询返回")]
+    if non_sql:
+        return "；".join(non_sql)
+    for st in reversed(steps or []):
+        if st.get("tool") == "sql_query" and st.get("ok") and isinstance(st.get("observation"), dict):
+            rows = st["observation"].get("rows") or []
+            if rows:
+                parts = []
+                for r in rows[:6]:
+                    if isinstance(r, dict):
+                        parts.append("，".join(f"{k}: {v}" for k, v in r.items() if v not in (None, "")))
+                if parts:
+                    return "查询结果：" + "；".join(parts) + ("（仅展示前6条）。" if len(rows) > 6 else "。")
+    clean = list(dict.fromkeys(notes or []))
+    return "；".join(clean) if clean else "查询了 %d 步但没有得到可用的数据，请稍后再试。" % len(steps or [])
 
 
 def _hist(i, thought, name, args, obs):
@@ -214,8 +239,10 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
             # 先校验再收尾：未接地答案不是必然降级，而是给模型一次根据
             # 工具观察修正自己的机会。仍失败才走确定性模板兜底。
             if observations and not numeric_grounded(final_text, observations):
+                missing = sorted(_numbers_in(final_text) - _allow_numbers(observations))[:10]
                 obs = {"error": "最终回答含观察之外的数据，已拦截",
-                       "correction": "只依据观察作答；删掉观察之外的数字与名称，不心算汇总或建议量",
+                       "ungrounded_numbers": missing,
+                       "correction": "只依据观察作答；删掉观察之外的数字与名称，若需总数/净额/差值请用单条 sql_query 的 SUM/COUNT 直接算出再引用，禁止心算",
                        "ungrounded_answer": final_text[:500]}
                 rec = {"step": i, "thought": thought, "tool": None,
                        "final": final_text, "ok": False, "observation": obs,
@@ -226,7 +253,7 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
                 if i < max_steps:
                     continue
                 # 最后一次机会仍不可信：直接落确定性模板，不再追加无预算收尾。
-                answer = "；".join(dict.fromkeys(notes))
+                answer = _fallback_answer(notes, steps)
                 steps.append({"step": len(steps) + 1, "tool": None,
                               "fallback": True, "final": answer})
                 return _finish(goal, answer, steps, tokens, started,
@@ -293,8 +320,7 @@ def run_agent(goal, tools, max_steps=DEFAULT_MAX_STEPS, max_tokens=DEFAULT_MAX_T
         pass
 
     # ---- 收尾也失败：模板句拼接兜底，绝不空手而归（同句去重保序）----
-    answer = "；".join(dict.fromkeys(notes)) if notes else \
-        "查询了 %d 步但没有得到可用的数据，请稍后再试。" % len(steps)
+    answer = _fallback_answer(notes, steps)
     steps.append({"step": len(steps) + 1, "tool": None, "fallback": True, "final": answer})
     return _finish(goal, answer, steps, tokens, started, observations, notes, prof,
                    forced=True)
@@ -318,8 +344,8 @@ def _finish(goal, final, steps, tokens, started, observations, notes, prof, forc
     硬判反而误杀回绝语里复述的用户数字（v2 评测 d5 实测）。"""
     grounded = numeric_grounded(final, observations) if observations else True
     answer = final
-    if not grounded and notes:
-        answer = "；".join(dict.fromkeys(notes))   # 模板句去重保序；本身只用观察里的数字，天然接地
+    if not grounded and (notes or steps):
+        answer = _fallback_answer(notes, steps)
     return {
         "ok": True,
         "answer": answer,

@@ -334,6 +334,122 @@ class TestSpecPreservationAndUnitCheck(unittest.TestCase):
         self.assertIn("244 张", note)
         self.assertIn("34 张", note)
 
+    def test_prepare_bills_defaults_empty_oper_time_and_keeps_explicit(self):
+        from core import gate as gatemod
+        stub_erp = mock.MagicMock()
+        stub_erp.price_tax_flag.return_value = False
+        stub_erp.find_party.return_value = ({"id": 1, "supplier": "山姆"}, "exact")
+        stub_erp.party_candidates.return_value = []
+        stub_erp.default_depot_name.return_value = "总仓"
+        stub_erp.find_depot.return_value = ({"id": 14, "name": "总仓"}, "exact")
+        stub_erp.find_material.return_value = (None, "none")
+        stub_erp.material_candidates.return_value = []
+        stub_erp.unit_group_by_id.return_value = None
+
+        d_empty = {"biz": "purchase_in", "party": "山姆", "depot": "",
+                   "oper_time": "", "items": [{"name": "瑞士卷", "qty": 1, "unit": "盒", "price": 3.66}]}
+        d_explicit = {"biz": "purchase_in", "party": "山姆", "depot": "",
+                      "oper_time": "2026-11-20 12:00:00",
+                      "items": [{"name": "瑞士卷", "qty": 1, "unit": "盒", "price": 3.66}]}
+        bills = draftmod.prepare_bills([d_empty, d_explicit], {"bills": [{}, {}]}, stub_erp, "ai", "test")
+        self.assertRegex(bills[0]["draft"]["oper_time"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertEqual(bills[0]["draft"]["oper_time"], bills[0]["preview"]["oper_time"])
+        ok, _, reason = gatemod.check(bills[0]["confirm_token"], bills[0]["draft"])
+        self.assertTrue(ok, reason)
+        self.assertEqual(bills[1]["draft"]["oper_time"], "2026-11-20 12:00:00")
+
+    def test_validate_oper_time_format_and_bounds(self):
+        base = {"biz": "purchase_in", "party": "山姆",
+                "items": [{"name": "瑞士卷", "qty": 1, "price": 3.66}]}
+        self.assertEqual(draftmod.validate(dict(base, oper_time="2026-11-25 23:00:00")), [])
+        self.assertEqual(draftmod.validate(dict(base, oper_time="2026-11-25")), [])
+        bad1 = draftmod.validate(dict(base, oper_time="昨天"))
+        bad2 = draftmod.validate(dict(base, oper_time="2026-13-45 00:00:00"))
+        self.assertTrue(any("日期格式" in e for e in bad1))
+        self.assertTrue(any("日期格式" in e for e in bad2))
+
+    def test_agent_numbers_in_does_not_turn_dates_into_negatives(self):
+        from core import agent as agentmod
+        nums = agentmod._numbers_in("日期 2026-11-25，总库存 -233 瓶，金额 3.66 元")
+        self.assertIn(2026.0, nums)
+        self.assertIn(11.0, nums)
+        self.assertIn(25.0, nums)
+        self.assertNotIn(-11.0, nums)
+        self.assertNotIn(-25.0, nums)
+        self.assertIn(-233.0, nums)
+        self.assertTrue(agentmod.numeric_grounded(
+            "单据日期为 2026年11月25日，合计 3.66 元。",
+            [{"oper_time": "2026-11-25 23:00:00", "total": 3.66}],
+        ))
+
+    def test_agent_fallback_answer_avoids_multi_step_raw_json_dump(self):
+        from core import agent as agentmod
+        steps = [
+            {"tool": "sql_query", "ok": True, "observation": {"rows": [{"tmp": 1}]}},
+            {"tool": "sql_query", "ok": True, "observation": {"rows": [{"party": "永辉超市", "cnt": "75", "net": "19447.90"}]}},
+        ]
+        notes = ['只读查询返回 1 行，结果：{"tmp": 1}。', '只读查询返回 1 行，结果：{"party": "永辉超市", "cnt": "75"}。']
+        out = agentmod._fallback_answer(notes, steps)
+        self.assertNotIn("{", out)
+        self.assertIn("永辉超市", out)
+        self.assertIn("19447.90", out)
+
+    def test_draft_order_refuses_payment_transfer_and_audit_allows_revision(self):
+        from core import ask as askmod
+        erp = mock.MagicMock()
+        erp.price_tax_flag.return_value = False
+        erp.find_party.return_value = ({"id": 1, "supplier": "山姆"}, "exact")
+        erp.party_candidates.return_value = []
+        erp.default_depot_name.return_value = "总仓"
+        erp.find_depot.return_value = ({"id": 14, "name": "总仓"}, "exact")
+        erp.find_material.return_value = (None, "none")
+        erp.material_candidates.return_value = []
+        erp.unit_group_by_id.return_value = None
+        d1, n1 = askmod._draft_order({"text": "收到永辉超市回款 5000 元，帮我录个收款单"}, erp)
+        self.assertEqual(d1.get("unsupported"), "payment")
+        self.assertIn("收付款", n1)
+        d2, n2 = askmod._draft_order({"text": "把 20 瓶可乐从总仓调拨到门店仓"}, erp)
+        self.assertEqual(d2.get("unsupported"), "transfer")
+        self.assertIn("调拨", n2)
+        d3, n3 = askmod._draft_order({"text": "帮我把所有待审核单据一键审核"}, erp)
+        self.assertEqual(d3.get("refused"), "modification_not_supported")
+        # 带 previous_draft 的自然修正不能被误拦
+        with mock.patch("core.billcheck.parse_and_check", return_value={
+            "drafts": [{"biz": "purchase_in", "party": "山姆", "depot": "", "oper_time": "2026-11-24 10:00:00",
+                        "items": [{"name": "瑞士卷", "qty": 3, "unit": "盒", "price": 12}]}],
+            "meta": {"bills": [{}]}, "check": {"ok": True, "patches_suggested": [], "risks": ""},
+        }):
+            dr, nr, _ = askmod._draft_order(
+                {"text": "不对，是昨天买的，改成3盒"}, erp,
+                previous_draft={"biz": "purchase_in", "party": "山姆", "items": [{"name": "瑞士卷", "qty": 1}]},
+            )
+        self.assertEqual(dr["drafts"], 1)
+        self.assertEqual(dr["bills"][0]["oper_time"], "2026-11-24 10:00:00")
+
+    def test_ask_draft_order_exposes_oper_time(self):
+        from core import ask as askmod
+        stub_erp = mock.MagicMock()
+        stub_erp.price_tax_flag.return_value = False
+        stub_erp.find_party.return_value = ({"id": 1, "supplier": "山姆"}, "exact")
+        stub_erp.party_candidates.return_value = []
+        stub_erp.default_depot_name.return_value = "总仓"
+        stub_erp.find_depot.return_value = ({"id": 14, "name": "总仓"}, "exact")
+        stub_erp.find_material.return_value = (None, "none")
+        stub_erp.material_candidates.return_value = []
+        stub_erp.unit_group_by_id.return_value = None
+        parsed = {
+            "drafts": [{"biz": "purchase_in", "party": "山姆", "depot": "", "oper_time": "",
+                        "items": [{"name": "瑞士卷", "qty": 1, "unit": "盒", "price": 3.66}]}],
+            "meta": {"bills": [{}], "model": "m", "profile": "p"},
+            "check": {"ok": True, "patches_suggested": [], "risks": ""},
+        }
+        with mock.patch("core.billcheck.parse_and_check", return_value=parsed):
+            data, note, extra = askmod._draft_order({"text": "去山姆买了一盒瑞士卷花了3.66元"}, stub_erp)
+        b0 = data["bills"][0]
+        self.assertRegex(b0["oper_time"], r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+        self.assertEqual(extra["bills"][0]["draft"]["oper_time"], b0["oper_time"])
+        self.assertIn(b0["oper_time"][:10], note)
+
 
 if __name__ == "__main__":
     unittest.main()

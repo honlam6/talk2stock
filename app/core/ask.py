@@ -435,8 +435,15 @@ def _query_bills(args, erp):
 # --------------------------------------------------------------------------
 DRAFT_TEXT_MAX = 1000   # 用户消息上限（与多单解析口径一致）
 DRAFT_ATTACH_TEXT_MAX = 6000   # 带文本附件（PDF/DOCX/TXT）时的合并上限
-# 草稿工具只管「新建」：改/删/调整已有数据在这里拦下；修订尚未写入的草稿例外。
-_DRAFT_DENY = re.compile(r"(已有|现存|库存|单据|记录|档案).{0,6}(改|删|修改|更新|作废|冲销|调整|撤销|红冲)|(改|删|修改|更新|作废|冲销|调整|撤销|红冲).{0,6}(已有|现存|库存|单据|记录|档案)")
+# 草稿工具只管「新建」：改/删/调整/审核已有数据，以及纯收付款单、调拨单在这里拦下；修订尚未写入的草稿例外。
+_DRAFT_DENY = re.compile(
+    r"(已有|现存|库存|单据|记录|档案|待审核).{0,6}(改|删|修改|更新|作废|冲销|调整|撤销|红冲|审核|反审核)"
+    r"|(改|删|修改|更新|作废|冲销|调整|撤销|红冲|反审核).{0,6}(已有|现存|库存|单据|记录|档案)"
+    r"|(一键|批量|全部|所有).{0,4}审核.{0,6}(单|账)?"
+)
+_PAY_ONLY = re.compile(r"(收款单|付款单|回款|(?:^|[，,。\s])(收|付).{0,10}(货款|欠款|账款|尾款)|结清欠款)")
+_PAY_GOODS = re.compile(r"(买|卖|采购|进货|销售|出库|入库|退货|\d+\s*(?:瓶|箱|盒|袋|个|件|包|卷|台|支|根|块|节|斤|克|kg|KG|米|套|桶|罐|条))")
+_TRANSFER_PAT = re.compile(r"(调拨|从.{1,10}仓.{0,8}(?:调|转|移).{0,10}仓)")
 
 
 def _draft_order(args, erp, on_event=None, images=None, previous_draft=None, attachments=None):
@@ -471,9 +478,17 @@ def _draft_order(args, erp, on_event=None, images=None, previous_draft=None, att
     if not text:
         return ({"error": "缺少 text 参数（用户的录单原话）"},
                 "draft_order 需要 text 参数：把用户的录单需求原话传进来。")
-    if _DRAFT_DENY.search(raw_user_text or text):
-        return ({"refused": "modification_not_supported", "text": raw_user_text or text},
-                "起草工具只能新建单据，不能修改或删除已有数据——请向用户说明。")
+    check_text = raw_user_text or text
+    if _DRAFT_DENY.search(check_text):
+        return ({"refused": "modification_not_supported", "text": check_text},
+                "起草工具只能新建单据，不能修改、删除或审核已有数据——请向用户说明。")
+    if not previous_draft:
+        if _TRANSFER_PAT.search(check_text):
+            return ({"unsupported": "transfer", "text": check_text},
+                    "对话起草目前仅支持 6 类出入库单（采购/销售/退货/其他出入库），暂不支持仓库调拨单；调拨请在 jshERP 后台「仓库管理 → 调拨出库」操作。")
+        if _PAY_ONLY.search(check_text) and not _PAY_GOODS.search(check_text):
+            return ({"unsupported": "payment", "text": check_text},
+                    "对话起草目前仅支持 6 类出入库单；收款/付款单请前往左侧「录单 → 收付款」页面录入（支持关联欠款单核销）。")
     if not has_text_attach and len(text) > DRAFT_TEXT_MAX:
         return ({"error": "内容过长（%d 字，上限 %d）" % (len(text), DRAFT_TEXT_MAX)},
                 "录单内容太长（上限 %d 字），请让用户分次录入。" % DRAFT_TEXT_MAX)
@@ -533,7 +548,12 @@ def _draft_order(args, erp, on_event=None, images=None, previous_draft=None, att
                           "matched": (pvit.get("matched_name") or it.get("name") or "")})
         rows.append({
             "biz": draftmod.BIZ_LABEL.get(d.get("biz"), d.get("biz") or ""),
-            "party": d.get("party") or "", "depot": d.get("depot") or "",
+            "party": d.get("party") or "",
+            "depot": d.get("depot") or (pv.get("depot") or {}).get("name") or "",
+            "oper_time": d.get("oper_time") or pv.get("oper_time") or "",
+            "pay_amount": d.get("pay_amount"),
+            "remark": d.get("remark") or "",
+            "to_create": pv.get("to_create") or [],
             "items": items,
             "attachments": [a.get("name") for a in attach_meta],
             "total": pv.get("total"),
@@ -546,10 +566,12 @@ def _draft_order(args, erp, on_event=None, images=None, previous_draft=None, att
             "needs_user_confirm": True}
     if cl:
         data["clarify"] = cl.get("question", "")
-    note = ("已起草 %d 张单据草稿（仅预览，未写入系统）：%s。请告诉用户在确认卡上核对"
-            "内容并确认写入；有缺失项的草稿请提醒用户补全。" % (
+    note = ("已起草 %d 张单据草稿（仅预览，未写入系统）：%s。未指定日期的已默认当前时间，"
+            "请在确认卡上核对日期与内容后确认写入；有缺失项的草稿请提醒用户补全。" % (
                 len(bills),
-                "；".join("%s %s %d行" % (r["biz"], r["party"] or "？", len(r["items"])) for r in rows)))
+                "；".join("%s %s %s %d行" % (
+                    r["biz"], r["party"] or "？", (r["oper_time"] or "")[:10], len(r["items"]))
+                    for r in rows)))
     if cl:
         note = note + "待补信息：" + str(cl.get("question") or "")
     extra = {"batch_id": batch_id, "bills": bills,
@@ -567,7 +589,7 @@ def _tools(erp, on_event=None, images=None, previous_draft=None, attachments=Non
         "stock_query": {"desc": "查某种商品的库存（哪个仓、还剩多少）",
                         "args_hint": '{"material":"商品名","depot":"仓库名，没说就空字符串"}',
                         "run": bind(_stock_query)},
-        "low_stock": {"desc": "哪些货快没了/缺货/该补货了", "args_hint": "{}",
+        "low_stock": {"desc": "哪些商品低于安全库存/安全下限/负库存/库存预警（按仓对照安全线，问安全库存预警必用它，不要手写 SQL）", "args_hint": "{}",
                       "run": bind(_low_stock)},
         "today_stats": {"desc": "今天买了多少/卖了多少", "args_hint": "{}",
                         "run": bind(_today_stats)},
@@ -594,7 +616,7 @@ def _tools(erp, on_event=None, images=None, previous_draft=None, attachments=Non
         "search_history": {"desc": "搜历史单据（上次/之前跟谁买过什么、某商品进过几次货、原话找单）",
                            "args_hint": '{"query":"检索词，如商品名或往来单位"}',
                            "run": lambda a: rmod.search_history(str(a.get("query") or ""))},
-        "query_bills": {"desc": "按条件查单据明细（谁买了什么/某天卖了什么/某商品最近进出/某单位欠款单）",
+        "query_bills": {"desc": "按往来单位/日期/商品查全部单据总数、正向金额、退货金额、退货净额及明细（DB全量统计不截断；问某客户/供应商一共多少张单、买了多少钱、退货净额必用它，不要自己写多条 SQL）",
                         "args_hint": '{"party":"往来单位，可空","date":"YYYY-MM-DD或今天/昨天，可空","material":"商品名，可空"}',
                         "run": lambda a: _query_bills(a, erp)},
         "procurement_suggest": {"desc": "哪些商品该补货、建议采购多少（按近30天销量/当前库存/安全库存/采购周期确定性计算，数字可复算）",
