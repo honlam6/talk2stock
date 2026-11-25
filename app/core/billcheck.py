@@ -61,7 +61,43 @@ patch 元素：{{"bill_index":0,"item_index":0,"field":"depot|price","value":值
 # 只读工具（返回 (data, note)——note 是模板句，数字接地兜底用）
 # --------------------------------------------------------------------------
 def _tool_stock_check(args, erp):
-    return askmod._stock_query(args, erp)
+    """出库前库存校验：args 没写仓库时补默认出库仓，按**该仓**库存判断。
+
+    旧实现查全仓合计，会出现「合计 60 够、目标仓成品仓 -5」也判通过——
+    提交后成品仓继续负数，而用户看到的是「库存充足」。
+    """
+    a = dict(args or {})
+    if not a.get("depot"):
+        from . import config as cfgmod
+        ui = cfgmod.load().get("ui") or {}
+        d = ui.get("default_depot_out") or ui.get("default_depot_in") or ""
+        if d:
+            a["depot"] = d
+            data, note = askmod._stock_query(a, erp)
+            note = "（按默认出库仓「%s」校验）%s" % (d, note)
+            return _judge(data, note, a)
+    data, note = askmod._stock_query(a, erp)
+    return _judge(data, note, a)
+
+
+def _judge(data, note, args):
+    """把「要出多少 / 仓里有多少 / 够不够」算出来，不让模型自己比。
+
+    只报库存数时，30 箱的需求对上 17 箱的观察，模型仍可能出草稿；
+    缺口必须显式给成 shortfall。
+    """
+    try:
+        need = float(args.get("qty") or 0)
+    except (TypeError, ValueError):
+        need = 0.0
+    if not need or not isinstance(data, dict):
+        return data, note
+    have = float(data.get("total") or 0)
+    data["need"] = need
+    data["enough"] = have >= need
+    data["shortfall"] = round(max(0.0, need - have), 2)
+    tail = "足够" if data["enough"] else "缺 %g" % data["shortfall"]
+    return data, "%s 需出 %g，仓内 %g，%s。" % (note.rstrip("。"), need, have, tail)
 
 
 def _sql_escape(s):
@@ -418,10 +454,12 @@ def _needs_agent_check(drafts, erp, operator="", meta=None):
                 if not nm:
                     continue
                 try:
-                    sdata, snote = _tool_stock_check({"material": nm, "depot": depot}, erp)
+                    _qty = it.get("qty")
+                    sdata, snote = _tool_stock_check(
+                        {"material": nm, "depot": depot, "qty": _qty}, erp)
                     pre_steps.append({
                         "step": len(pre_steps) + 1, "tool": "stock_check",
-                        "args": {"material": nm, "depot": depot},
+                        "args": {"material": nm, "depot": depot, "qty": _qty},
                         "ok": True, "thought": "出库前校验「%s」当前库存" % nm,
                         "observation": sdata,
                     })

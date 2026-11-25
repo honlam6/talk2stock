@@ -13,7 +13,8 @@ import time
 
 from . import config as cfgmod
 from . import llm as llmmod
-from .report import summary, official_stats, stock_overview, recent_bills, _safe_stock_map
+from .report import (summary, official_stats, stock_overview, recent_bills,
+                     day_stats, _safe_stock_map)
 from .erp import get_client
 
 PROMPT_VERSION = "insight-v1-20261024"
@@ -25,7 +26,7 @@ RECV_FOCUS_RATIO = 0.5    # 应收集中度：top1 占比超过该值提示
 def collect_facts(erp=None):
     """规则层：从看板数据模块提取结构化事实（全部只读、全部可解释）。"""
     erp = erp or get_client()
-    facts = {"generated_at": time.strftime("%Y-%m-%d %H:%M")}
+    facts: dict = {"generated_at": time.strftime("%Y-%m-%d %H:%M")}
 
     ov = stock_overview(erp, safe_map=_safe_stock_map(erp))
     facts["stock"] = {"kinds": ov.get("kinds"), "negative_kinds": ov.get("negative"),

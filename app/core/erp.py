@@ -188,6 +188,7 @@ class JshERP:
         self._stock_tbl = None          # (条码 → 仓库 → 净库存) 聚合表，见 stock_table()
         self._stock_tbl_at = 0.0
         self._stock_lock = threading.Lock()
+        self._depot_stk = {}            # material_id → (ts, {depot_id → 库存})，见 depot_stock_map()
 
     # ---------- 底层请求 ----------
     def _req(self, path, method="GET", data=None, retry_login=True):
@@ -233,6 +234,7 @@ class JshERP:
                 self.token = tok
                 self._cache.clear()
                 self._stock_tbl = None
+                self._depot_stk.clear()
                 return True
             raise ErpError(f"ERP 登录失败：{j.get('data', {}).get('msgTip') or j}")
 
@@ -293,6 +295,7 @@ class JshERP:
                 self._cache_at.pop(k, None)
         # 单据/明细可能变了，库存聚合表一并作废
         self._stock_tbl = None
+        self._depot_stk.clear()
 
     # ---------- 主数据读取 ----------
     def suppliers(self, stype=None):
@@ -650,15 +653,50 @@ class JshERP:
                 return str(m.get("mBarCode") or m.get("barCode") or "")
         return ""
 
+    def depot_stock_map(self, material_id, max_age=60):
+        """某商品的「分仓库存」权威口径（含期初库存）。
+
+        数据源 `/material/getMaterialDepotStock` → jsh_material_current_stock，
+        该表由 ERP 在每次单据审核时维护，口径 = 期初库存 + 出入库净额。
+        ⚠️ 不要用 stock_table() 的明细净额代替：它没有期初，出库多于入库时会
+        算出负数（可口可乐 700：明细净额 -233，真实 103 = 期初 336 + 净额 -233）。
+
+        返回 {depot_id: qty}；该商品在所有仓都没有库存记录时返回 {}；
+        接口异常返回 None（调用方回退到旧聚合口径）。
+        """
+        key = str(material_id)
+        now = time.time()
+        hit = self._depot_stk.get(key)
+        if hit and now - hit[0] < max_age:
+            return hit[1]
+        try:
+            j = self._req(f"/material/getMaterialDepotStock?materialId={material_id}")
+        except Exception:
+            return None
+        rows = ((j.get("data") or {}).get("rows"))
+        if rows is None:
+            return None
+        out = {}
+        for r in rows or []:
+            try:
+                out[str(r.get("depotId"))] = float(r.get("currentNumber") or 0)
+            except (TypeError, ValueError):
+                continue
+        self._depot_stk[key] = (now, out)
+        return out
+
     def stock(self, material_id, depot_id=None):
         """返回某商品（指定仓库时按仓库）的实时库存数量。
 
-        ⚠️ 版本兼容：/depotItem/getStockByParam 在本环境 404，
-        material 列表行自带全仓合计 stock 字段；分仓数据用 stock_table()
-        聚合表查（一次拉平 + 缓存），不再逐仓逐单扫描。
+        无仓库：material 列表行自带全仓合计 stock 字段（ERP 已含期初）。
+        指定仓库：走 depot_stock_map()（jsh_material_current_stock，含期初）；
+        接口不可用时才回退到 stock_table() 的明细净额（不含期初，可能为负）。
         """
         try:
             if depot_id:
+                dm = self.depot_stock_map(material_id)
+                if dm is not None:
+                    return float(dm.get(str(depot_id), 0.0))
                 bc = self._barcode_of(material_id)
                 if not bc:
                     return None

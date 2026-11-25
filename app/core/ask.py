@@ -12,7 +12,8 @@ import uuid
 from . import config as cfgmod
 from . import dbread as dbmod
 from . import draft as draftmod
-from .report import official_stats, recent_bills as _rb, stock_overview, summary, _safe_stock_map
+from .report import (official_stats, recent_bills as _rb, stock_overview, summary,
+                     material_flow, _safe_stock_map)
 from .erp import get_client, parallel
 
 PROMPT_VERSION = "unified-v1-20261119"
@@ -97,12 +98,21 @@ def _stock_query(args, erp):
         rows.append({"depot": d.get("name"), "stock": float(st)})
         total += float(st)
     unit = mrow.get("unit") or ""
+    flow = material_flow(mrow["id"], (deps[0].get("id") if depot_filter and deps else None)) or {}
     data = {"material": mrow.get("name"), "unit": unit, "by_depot": rows,
-            "total": round(total, 2), "matched": kind or "exact"}
+            "total": round(total, 2), "matched": kind or "exact",
+            "initial": flow.get("initial"), "in_sum": flow.get("in_sum"),
+            "out_sum": flow.get("out_sum")}
     if depot_filter:
         data["depot_matched"] = dkind
     detail = "；".join(f"{r['depot']} {r['stock']:g}" for r in rows) if rows else "各仓均无库存记录"
-    return data, (f"「{mrow.get('name')}」当前库存 {total:g}{unit}。{detail}。"
+    # 期初+累计入出必须一起给：只报明细净额时，靠期初平账的商品会被误述成「没有进货记录」
+    trail = ""
+    if flow.get("initial"):
+        trail = ("期初 {initial:g}{u}、累计入库 {i:g}{u}、累计出库 {o:g}{u}；"
+                 .format(u=unit, initial=flow["initial"], i=flow.get("in_sum") or 0,
+                         o=flow.get("out_sum") or 0))
+    return data, (f"「{mrow.get('name')}」当前库存 {total:g}{unit}。{detail}。{trail}"
                   if rows else f"「{mrow.get('name')}」在系统里没有库存记录。")
 
 
@@ -113,15 +123,24 @@ def _low_stock(_args, erp):
             "low": ov.get("low"), "threshold": ov.get("threshold"),
             "warn_list": warn[:12]}
     head = f"共 {ov.get('kinds')} 种商品，其中 {ov.get('negative')} 种负库存、{ov.get('low')} 种低于 {ov.get('threshold')}。"
-    body = "最紧张：" + "；".join(f"{w['name']} {w['stock']:g}{w['unit']}" for w in warn[:5]) if warn else "暂无紧张库存。"
+    def _wlabel(w):
+        if w.get("tight"):
+            t = w["tight"]
+            return ("%s 合计 %g%s（%s %g，安全线 %g）"
+                    % (w["name"], w["stock"], w["unit"], t["depot"], t["stock"], t["low"]))
+        return "%s %g%s" % (w["name"], w["stock"], w["unit"])
+
+    body = "最紧张：" + "；".join(_wlabel(w) for w in warn[:5]) if warn else "暂无紧张库存。"
     return data, head + body
 
 
 def _today_stats(_args, erp):
+    # 笔数由 official_stats 内部换成 DB 真实单据张数（接口 total 是商品种数）
     st = official_stats(erp)
     scope = st.get("today") or {}
     data = {"scope": "今天", "buy": scope.get("buy"), "buy_n": scope.get("buy_n"),
             "sell": scope.get("sell"), "sell_n": scope.get("sell_n"),
+            "return_n": scope.get("return_n"), "return_amt": scope.get("return_amt"),
             "profit_cash": scope.get("profit")}
     return data, (f"今天采购 {scope.get('buy'):,.2f} 元（{scope.get('buy_n')} 笔），"
                   f"销售 {scope.get('sell'):,.2f} 元（{scope.get('sell_n')} 笔），"
@@ -133,6 +152,7 @@ def _month_stats(_args, erp):
     scope = st.get("month") or {}
     data = {"scope": "本月", "buy": scope.get("buy"), "buy_n": scope.get("buy_n"),
             "sell": scope.get("sell"), "sell_n": scope.get("sell_n"),
+            "return_n": scope.get("return_n"), "return_amt": scope.get("return_amt"),
             "profit_cash": scope.get("profit")}
     return data, (f"本月采购 {scope.get('buy'):,.2f} 元（{scope.get('buy_n')} 笔），"
                   f"销售 {scope.get('sell'):,.2f} 元（{scope.get('sell_n')} 笔），"
@@ -216,7 +236,7 @@ def _query_bills(args, erp):
         return {"error": "date 要用 YYYY-MM-DD（或「今天」「昨天」）", "got": date_s}, \
             "date 参数没认出来（%s），请用 YYYY-MM-DD" % date_s
     bills = erp.bills(page_size=500)
-    rows, matched_ids = [], []
+    hits, matched_ids = [], []
     for b in bills:
         if str(b.get("deleteFlag")) == "1":
             continue
@@ -228,14 +248,18 @@ def _query_bills(args, erp):
         goods = str(b.get("materialsList") or "")
         if material and erp._norm(material) not in erp._norm(goods):
             continue
-        rows.append({"number": b.get("number"), "time": t,
+        hits.append({"number": b.get("number"), "time": t,
                      "type": (b.get("type") or "") + "·" + (b.get("subType") or ""),
                      "party": b.get("organName") or "—",
                      "goods": goods.strip()[:60], "total": float(b.get("totalPrice") or 0),
                      "debt": float(b.get("debt") or 0)})
         matched_ids.append(b.get("id"))
-        if len(rows) >= 20:
-            break
+    # 全量先计数再截断：以前命中 20 条就 break，答案会把「前 20 张」说成「一共 20 张」
+    # （永辉实际 85 张、34973.56 元，被答成 20 张）。
+    total_count = len(hits)
+    total_amount = round(sum(h["total"] for h in hits), 2)
+    rows = hits[:20]
+    matched_ids = matched_ids[:20]
     # 补明细行（materialsList 只有商品名没有数量；「电池今天卖了多少」要的是数量）
     if rows:
         bc2name = {}
@@ -254,14 +278,30 @@ def _query_bills(args, erp):
                     qty = 0.0
                 items.append({"name": name, "qty": qty, "unit": unit})
             row["items"] = items
+    # 退货方向：把销售退货当「购买」累加会高估（永辉 85 张销售 21377.10 + 1 张退货 68.00，
+    # 旧口径答成「买了 86 张、21445.1 元」）。这里分开给，让回答能讲清净额。
+    sale_amount = round(sum(h["total"] for h in hits if "退货" not in h["type"]), 2)
+    return_amount = round(sum(h["total"] for h in hits if "退货" in h["type"]), 2)
     data = {"filters": {"party": party, "date": day, "material": material},
-            "count": len(rows), "bills": rows}
+            "count": len(rows), "total_count": total_count,
+            "total_amount": total_amount, "sale_amount": sale_amount,
+            "return_amount": return_amount,
+            "net_amount": round(sale_amount - return_amount, 2),
+            "truncated": total_count > len(rows),
+            "bills": rows}
     scope = "、".join(x for x in ((party or ""), (day or ""), ("含" + material) if material else "") if x)
     if not rows:
         return data, "没有查到符合条件（%s）的单据（最近 %d 张里）。" % (scope or "给定条件", len(bills))
     lines = "；".join("%s %s %s %s %g元" % (r["time"], r["party"], r["goods"][:20], r["type"], r["total"])
                       for r in rows[:5])
-    return data, "查到 %d 张：%s。" % (len(rows), lines)
+    head = "查到 %d 张" % total_count
+    if total_count > len(rows):
+        head += "（明细只列前 %d 张）" % len(rows)
+    money_note = "合计 %g 元" % total_amount
+    if return_amount:
+        money_note = ("销售 %g 元、退货 %g 元、净额 %g 元"
+                      % (sale_amount, return_amount, round(sale_amount - return_amount, 2)))
+    return data, "%s，%s：%s。" % (head, money_note, lines)
 
 
 # --------------------------------------------------------------------------
