@@ -25,12 +25,12 @@ if APP_DIR not in sys.path:
 from core import config as cfgmod  # noqa: E402
 
 
-def http_post(base, path, body, pw):
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+def http_json(base, path, pw, body=None):
+    data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
     req = urllib.request.Request(
         base.rstrip("/") + path,
         data=data,
-        method="POST",
+        method="POST" if data is not None else "GET",
         headers={"Content-Type": "application/json", "X-T2S-Pass": pw},
     )
     with urllib.request.urlopen(req, timeout=180) as r:
@@ -39,6 +39,8 @@ def http_post(base, path, body, pw):
 
 def run_suite(base):
     pw = cfgmod.load().get("demo_pass") or "honlam4088"
+    dash = http_json(base, "/api/dashboard", pw)
+    off = dash.get("official") or {}
     results = []
     sam_draft = None
 
@@ -48,7 +50,7 @@ def run_suite(base):
         if extra_body:
             body.update(extra_body)
         try:
-            res = http_post(base, "/api/ask", body, pw)
+            res = http_json(base, "/api/ask", pw, body)
             lat = round(time.time() - t0, 1)
             ok, reason = check_fn(res)
             ans = str(res.get("answer") or "").replace("\n", " ")[:180]
@@ -206,13 +208,19 @@ def run_suite(base):
 
     call("D1", "全量+退货净额", "永辉超市全量单据与退货净额", "永辉超市一共有多少张单据？总共买了多少钱（区分退货净额）？", chk_d1)
 
+    def _has_num(text, val):
+        s_plain = f"{val:g}" if isinstance(val, float) and val.is_integer() else f"{val:.2f}".rstrip("0").rstrip(".")
+        s_comma = f"{val:,.2f}".rstrip("0").rstrip(".")
+        return s_plain in text or s_comma in text
+
     def chk_d2(res):
         a = str(res.get("answer") or "")
         tools = [s.get("tool") for s in (res.get("steps") or []) if s.get("tool")]
         if "low_stock" not in tools:
             return False, f"未走 low_stock 工具（走了 {tools}）"
-        if "4" not in a:
-            return False, f"低库存种类应为 4: {a[:100]}"
+        exp_low = int((dash.get("stock") or {}).get("low") or 0)
+        if str(exp_low) not in a:
+            return False, f"低库存种类应为 {exp_low}: {a[:100]}"
         return True, f"tools={tools}, ans={a[:70]}"
 
     call("D2", "安全库存预警", "低于安全库存清单", "哪些商品低于安全库存了？", chk_d2)
@@ -230,8 +238,11 @@ def run_suite(base):
         if not ok:
             return False, msg
         a = str(res.get("answer") or "")
-        if ("22,830" not in a and "22830" not in a) or ("14,940.6" not in a and "14940.6" not in a):
-            return False, f"应含上月 22830 与本月 14940.6: {a[:120]}"
+        cur_m = float((off.get("month") or {}).get("sell") or 0)
+        sell_trend = (off.get("trend") or {}).get("sell") or []
+        prev_m = float(sell_trend[-2]["y"]) if len(sell_trend) >= 2 else 0.0
+        if not _has_num(a, cur_m) or (prev_m and not _has_num(a, prev_m)):
+            return False, f"应含上月 {prev_m} 与本月 {cur_m}: {a[:120]}"
         return True, a[:80]
 
     call("D4", "跨月对比差额", "上月 vs 本月销售额对比", "对比一下上个月和这个月的销售额，差了多少钱？", chk_d4)
@@ -247,8 +258,11 @@ def run_suite(base):
         if not ok:
             return False, msg
         a = str(res.get("answer") or "")
-        if ("47,858.09" not in a and "47858.09" not in a) or "244" not in a or "34" not in a:
-            return False, f"应含 47858.09 / 244 / 34: {a[:120]}"
+        bal = float((off.get("account") or {}).get("current") or 0)
+        nr = int(off.get("need_recv") or 0)
+        np = int(off.get("need_pay") or 0)
+        if not _has_num(a, bal) or str(nr) not in a or str(np) not in a:
+            return False, f"应含余额 {bal} / 待收 {nr} / 待付 {np}: {a[:120]}"
         return True, a[:80]
 
     call("D6", "组合指标", "资金余额+待审+待收付", "现在资金账户总余额多少？待审核、待收款和待付款单据各几张？", chk_d6)
