@@ -140,8 +140,10 @@ class TestLedgerCalculations(unittest.TestCase):
             {"st": "销售退货", "d": "2026-11-25", "amt": "50.00", "n": "1"},
             {"st": "零售", "d": "2026-11-10", "amt": "200.00", "n": "2"},
         ]
-        with mock.patch.object(ledgermod, "_q", return_value=fake_rows):
+        seen_sql = []
+        with mock.patch.object(ledgermod, "_q", side_effect=lambda sql, limit=5000: seen_sql.append(sql) or fake_rows):
             res = ledgermod.period_stats(today="2026-11-25", month="2026-11", year="2026")
+        self.assertTrue(seen_sql and "%Y-%m-%d" in seen_sql[-1] and "%%Y" not in seen_sql[-1])
         self.assertEqual(res["today"]["buy"], 900.0)
         self.assertEqual(res["today"]["buy_n"], 2)
         self.assertEqual(res["today"]["sell"], 1450.0)

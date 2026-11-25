@@ -482,7 +482,8 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_e
             payload["stream_options"] = {"include_usage": True}
         text, usage = _post_retry(url, payload, prof["api_key"], stream=True, ssl_context=ctx, extra_headers=extra_headers)
     except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:300]
+        raw_err = e.read()
+        detail = (raw_err.decode("utf-8", "replace") if isinstance(raw_err, bytes) else str(raw_err))[:300]
         if "stream_options" in detail:
             _add_quirk(prof, "no_stream_options")   # 该端点不认此参数，记住并立即降级
         if "reasoning" in detail.lower():
@@ -516,7 +517,8 @@ def _chat(prof, messages, force_json=True, purpose="", collect=None, reasoning_e
             payload = {k: v for k, v in base.items() if k != "response_format"}
             text, usage = _post_retry(url, payload, prof["api_key"], stream=False, ssl_context=ctx, extra_headers=extra_headers)
         except urllib.error.HTTPError as e:
-            detail = e.read().decode("utf-8", "replace")[:300]
+            raw_err = e.read()
+            detail = (raw_err.decode("utf-8", "replace") if isinstance(raw_err, bytes) else str(raw_err))[:300]
             raise RuntimeError(f"AI 接口报错 {e.code}：{detail}")
         except Exception as e:
             raise RuntimeError(f"AI 接口连接失败：{e}（流式也失败：{last_err}）")

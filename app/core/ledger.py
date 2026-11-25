@@ -134,7 +134,7 @@ def period_stats(today=None, month=None, year=None):
     month = month or time.strftime("%Y-%m")
     year = year or time.strftime("%Y")
     sql = (
-        "SELECT h.sub_type AS st, DATE_FORMAT(h.oper_time,'%%Y-%%m-%%d') AS d, "
+        "SELECT h.sub_type AS st, DATE_FORMAT(h.oper_time,'%Y-%m-%d') AS d, "
         f"SUM({_gross_expr('h')}) AS amt, COUNT(*) AS n "
         "FROM jsh_depot_head h "
         f"WHERE {_posted_where('h')} "
@@ -218,7 +218,7 @@ def monthly_trend(months=6):
         keys.append(f"{yy:04d}-{mm:02d}")
     start = keys[0] + "-01 00:00:00"
     sql = (
-        "SELECT DATE_FORMAT(h.oper_time,'%%Y-%%m') AS ym, h.sub_type AS st, "
+        "SELECT DATE_FORMAT(h.oper_time,'%Y-%m') AS ym, h.sub_type AS st, "
         f"SUM({_gross_expr('h')}) AS amt "
         "FROM jsh_depot_head h "
         f"WHERE {_posted_where('h')} AND h.oper_time >= '{start}' "
@@ -253,10 +253,10 @@ def daily_trend(month=None):
     """指定月每日采购/销售净额（退货按负向冲减）。"""
     month = month or time.strftime("%Y-%m")
     sql = (
-        "SELECT DATE_FORMAT(h.oper_time,'%%Y-%%m-%%d') AS d, h.sub_type AS st, "
+        "SELECT DATE_FORMAT(h.oper_time,'%Y-%m-%d') AS d, h.sub_type AS st, "
         f"SUM({_gross_expr('h')}) AS amt "
         "FROM jsh_depot_head h "
-        f"WHERE {_posted_where('h')} AND DATE_FORMAT(h.oper_time,'%%Y-%%m')='{_esc(month)}' "
+        f"WHERE {_posted_where('h')} AND DATE_FORMAT(h.oper_time,'%Y-%m')='{_esc(month)}' "
         "GROUP BY d, h.sub_type"
     )
     try:
@@ -332,7 +332,7 @@ def _unpaid_rows():
     t = tenant_subquery()
     sql = (
         "SELECT h.id, h.sub_type, h.organ_id, IFNULL(s.supplier,'（未填单位）') AS organ_name, "
-        "DATE_FORMAT(h.oper_time,'%%Y-%%m-%%d') AS d, "
+        "DATE_FORMAT(h.oper_time,'%Y-%m-%d') AS d, "
         f"DATEDIFF(CURDATE(), DATE(h.oper_time)) AS age_days, "
         f"GREATEST(({_gross_expr('h')} + IFNULL(h.other_money,0) - IFNULL(h.deposit,0) "
         "- ABS(IFNULL(h.change_amount,0)) - IFNULL(fin.settled,0)), 0) AS unpaid "
@@ -676,9 +676,9 @@ def query_bills(party="", date="", date_from="", date_to="", material="", sub_ty
     t = tenant_subquery()
     wheres = [_posted_where("h")]
     if party:
-        wheres.append(f"IFNULL(s.supplier,'') LIKE '%%{_like_esc(party)}%%'")
+        wheres.append(f"IFNULL(s.supplier,'') LIKE '%{_like_esc(party)}%'")
     if date:
-        wheres.append(f"DATE_FORMAT(h.oper_time,'%%Y-%%m-%%d')='{_esc(date)}'")
+        wheres.append(f"DATE_FORMAT(h.oper_time,'%Y-%m-%d')='{_esc(date)}'")
     else:
         if date_from:
             wheres.append(f"h.oper_time >= '{_esc(date_from)} 00:00:00'")
@@ -693,12 +693,12 @@ def query_bills(party="", date="", date_from="", date_to="", material="", sub_ty
             "JOIN jsh_material m ON m.id = di.material_id "
             "LEFT JOIN jsh_material_extend me ON me.id = di.material_extend_id "
             "WHERE di.header_id = h.id AND IFNULL(di.delete_flag,'0')!='1' "
-            f"AND (m.name LIKE '%%{mat_like}%%' OR IFNULL(m.model,'') LIKE '%%{mat_like}%%' "
-            f"OR IFNULL(me.bar_code,'') LIKE '%%{mat_like}%%'))"
+            f"AND (m.name LIKE '%{mat_like}%' OR IFNULL(m.model,'') LIKE '%{mat_like}%' "
+            f"OR IFNULL(me.bar_code,'') LIKE '%{mat_like}%'))"
         )
 
     sql = (
-        "SELECT h.id, h.number, DATE_FORMAT(h.oper_time,'%%Y-%%m-%%d') AS d, "
+        "SELECT h.id, h.number, DATE_FORMAT(h.oper_time,'%Y-%m-%d') AS d, "
         "h.type, h.sub_type, IFNULL(s.supplier,'—') AS party, "
         f"{_gross_expr('h')} AS total, "
         f"GREATEST(({_gross_expr('h')} + IFNULL(h.other_money,0) - IFNULL(h.deposit,0) "
@@ -850,7 +850,7 @@ def party_history_sql(party, limit=5):
         "  GROUP BY ai.bill_id"
         ") fin ON fin.bill_id = h.id "
         f"WHERE {_posted_where('h')} AND h.sub_type IN ('采购','销售','零售') "
-        f"AND IFNULL(s.supplier,'') LIKE '%%{_like_esc(party)}%%' "
+        f"AND IFNULL(s.supplier,'') LIKE '%{_like_esc(party)}%' "
         f"AND ({_gross_expr('h')} + IFNULL(h.other_money,0) - IFNULL(h.deposit,0) "
         "- ABS(IFNULL(h.change_amount,0)) - IFNULL(fin.settled,0)) > 0.005"
     )
