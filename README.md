@@ -275,7 +275,7 @@ systemctl status talk2stock            # 运行状态
 systemctl restart talk2stock           # 改完 app/ 下代码后重启（web/ 静态文件改动免重启）
 tail -f /opt/logs/talk2stock.log       # 访问日志 / 异常栈
 docker ps --format '{{.Names}}\t{{.Status}}'   # erp-web / erp-backend / erp-mysql / erp-redis
-curl -s localhost:8090/api/health      # 返回 need_auth=true 且有 401 = 进程活着且鉴权生效
+curl -s localhost:8090/api/health      # 返回 {"ok":true,"service":"talk2stock"} = 进程活着；未登录调 /api/dashboard 返回 401 + need_auth=true = 鉴权生效
 python3 app/selfcheck.py               # 应用层自检（直连 core 模块）
 ```
 
@@ -538,8 +538,8 @@ v1→v5 的有效改动（全部由失败用例驱动）：规则路由加**实�
 - ~~token 用量台账~~：usage.jsonl 精确计量 + 设置页成本条 + /api/usage。
 - ~~主数据候选匹配~~：匹配失败时给 top3 相似候选，确认卡上点选后自动重新预览。
 - ~~单位换算与含税口径~~：商品建档带 `unitId`，`unit` 传用户单位，后端 `DepotItemService` 按单位组 ratio 自动折算 `basicNumber`；行级 `tax_rate` 落 `taxRate / taxMoney / taxLastMoney`，含税/未税口径跟随 ERP 的 `materialPriceTaxFlag`。
-- ~~CI / 离线回归~~：Python 编译检查、`unittest` 当前 25 模块 **236 项全绿**、前端内联 JS `node --check`；统一 Agent 冒烟 `eval/run_unified.py` **5/5**，完整链路录单 **71/71 = 100.0%**，校验 `billcheck` **4/4 = 100%**，问一问 **33/34 = 97.1%**（2026-11-25 实测）。
-- ~~业务闭环补齐（2026-11-25）~~：采购建议扣减在途订单（`procurement._SQL_PENDING`）；近 30 分钟相似单据防重提示（`core/dedupe.py`）；会话令牌可吊销（登出/管理员踢人，`session_epoch.json`）；批量失败单重试（自动换新令牌）；已写入单据一键生成反向草稿（`core/reverse.py`，原单不动）；看板单据总数改 DB 精确计数；ADR-16 事实与建议分离（草稿原话保真 + 确认卡一键采纳接地建议）、终结型工具立即退出与确定性预检快路径。
+- ~~CI / 离线回归~~：Python 编译检查、`unittest` 当前 26 模块 **265 项全绿**、前端内联 JS `node --check`；统一 Agent 冒烟 `eval/run_unified.py` **5/5**，完整链路录单 **71/71 = 100.0%**，校验 `billcheck` **4/4 = 100%**，问一问 **33/34 = 97.1%**（2026-11-25），答辩级对抗红队 `eval/defense_redteam.py` 本地与线上双端 **20/20 = 100%**（2026-11-26 实测）。
+- ~~业务闭环补齐（2026-11-25 ~ 11-26）~~：采购建议扣减在途订单（`procurement._SQL_PENDING`）与多单位采购价基本单位折算；多单位商品双条码保护（防止副单位建单覆写基本单位成本价导致库存货值失真）；表单「记账」默认实付归零；近 30 分钟相似单据防重提示（`core/dedupe.py`）；会话令牌可吊销（登出/管理员踢人，`session_epoch.json`）；批量失败单重试（自动换新令牌）；已写入单据一键生成反向草稿（`core/reverse.py`，原单不动）；看板单据总数改 DB 精确计数；ADR-16 事实与建议分离、终结型工具立即退出与确定性预检快路径。
 - ~~公网部署~~：云服务器实例 <http://111.91.30.23:8090/>，systemd 守护 + 鉴权开启，见[生产部署与运维](#生产部署与运维)。
 
 - ~~Supervisor 统一智能助手~~：问一问起草单据（写意图路由到草稿，闸门不变）+ 录单自主校验 agent + 操作员习惯记忆 + 导入修复 agent + 老板日报 agent（ADR-10/11/12/16）；评测资产 cases（71 条）/ ask_cases（34 条）/ billcheck_cases（4 条）/ repair_cases / daily_cases + 各自跑分器。
