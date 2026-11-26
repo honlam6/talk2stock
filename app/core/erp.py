@@ -304,7 +304,13 @@ class JshERP:
         return [r for r in rows if str(r.get("enabled", 1)) not in ("0", "False", "false")]
 
     def materials(self):
-        return self.list("/material/list", {})
+        rows = self.list("/material/list", {})
+        for r in rows:
+            if not str(r.get("unit") or "").strip():
+                un = str(r.get("unitName") or "").strip()
+                if un:
+                    r["unit"] = un.split("/")[0].strip()
+        return rows
 
     def depots(self):
         return self.list("/depot/list", {})
@@ -518,11 +524,20 @@ class JshERP:
         return None
 
     def material_barcode(self, material_id, unit="个"):
-        """取商品条码；没有则建一个 BC<id>。
+        """取商品条码（优先匹配 commodityUnit == unit，防止副单位建单覆写基本单位成本价）；
+        完全无条码时建一个 BC<id>。
         注意 getDetailList 用平铺 materialId 参数，不能包 search（会 500）。"""
+        want = self._norm(unit)
         try:
             j = self._req(f"/materialsExtend/getDetailList?materialId={material_id}")
             rows = (j.get("data") or {}).get("rows") or []
+            if want:
+                for r in rows:
+                    if r.get("barCode") and self._norm(r.get("commodityUnit")) == want:
+                        return r["barCode"]
+            for r in rows:
+                if r.get("barCode") and str(r.get("defaultFlag") or "") == "1":
+                    return r["barCode"]
             for r in rows:
                 if r.get("barCode"):
                     return r["barCode"]
@@ -542,13 +557,15 @@ class JshERP:
                  if self._norm(r.get("name")) == self._norm(name)}
         urow = self.ensure_unit(unit)
         basic = urow.get("basicUnit") or unit
+        other_u = str(urow.get("otherUnit") or "").strip()
+        has_multi = bool(urow.get("id") and other_u)
         body = {
             "name": name, "model": model, "standard": standard,
-            "unit": basic, "enabled": 1,
+            "unit": "" if has_multi else basic, "enabled": 1,
             "categoryId": category_id or self._default_category_id(),
         }
-        if urow.get("id"):
-            # 关键：带上 unitId，后端才能按单位组的 ratio 自动折算 basicNumber
+        if has_multi:
+            # 仅真正多单位组带 unitId（且 m.unit 留空，对齐 jshERP 原生约定，避免拼出「瓶瓶[多单位]」）
             body["unitId"] = urow["id"]
         res = self._req("/material/add", "POST", body)
         if res.get("code") != 200:
@@ -566,7 +583,15 @@ class JshERP:
                     break
         if row is None:
             raise ErpError(f"新建商品「{name}」后查不到")
-        bc = row.get("barCode") or self.material_barcode(row["id"], row.get("unit") or unit)
+        bc = row.get("barCode") or self.material_barcode(row["id"], row.get("unit") or basic)
+        if has_multi:
+            try:
+                self._req("/materialsExtend/add", "POST", {
+                    "materialId": row["id"], "barCode": f"BC{row['id']}-2",
+                    "commodityUnit": other_u, "defaultFlag": 0,
+                })
+            except Exception:
+                pass
         return dict(row, barCode=bc)
 
     def ensure_material(self, name, unit="个", category_id=None, model="", standard=""):
@@ -833,7 +858,12 @@ class JshERP:
             for r in rows), 2)
         is_cash_bill = biz in ("purchase_in", "sale_out", "purchase_return", "sale_return")
         if is_cash_bill:
-            change = round(float(pay_amount), 2) if pay_amount not in (None, "") else total
+            if pay_amount not in (None, ""):
+                change = round(float(pay_amount), 2)
+            elif str(pay_type or "").strip() in ("记账", "挂账", "赊账"):
+                change = 0.0
+            else:
+                change = total
             acc_id = self.default_account_id(account_id)
         else:
             change = 0.0

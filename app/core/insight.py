@@ -29,13 +29,24 @@ def collect_facts(erp=None):
 
     ov = stock_overview(erp, safe_map=_safe_stock_map(erp))
     facts["stock"] = {"kinds": ov.get("kinds"), "negative_kinds": ov.get("negative"),
-                      "low_kinds": ov.get("low"), "threshold": ov.get("threshold"),
-                      "tightest": [{"name": w["name"], "stock": w["stock"], "unit": w["unit"]}
-                                   for w in (ov.get("warn_list") or [])[:3]]}
+                      "low_kinds": ov.get("low"),
+                      "tightest": [{
+                          "name": w["name"], "stock": w["stock"], "unit": w["unit"],
+                          "safe_stock": w.get("threshold"),
+                          **(({"tight_depot": w["tight"]["depot"], "tight_stock": w["tight"]["stock"]})
+                             if isinstance(w.get("tight"), dict) else {}),
+                      } for w in (ov.get("warn_list") or [])[:3]]}
 
     st = official_stats(erp)
-    facts["today"] = st.get("today") or {}
-    facts["month"] = st.get("month") or {}
+    def _scope_facts(sc):
+        if not isinstance(sc, dict):
+            return {}
+        d = dict(sc)
+        if "profit" in d:
+            d["cash_diff"] = d.pop("profit")
+        return d
+    facts["today"] = _scope_facts(st.get("today") or {})
+    facts["month"] = _scope_facts(st.get("month") or {})
     facts["stock_money"] = st.get("stock_money") or {}
 
     s = summary(erp)
@@ -91,8 +102,9 @@ INSIGHT_PROMPT = """你是进销存系统的经营分析师。下面是从 ERP �
 1. 每条洞察 {"title":"8字以内标题","detail":"一到两句中文说明","level":"info 或 warn"}。
 2. detail 里的每个数字必须原样来自事实 JSON，禁止编造、禁止计算新数字（比率已给的就用）。
 3. 数字带单位（元/瓶/种/笔），金额两位小数。
-4. 没有明显异常就给经营现状类洞察（采销规模、库存价值、欠款结构），不要硬编问题。
-5. 只输出 JSON：{"insights":[...]}，不要多余键。
+4. cash_diff 是销售减采购的现金流差额，绝不能写成「毛利」；low_kinds 按各商品自身安全库存（safe_stock）判定，不要统一说成低于 10。
+5. 没有明显异常就给经营现状类洞察（采销规模、库存价值、欠款结构），不要硬编问题。
+6. 只输出 JSON：{"insights":[...]}，不要多余键。
 
 事实 JSON：
 {facts}"""
@@ -190,12 +202,22 @@ def daily_report(erp=None):
     erp = erp or get_client()
     ins = insights(erp)
     al = alerts(erp)
-    bills = erp.all_bills()
+    tp = tr = None
+    try:
+        from . import ledger as ledgermod
+        tp = ledgermod.top_parties(top=5)
+        tr = ledgermod.daily_trend()
+    except Exception:
+        tp = tr = None
+    if tp is None or tr is None:
+        bills = erp.all_bills()
+        tp = tp if tp is not None else top_parties(bills, top=5)
+        tr = tr if tr is not None else daily_trend(bills)
     return {
         "ok": True,
         "date": time.strftime("%Y-%m-%d"),
         "insights": ins.get("insights") if ins.get("ok") else [],
         "alerts": al.get("alerts") if al.get("ok") else [],
-        "top_parties": top_parties(bills, top=5),
-        "trend": daily_trend(bills),
+        "top_parties": tp,
+        "trend": tr,
     }

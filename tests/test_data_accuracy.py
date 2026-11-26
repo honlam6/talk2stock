@@ -484,6 +484,51 @@ class TestSpecPreservationAndUnitCheck(unittest.TestCase):
         q = "向美宜佳商贸采购可口可乐 500ml 100瓶（按上次进价）；同时卖给永辉超市维达抽纸 3层*24包 20箱单价28元，帮我核价验库存并生成草稿"
         self.assertEqual(askmod._compound_hints(q), "")
 
+    def test_materials_fills_unit_from_unit_name_and_barcode_matches_unit(self):
+        c = erpmod.JshERP(base="http://erp.test", user="jsh", password="123")
+        c.token = "tok"
+        with mock.patch.object(c, "list", return_value=[
+            {"id": 800, "name": "农夫山泉 550ml", "unit": "", "unitId": 21, "unitName": "瓶/(箱=12瓶)"},
+            {"id": 802, "name": "红牛", "unit": "箱", "unitId": None, "unitName": None},
+        ]):
+            rows = c.materials()
+        self.assertEqual(rows[0]["unit"], "瓶")
+        self.assertEqual(rows[1]["unit"], "箱")
+
+        with mock.patch.object(c, "_req", return_value={"code": 200, "data": {"rows": [
+            {"barCode": "BC800", "commodityUnit": "瓶", "defaultFlag": "1"},
+            {"barCode": "BC800-2", "commodityUnit": "箱", "defaultFlag": "0"},
+        ]}}):
+            self.assertEqual(c.material_barcode(800, "箱"), "BC800-2")
+            self.assertEqual(c.material_barcode(800, "瓶"), "BC800")
+            self.assertEqual(c.material_barcode(800, "未知"), "BC800")
+
+    def test_create_bill_credit_pay_type_defaults_change_to_zero(self):
+        c = erpmod.JshERP(base="http://erp.test", user="jsh", password="123")
+        c.token = "tok"
+        c._tax_flag = False
+        c._cache['/account/list|{}'] = [{"id": 17, "name": "对公基本户", "enabled": True}]
+        c._cache_at['/account/list|{}'] = 9e18
+        sent = []
+        with mock.patch.object(c, "_req", side_effect=lambda p, m="GET", d=None, **kw: sent.append(json.loads(d["info"])) or {"code": 200, "data": {}}):
+            c.create_bill("sale_out", 200, [
+                {"materialId": 1, "barCode": "BC1", "name": "可乐", "operNumber": 10, "unit": "瓶", "unitPrice": 3.0, "allPrice": 30.0, "depotId": 14}
+            ], pay_type="记账")
+        self.assertEqual(sent[-1]["changeAmount"], 0.0)
+        self.assertEqual(sent[-1]["totalPrice"], 30.0)
+
+    def test_in_out_stats_cleans_duplicated_multi_unit_label(self):
+        fake_erp = mock.MagicMock()
+        fake_erp.materials.return_value = [{"name": "农夫山泉 550ml", "unit": "瓶", "categoryName": ""}]
+        fake_erp._req.return_value = {"code": 200, "data": {"rows": [
+            {"materialName": "农夫山泉 550ml", "unitName": "瓶瓶[多单位]", "inSum": 100, "outSum": 20, "thisSum": 80, "unitPrice": 1.1, "thisAllPrice": 88.0},
+            {"materialName": "散装货", "unitName": "箱箱[多单位]", "inSum": 10, "outSum": 0, "thisSum": 10, "unitPrice": 10.0, "thisAllPrice": 100.0},
+        ]}}
+        io = rptmod.in_out_stats(fake_erp)
+        by = {r["name"]: r for r in io["all_rows"]}
+        self.assertEqual(by["农夫山泉 550ml"]["unit"], "瓶")
+        self.assertEqual(by["散装货"]["unit"], "箱")
+
 
 if __name__ == "__main__":
     unittest.main()

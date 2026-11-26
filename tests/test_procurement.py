@@ -235,6 +235,12 @@ class TestDrafts(unittest.TestCase):
         self.assertIn("没有需要采购", out["message"])
 
 
+    def test_purchase_sql_normalizes_multi_unit_price_to_basic_unit(self):
+        """多单位按箱采购时，_SQL_PURCHASE 必须折算为基本单位单价（防 12 倍放大）。"""
+        self.assertIn("di.basic_number", pmod._SQL_PURCHASE)
+        self.assertIn("di.unit_price * di.oper_number / di.basic_number", pmod._SQL_PURCHASE)
+
+
 class TestToolSuggest(unittest.TestCase):
     def test_tool_observation_shape(self):
         """对话工具观察：前 10 行 + totals + 模板句（数字全部来自计算）。"""

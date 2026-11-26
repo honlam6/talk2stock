@@ -79,7 +79,10 @@ GROUP BY di.material_id
 
 _SQL_PURCHASE = """
 SELECT di.material_id AS material_id, dh.organ_id AS organ_id,
-       dh.oper_time AS oper_time, di.unit_price AS unit_price
+       dh.oper_time AS oper_time,
+       CASE WHEN IFNULL(di.basic_number, 0) > 0 AND IFNULL(di.oper_number, 0) > 0
+            THEN ROUND(di.unit_price * di.oper_number / di.basic_number, 4)
+            ELSE di.unit_price END AS unit_price
 FROM jsh_depot_item di
 JOIN jsh_depot_head dh ON dh.id = di.header_id
 WHERE dh.type = '入库' AND dh.sub_type = '采购'

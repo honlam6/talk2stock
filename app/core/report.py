@@ -436,8 +436,10 @@ def in_out_stats(erp=None, mats=None, top=10):
     """
     erp = erp or get_client()
     cats = {}
+    units_map = {}
     for m in (mats if mats is not None else erp.materials()):
         cats[m.get("name")] = m.get("categoryName") or ""
+        units_map[m.get("name")] = str(m.get("unit") or "").strip()
 
     def q(params):
         s = "&".join("%s=%s" % (k, urllib.parse.quote(str(v)))
@@ -453,10 +455,13 @@ def in_out_stats(erp=None, mats=None, top=10):
     rows = []
     for r in (d.get("rows") or []):
         name = r.get("materialName")
+        raw_u = str(r.get("unitName") or "").strip()
+        clean_u = units_map.get(name) or re.sub(r"\[多单位\]$", "", raw_u)
+        clean_u = re.sub(r"^(.)\1+$", r"\1", clean_u)
         rows.append({
             "name": name,
             "category": cats.get(name) or "",
-            "unit": r.get("unitName") or "",
+            "unit": clean_u,
             "in_qty": _f(r.get("inSum")),
             "out_qty": _f(r.get("outSum")),
             "stock": _f(r.get("thisSum")),

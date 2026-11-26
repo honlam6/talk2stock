@@ -209,7 +209,7 @@ function restore() {
 function node(cls, text) { const d = document.createElement('div'); d.className = cls; if (text != null) d.textContent = text; return d; }
 function scrollEnd(smooth = true) { $id('main').scrollTo({top:$id('main').scrollHeight,behavior:smooth && !matchMedia('(prefers-reduced-motion: reduce)').matches ? 'smooth':'auto'}); }
 const CAPS = [
-  {ico:'◔', t:'经营体检', d:'采销毛利、账户余额与待办汇总', q:'帮我做一次今日与本月经营体检：汇总采销毛利、各结算账户实时余额，以及待审核和待收付款单据情况'},
+  {ico:'◔', t:'经营体检', d:'采销差额、账户余额与待办汇总', q:'帮我做一次今日与本月经营体检：汇总采销差额、各结算账户实时余额，以及待审核和待收付款单据情况'},
   {ico:'↻', t:'智能补货', d:'预警排查 + 30天销量测算货值', q:'排查低于安全库存和负库存的商品，结合近30天销量计算建议采购量，并汇总当前库存总货值'},
   {ico:'✦', t:'多单起草', d:'一句话拆单 + 核价验库存', q:'向美宜佳商贸采购可口可乐 500ml 100瓶（按上次进价）；同时卖给永辉超市维达抽纸 3层*24包 20箱单价54元，帮我核价验库存并生成草稿'},
   {ico:'¥', t:'账款风控', d:'应收应付排行与待结算单据', q:'核算目前谁欠我钱、我欠谁钱，按金额列出重点往来欠款，并说明有多少张待收款和待付款单据'},

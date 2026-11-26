@@ -38,8 +38,8 @@ def http_json(base, path, pw, body=None):
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
-def run_suite(base):
-    pw = cfgmod.load().get("demo_pass") or "honlam4088"
+def run_suite(base, password=None):
+    pw = password if password is not None else cfgmod.demo_password()
     dash = http_json(base, "/api/dashboard", pw)
     off = dash.get("official") or {}
     results = []
@@ -293,5 +293,6 @@ def run_suite(base):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--url", default="http://localhost:8090")
+    p.add_argument("--pass", dest="password", default=None, help="访问口令（默认读 T2S_DEMO_PASS）")
     args = p.parse_args()
-    sys.exit(run_suite(args.url))
+    sys.exit(run_suite(args.url, password=args.password))

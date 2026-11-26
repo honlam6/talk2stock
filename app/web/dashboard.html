@@ -481,7 +481,7 @@ function renderDebt() {
     const maxA = Math.max(1, ...list.map(x => x.amount));
     const sum = list.reduce((a, x) => a + x.amount, 0) || 1;
     let stacked = '', offset = 0;
-    if (sum > 1) {
+    if (list.length > 0 && sum > 0) {
       const segs = list.map((x, i) => {
         const w = x.amount / sum * 100;
         const s = `<span style="display:inline-block;width:${w.toFixed(2)}%;height:100%;background:${colors[i % colors.length]}${offset === 0 ? ';border-radius:6px 0 0 6px' : ''}" title="${esc(x.name)} ￥${money(x.amount)}"></span>`;

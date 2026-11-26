@@ -48,28 +48,33 @@ check_url "ERP 前端(8080)"   "http://localhost:8080/"
 check_url "ERP 后端文档(9999)" "http://localhost:9999/jshERP-boot/doc.html"
 check_url "Talk2Stock(8090)"  "http://localhost:8090/ask"
 
-# ── 4) ERP 登录（密码 MD5） ─────────────────────────────
+# ── 4) ERP 登录（密码 MD5，兼容 macOS / Linux） ──────────
 echo; echo "[4/6] ERP 登录链路"
-PW=$(grep -E '^T2S_ERP_PASS=' "$ROOT/app/.env" 2>/dev/null | cut -d= -f2-)
+ERP_USER=$(grep -E '^T2S_ERP_USER=' "$ROOT/app/.env" 2>/dev/null | cut -d= -f2- | tr -d '"\r')
+ERP_USER=${ERP_USER:-jsh}
+PW=$(grep -E '^T2S_ERP_PASS=' "$ROOT/app/.env" 2>/dev/null | cut -d= -f2- | tr -d '"\r')
 PW=${PW:-123456}
-MD5=$(printf '%s' "$PW" | md5 2>/dev/null | awk '{print $NF}')
+DEMO_PASS=$(grep -E '^T2S_DEMO_PASS=' "$ROOT/app/.env" 2>/dev/null | cut -d= -f2- | tr -d '"\r')
+AUTH_HDR=()
+if [ -n "$DEMO_PASS" ]; then AUTH_HDR=(-H "X-T2S-Pass: $DEMO_PASS"); fi
+MD5=$(python3 -c 'import hashlib,sys;print(hashlib.md5(sys.argv[1].encode()).hexdigest())' "$PW")
 LOGIN=$(curl -s -m 8 -X POST http://localhost:9999/jshERP-boot/user/login \
   -H 'Content-Type: application/json' \
-  -d "{\"loginName\":\"jsh\",\"password\":\"$MD5\"}")
+  -d "{\"loginName\":\"$ERP_USER\",\"password\":\"$MD5\"}")
 TOKEN=$(printf '%s' "$LOGIN" | py 'import sys,json;print((json.load(sys.stdin).get("data") or {}).get("token") or "")')
-if [ -n "$TOKEN" ]; then ok "jsh 登录" "token ${TOKEN:0:12}…"; else no "jsh 登录" "${LOGIN:0:90}"; fi
+if [ -n "$TOKEN" ]; then ok "$ERP_USER 登录" "token ${TOKEN:0:12}…"; else no "$ERP_USER 登录" "${LOGIN:0:90}"; fi
 
 # ── 5) Talk2Stock → ERP 主数据 ──────────────────────────
 echo; echo "[5/6] Talk2Stock → ERP"
-MASTER=$(curl -s -m 12 http://localhost:8090/api/master)
-CNT=$(printf '%s' "$MASTER" | py 'import sys,json;d=json.load(sys.stdin);print("供应商%d 客户%d 商品%d 仓库%d 账户%d"%tuple(len(d.get(k) or []) for k in ("suppliers","customers","materials","depots","accounts")))')
-if [ -n "$CNT" ]; then ok "/api/master" "$CNT"; else no "/api/master" "无响应"; fi
+MASTER=$(curl -s -m 12 "${AUTH_HDR[@]}" http://localhost:8090/api/master)
+CNT=$(printf '%s' "$MASTER" | py 'import sys,json;d=json.load(sys.stdin);print("供应商%d 客户%d 商品%d 仓库%d 账户%d"%tuple(len(d.get(k) or []) for k in ("suppliers","customers","materials","depots","accounts"))) if d.get("ok") else ""')
+if [ -n "$CNT" ]; then ok "/api/master" "$CNT"; else no "/api/master" "${MASTER:0:90}"; fi
 
 # ── 6) Talk2Stock → LLM 端到端（自然语言 → 草稿 → 只读预览）─
 echo; echo "[6/6] Talk2Stock → LLM 端到端（依赖外部模型，失败记为告警）"
-TXT="向供应商1采购商品1 5个，单价10元，入原料仓"
+TXT="向美宜佳商贸采购可口可乐 500ml 5瓶，单价2元，入总仓"
 PARSED=$(curl -s -m 90 -X POST http://localhost:8090/api/parse \
-  -H 'Content-Type: application/json' -d "{\"text\":\"$TXT\"}")
+  -H 'Content-Type: application/json' "${AUTH_HDR[@]}" -d "{\"text\":\"$TXT\"}")
 POK=$(printf '%s' "$PARSED" | py 'import sys,json;print(json.load(sys.stdin).get("ok"))')
 if [ "$POK" = True ]; then
   BIZ=$(printf '%s' "$PARSED" | py 'import sys,json;d=json.load(sys.stdin);print((d.get("draft") or {}).get("biz") or "?")')
@@ -83,7 +88,7 @@ fi
 DRAFT=$(printf '%s' "$PARSED" | py 'import sys,json;d=json.load(sys.stdin);print(json.dumps({"draft": d.get("draft") or {}}, ensure_ascii=False))')
 if [ -n "$DRAFT" ] && [ "$DRAFT" != '{"draft": {}}' ]; then
   RESOLVED=$(curl -s -m 15 -X POST http://localhost:8090/api/resolve \
-    -H 'Content-Type: application/json' -d "$DRAFT")
+    -H 'Content-Type: application/json' "${AUTH_HDR[@]}" -d "$DRAFT")
   ROK=$(printf '%s' "$RESOLVED" | py 'import sys,json;print(json.load(sys.stdin).get("ok"))')
   if [ "$ROK" = True ]; then
     CRE=$(printf '%s' "$RESOLVED" | py 'import sys,json;p=json.load(sys.stdin).get("preview") or {};print("待建主数据 %d 项"%len(p.get("to_create") or []))')

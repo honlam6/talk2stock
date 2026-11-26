@@ -31,7 +31,7 @@
 
           <div class="say-row">
             <textarea id="text" rows="4"
-              placeholder="例如：从美宜佳买3瓶可乐单价3块5；卖给张记便利店2箱方便面单价45&#10;多笔业务用「；」分隔，一次出多张单（⌘/Ctrl+Enter 快速解析）"></textarea>
+              placeholder="例如：从美宜佳商贸买3箱可口可乐 500ml 单价24元；卖给张记便利店2箱康师傅红烧牛肉面单价48&#10;多笔业务用「；」分隔，一次出多张单（⌘/Ctrl+Enter 快速解析）"></textarea>
             <button class="mic-btn" id="micBtn" title="语音输入（再点一次结束）" style="display:none">🎤</button>
             <button class="cam-btn" id="camBtn" title="拍照 / 截图识别单据（可配一句补充说明）">📷</button>
           </div>
@@ -239,12 +239,12 @@ if (typeof AttachmentManager === 'function') {
 
 /* ================= AI 模式 ================= */
 const EXAMPLES = [
-  ['采购入库', '向美宜佳采购可乐 30瓶，单价3块5，入原料仓'],
-  ['销售出库', '卖给永辉超市 纸箱 200个，单价5块，从成品仓出'],
-  ['多单一句话', '从美宜佳买3瓶可乐单价3块5；卖给张记便利店2箱方便面单价45'],
-  ['多商品采购', '向美宜佳采购 可乐30瓶单价3块5、纸箱200个单价5块，入原料仓'],
-  ['采购退货', '把美宜佳那批可乐退5瓶，单价3块5，从原料仓出'],
-  ['复用+新建', '向供应商1采购牛皮纸 10卷，单价80元，入仓库1'],
+  ['采购入库', '向美宜佳商贸采购可口可乐 500ml 30瓶，单价2元，入总仓'],
+  ['销售出库', '卖给永辉超市 维达抽纸 3层*24包 5箱，单价54元，从总仓出'],
+  ['多单一句话', '从美宜佳商贸进3箱可口可乐 500ml 单价24元；卖给张记便利店2箱康师傅红烧牛肉面单价48元'],
+  ['多商品采购', '向玖龙纸业采购 维达抽纸 3层*24包 10箱单价42元、牛皮纸 80g 5卷单价118元，入总仓'],
+  ['采购退货', '把美宜佳商贸那批可口可乐 500ml 退12瓶，单价2元，从总仓出'],
+  ['复用+新建', '向玖龙纸业采购 牛皮纸 80g 6卷，单价118元，入总仓'],
 ];
 $('#examples').innerHTML = EXAMPLES.map(([tag, t]) =>
   `<span class="chip" data-t="${esc(t)}">${esc(tag)}｜${esc(t)}</span>`).join(' ');
@@ -506,7 +506,7 @@ function renderChip() {
   const chip = $('#correctChip');
   if (!correcting) { chip.classList.add('hidden'); chip.innerHTML = ''; return; }
   chip.classList.remove('hidden');
-  chip.innerHTML = `✏ 修正模式 · 接着说改哪里（例：「改成50瓶」「换原料仓」）<span class="hint">基于：${esc(draftSummary(correcting.draft))}</span>
+  chip.innerHTML = `✏ 修正模式 · 接着说改哪里（例：「改成50瓶」「换门店仓」）<span class="hint">基于：${esc(draftSummary(correcting.draft))}</span>
     <span class="x" id="correctExit" title="退出修正模式，重新开一单">×</span>`;
   $('#correctExit').onclick = exitCorrect;
 }
@@ -892,9 +892,10 @@ function syncBiz() {
     ? '<option value="现付">现付</option><option value="预付款">预付款</option><option value="记账">记账（挂账）</option>'
     : '<option value="现收">现收</option><option value="预收款">预收款</option><option value="记账">记账（挂账）</option>';
   checkParty();
-  const want = b.dir === 'in' ? '原料仓' : '成品仓';
-  const opt = Array.from($('#depot').options).find(o => o.value === want);
-  if (opt) $('#depot').value = want;
+  const opts = Array.from($('#depot').options);
+  const prefs = b.dir === 'in' ? ['总仓', '原料仓'] : ['总仓', '成品仓'];
+  const opt = prefs.map(n => opts.find(o => o.value === n)).find(Boolean);
+  if (opt) $('#depot').value = opt.value;
 }
 
 function checkParty() {
@@ -1012,6 +1013,7 @@ function buildDraft() {
   if (acc) d.account_id = parseInt(acc, 10);
   const pa = $('#payAmount').value;
   if (pa !== '') d.pay_amount = num(pa);
+  else if (d.pay_type === '记账') d.pay_amount = 0;
   return d;
 }
 

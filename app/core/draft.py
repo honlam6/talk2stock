@@ -326,15 +326,22 @@ def commit(draft, erp=None, auto_create=True):
                 mrow = dict(mrow, barCode=bc)
             if was_new:
                 created.append(f"商品「{name}」")
-            # 单位：用户单位属于该商品单位组时保留原样，后端按 ratio 自动折算 basicNumber
+            # 单位：用户单位属于该商品单位组时保留原样，后端按 ratio 自动折算 basicNumber；
+            # 副单位建单时优先取副单位条码，防止 jshERP 覆写基本单位默认条码的采购成本价
             use_unit = mrow.get("unit") or unit
             group = erp.unit_group_by_id(mrow.get("unitId") or mrow.get("unit_id"))
             if group and erp.unit_allowed(group, unit):
                 use_unit = unit
+            bar_code = mrow["barCode"]
+            if group and use_unit and erp._norm(use_unit) != erp._norm(mrow.get("unit") or ""):
+                try:
+                    bar_code = erp.material_barcode(mrow["id"], use_unit) or bar_code
+                except Exception:
+                    pass
             tax_rate = _num(it.get("tax_rate"))
             row = {
                 "materialId": mrow["id"],
-                "barCode": mrow["barCode"],
+                "barCode": bar_code,
                 "name": mrow.get("name") or name,
                 "operNumber": qty,
                 "unit": use_unit,
